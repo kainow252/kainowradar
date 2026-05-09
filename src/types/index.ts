@@ -13,6 +13,10 @@ export type Bindings = {
   AWIN_PUBLISHER_ID?: string
   MELI_ACCESS_TOKEN?: string
   ADMIN_SECRET?: string
+  // Google OAuth
+  GOOGLE_CLIENT_ID?: string
+  GOOGLE_CLIENT_SECRET?: string
+  APP_URL?: string
 }
 
 export interface ApiConfig {
