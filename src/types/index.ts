@@ -12,6 +12,70 @@ export type Bindings = {
   LOMADEE_SOURCE_ID?: string
   AWIN_PUBLISHER_ID?: string
   MELI_ACCESS_TOKEN?: string
+  ADMIN_SECRET?: string
+}
+
+export interface ApiConfig {
+  id: string
+  name: string
+  network: string
+  client_id?: string
+  client_secret?: string
+  api_key?: string
+  partner_tag?: string
+  endpoint_url?: string
+  feed_url?: string
+  feed_type: string
+  rate_limit_per_min: number
+  commission_rate: number
+  is_active: number
+  last_sync_at?: string
+  last_sync_status?: string
+  last_sync_count: number
+}
+
+export interface User {
+  id: string
+  email: string
+  full_name?: string
+  role: string
+  status: string
+  last_login_at?: string
+  login_count: number
+  created_at: string
+}
+
+export interface PriceHistory {
+  id: number
+  offer_id: number
+  product_id: number
+  store_id: number
+  price: number
+  in_stock: number
+  recorded_at: string
+  store_name?: string
+  store_slug?: string
+}
+
+export interface TopDeal {
+  id: number
+  name: string
+  slug: string
+  brand?: string
+  category?: string
+  image_url?: string
+  ean?: string
+  offer_count: number
+  lowest_price: number
+  original_price?: number
+  discount_percent: number
+  free_shipping: number
+  checkout_url?: string
+  affiliate_url?: string
+  store_name: string
+  store_slug: string
+  store_logo?: string
+  price_updated_at: string
 }
 
 export interface Store {

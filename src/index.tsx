@@ -7,6 +7,7 @@ import { cors } from 'hono/cors'
 import { serveStatic } from 'hono/cloudflare-workers'
 import type { Bindings } from './types'
 import api from './routes/api'
+import admin from './routes/admin'
 import pages, { renderLayout, renderProductCard, formatCurrency } from './routes/pages'
 import { CacheManager } from './lib/cache'
 
@@ -33,6 +34,9 @@ app.get('/favicon.ico', (c) => {
 
 // ── API Routes ────────────────────────────────────────────
 app.route('/api', api)
+
+// ── Admin Routes (protegido por Bearer token / ADMIN_SECRET) ─
+app.route('/admin', admin)
 
 // ── Page Routes ───────────────────────────────────────────
 app.route('/', pages)

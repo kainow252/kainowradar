@@ -1,0 +1,1554 @@
+// ============================================================
+// ROUTES: Admin — Painel Administrativo Completo
+// Protegido por Bearer token (ADMIN_SECRET via wrangler secret)
+// ============================================================
+
+import { Hono } from 'hono'
+import type { Bindings } from '../types'
+import { CacheManager } from '../lib/cache'
+
+type AdminBindings = Bindings & {
+  ADMIN_SECRET?: string
+}
+
+const admin = new Hono<{ Bindings: AdminBindings }>()
+
+// ── Middleware de autenticação ────────────────────────────
+// Rotas públicas (não precisam de token)
+admin.post('/api/login', async (c) => {
+  const { DB } = c.env
+  const { password } = await c.req.json().catch(() => ({ password: '' }))
+  const secret = (c.env as any).ADMIN_SECRET || 'admin123'
+
+  if (!password || password !== secret) {
+    return c.json({ error: 'Senha incorreta' }, 401)
+  }
+
+  // Gera token de sessão
+  const token = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+    .map(b => b.toString(16).padStart(2, '0')).join('')
+
+  const ipHash = await hashIP(c.req.header('CF-Connecting-IP') || '0')
+  const expiresAt = new Date(Date.now() + 8 * 3600 * 1000).toISOString() // 8h
+
+  await DB.prepare(`
+    INSERT INTO admin_sessions (token, admin_user, ip_hash, user_agent, expires_at)
+    VALUES (?, 'admin', ?, ?, ?)
+  `).bind(token, ipHash, c.req.header('User-Agent') || '', expiresAt).run()
+
+  return c.json({ ok: true, token, expires_at: expiresAt })
+})
+
+// Página HTML pública (SPA)
+admin.get('/', (c) => c.html(renderAdminSPA()))
+admin.get('', (c) => c.html(renderAdminSPA()))
+
+// Middleware protege tudo abaixo (exceto /api/login e GET /)
+admin.use('/api/*', async (c, next) => {
+  // /api/login já foi tratado acima — só chega aqui outras rotas
+  const authHeader = c.req.header('Authorization') || ''
+  const cookieHeader = c.req.header('Cookie') || ''
+  const cookieToken = cookieHeader.match(/admin_token=([^;]+)/)?.[1] || ''
+  const bearerToken = authHeader.replace('Bearer ', '').trim()
+  const token = bearerToken || cookieToken
+
+  if (!token) return c.json({ error: 'Não autorizado' }, 401)
+
+  // 1. Tenta validar sessão no banco
+  const session = await c.env.DB
+    .prepare(`
+      SELECT * FROM admin_sessions
+      WHERE token = ? AND is_valid = 1 AND expires_at > CURRENT_TIMESTAMP
+    `)
+    .bind(token)
+    .first<{ token: string; admin_user: string }>()
+
+  if (session) { await next(); return }
+
+  // 2. Fallback: aceita ADMIN_SECRET diretamente (dev local sem banco)
+  const secret = (c.env as any).ADMIN_SECRET || 'admin123'
+  if (token === secret) { await next(); return }
+
+  return c.json({ error: 'Token inválido ou expirado' }, 401)
+})
+
+// ── POST /admin/api/logout ────────────────────────────────
+admin.post('/api/logout', async (c) => {
+  // Extrai token do Authorization header (Bearer) ou cookie
+  const authHeader = c.req.header('Authorization') || ''
+  const cookieHeader = c.req.header('Cookie') || ''
+  const bearerToken = authHeader.replace('Bearer ', '').trim()
+  const cookieToken = cookieHeader.match(/admin_token=([^;]+)/)?.[1] || ''
+  const token = bearerToken || cookieToken
+  if (token) {
+    await c.env.DB.prepare("UPDATE admin_sessions SET is_valid = 0 WHERE token = ?")
+      .bind(token).run().catch(() => {})
+  }
+  return c.json({ ok: true })
+})
+
+// ── GET /admin/api/dashboard — Métricas gerais ────────────
+admin.get('/api/dashboard', async (c) => {
+  const { DB } = c.env
+  const [products, offers, stores, users, clicks, queue] = await Promise.all([
+    DB.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN offer_count > 0 THEN 1 ELSE 0 END) as with_offers FROM products WHERE is_active = 1").first<any>(),
+    DB.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN in_stock = 1 THEN 1 ELSE 0 END) as in_stock, MIN(price) as min_price, MAX(price) as max_price, AVG(price) as avg_price FROM offers WHERE is_active = 1").first<any>(),
+    DB.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active FROM stores").first<any>(),
+    DB.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active FROM users").first<any>().catch(() => ({ total: 0, active: 0 })),
+    DB.prepare("SELECT COUNT(*) as today FROM click_events WHERE clicked_at >= date('now')").first<any>(),
+    DB.prepare("SELECT COUNT(*) as pending FROM price_update_queue WHERE status = 'pending'").first<any>(),
+  ])
+
+  // Top categorias por produto
+  const { results: topCategories } = await DB.prepare(`
+    SELECT category, COUNT(*) as count FROM products
+    WHERE is_active = 1 AND category IS NOT NULL
+    GROUP BY category ORDER BY count DESC LIMIT 5
+  `).all()
+
+  // Top lojas por ofertas
+  const { results: topStores } = await DB.prepare(`
+    SELECT s.name, s.slug, COUNT(o.id) as offer_count, MIN(o.price) as min_price
+    FROM offers o JOIN stores s ON s.id = o.store_id
+    WHERE o.is_active = 1 GROUP BY s.id ORDER BY offer_count DESC LIMIT 5
+  `).all()
+
+  // Cliques por dia (últimos 7 dias)
+  const { results: clicksByDay } = await DB.prepare(`
+    SELECT date(clicked_at) as day, COUNT(*) as clicks
+    FROM click_events
+    WHERE clicked_at >= date('now', '-7 days')
+    GROUP BY day ORDER BY day ASC
+  `).all()
+
+  return c.json({
+    products, offers, stores, users, clicks, queue,
+    topCategories, topStores, clicksByDay,
+    timestamp: new Date().toISOString()
+  })
+})
+
+// ── GET /admin/api/top-deals — Query otimizada GROUP BY MIN ─
+admin.get('/api/top-deals', async (c) => {
+  const { DB, CACHE } = c.env
+  const limit = Math.min(50, parseInt(c.req.query('limit') || '20'))
+  const category = c.req.query('category') || ''
+  const cache = new CacheManager(CACHE)
+  const cacheKey = `admin:top-deals:${category}:${limit}`
+  const cached = await cache.get(cacheKey)
+  if (cached) return c.json(cached)
+
+  // A QUERY MESTRA: GROUP BY p.id + MIN(price) garante 1 linha por produto
+  // O subquery correlacionado pega os dados da oferta mais barata
+  const catFilter = category ? 'AND p.category = ?' : ''
+  const binds: any[] = category ? [category, limit] : [limit]
+
+  const { results } = await DB.prepare(`
+    SELECT
+      p.id,
+      p.name,
+      p.slug,
+      p.brand,
+      p.category,
+      p.image_url,
+      p.ean,
+      p.offer_count,
+      MIN(o.price)                  AS lowest_price,
+      o2.original_price             AS original_price,
+      o2.discount_percent           AS discount_percent,
+      o2.free_shipping              AS free_shipping,
+      o2.checkout_url               AS checkout_url,
+      o2.affiliate_url              AS affiliate_url,
+      s.name                        AS store_name,
+      s.slug                        AS store_slug,
+      s.logo_url                    AS store_logo,
+      o2.last_updated               AS price_updated_at
+    FROM products p
+    JOIN offers o  ON o.product_id = p.id AND o.is_active = 1 AND o.in_stock = 1
+    JOIN offers o2 ON o2.product_id = p.id
+      AND o2.price = (SELECT MIN(o3.price) FROM offers o3 WHERE o3.product_id = p.id AND o3.is_active = 1 AND o3.in_stock = 1)
+      AND o2.is_active = 1 AND o2.in_stock = 1
+    JOIN stores s  ON s.id = o2.store_id AND s.is_active = 1
+    WHERE p.is_active = 1
+    ${catFilter}
+    GROUP BY p.id
+    ORDER BY lowest_price ASC
+    LIMIT ?
+  `).bind(...binds).all()
+
+  await cache.set(cacheKey, results, 300) // cache 5 min
+  return c.json(results)
+})
+
+// ── GET /admin/api/products — Lista produtos paginada ─────
+admin.get('/api/products', async (c) => {
+  const { DB } = c.env
+  const page = Math.max(1, parseInt(c.req.query('page') || '1'))
+  const perPage = Math.min(50, parseInt(c.req.query('per_page') || '20'))
+  const q = c.req.query('q') || ''
+  const category = c.req.query('category') || ''
+  const offset = (page - 1) * perPage
+
+  let where = 'WHERE 1=1'
+  const binds: any[] = []
+  if (q) { where += ' AND (p.name LIKE ? OR p.brand LIKE ? OR p.ean LIKE ?)'; binds.push(`%${q}%`, `%${q}%`, `%${q}%`) }
+  if (category) { where += ' AND p.category = ?'; binds.push(category) }
+
+  const [count, data] = await Promise.all([
+    DB.prepare(`SELECT COUNT(*) as total FROM products p ${where}`).bind(...binds).first<{ total: number }>(),
+    DB.prepare(`
+      SELECT p.*, s.name as best_store_name,
+             (SELECT COUNT(*) FROM offers WHERE product_id = p.id AND is_active = 1) as live_offers
+      FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
+      ${where} ORDER BY p.updated_at DESC LIMIT ? OFFSET ?
+    `).bind(...binds, perPage, offset).all()
+  ])
+
+  return c.json({ products: data.results, total: count?.total || 0, page, per_page: perPage })
+})
+
+// ── PATCH /admin/api/products/:id — Editar produto ────────
+admin.patch('/api/products/:id', async (c) => {
+  const { DB, CACHE } = c.env
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json()
+  const { name, brand, category, description, image_url, is_active } = body
+
+  await DB.prepare(`
+    UPDATE products SET
+      name = COALESCE(?, name),
+      brand = COALESCE(?, brand),
+      category = COALESCE(?, category),
+      description = COALESCE(?, description),
+      image_url = COALESCE(?, image_url),
+      is_active = COALESCE(?, is_active),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(name ?? null, brand ?? null, category ?? null, description ?? null,
+     image_url ?? null, is_active ?? null, id).run()
+
+  // Invalida cache
+  const prod = await DB.prepare('SELECT slug FROM products WHERE id = ?').bind(id).first<{ slug: string }>()
+  if (prod) new CacheManager(CACHE).invalidateProduct(prod.slug)
+
+  return c.json({ ok: true })
+})
+
+// ── DELETE /admin/api/products/:id — Desativar produto ────
+admin.delete('/api/products/:id', async (c) => {
+  const { DB } = c.env
+  const id = parseInt(c.req.param('id'))
+  await DB.prepare("UPDATE products SET is_active = 0 WHERE id = ?").bind(id).run()
+  return c.json({ ok: true })
+})
+
+// ── GET /admin/api/offers — Lista ofertas ─────────────────
+admin.get('/api/offers', async (c) => {
+  const { DB } = c.env
+  const productId = c.req.query('product_id')
+  const storeSlug = c.req.query('store')
+  const page = Math.max(1, parseInt(c.req.query('page') || '1'))
+  const perPage = 20
+  const offset = (page - 1) * perPage
+
+  let where = 'WHERE o.is_active = 1'
+  const binds: any[] = []
+  if (productId) { where += ' AND o.product_id = ?'; binds.push(productId) }
+  if (storeSlug) { where += ' AND s.slug = ?'; binds.push(storeSlug) }
+
+  const [count, data] = await Promise.all([
+    DB.prepare(`SELECT COUNT(*) as total FROM offers o JOIN stores s ON s.id = o.store_id ${where}`).bind(...binds).first<{ total: number }>(),
+    DB.prepare(`
+      SELECT o.*, p.name as product_name, p.slug as product_slug,
+             s.name as store_name, s.slug as store_slug
+      FROM offers o
+      JOIN products p ON p.id = o.product_id
+      JOIN stores s ON s.id = o.store_id
+      ${where}
+      ORDER BY o.last_updated DESC LIMIT ? OFFSET ?
+    `).bind(...binds, perPage, offset).all()
+  ])
+
+  return c.json({ offers: data.results, total: count?.total || 0, page, per_page: perPage })
+})
+
+// ── GET /admin/api/stores — Lista lojas ───────────────────
+admin.get('/api/stores', async (c) => {
+  const { DB } = c.env
+  const { results } = await DB.prepare(`
+    SELECT s.*,
+      (SELECT COUNT(*) FROM offers WHERE store_id = s.id AND is_active = 1) as offer_count,
+      (SELECT MIN(price) FROM offers WHERE store_id = s.id AND is_active = 1) as min_price,
+      (SELECT MAX(price) FROM offers WHERE store_id = s.id AND is_active = 1) as max_price
+    FROM stores s ORDER BY s.name ASC
+  `).all()
+  return c.json(results)
+})
+
+// ── PATCH /admin/api/stores/:id/toggle — Ativa/desativa ───
+admin.patch('/api/stores/:id/toggle', async (c) => {
+  const { DB } = c.env
+  const id = parseInt(c.req.param('id'))
+  // Lê body com fallback — se não vier `active`, lê estado atual e inverte
+  const body = await c.req.json().catch(() => ({}))
+  let newActive: number
+  if (typeof body.active !== 'undefined') {
+    newActive = body.active ? 1 : 0
+  } else {
+    // Auto-toggle: busca estado atual e inverte
+    const current = await DB.prepare("SELECT is_active FROM stores WHERE id = ?")
+      .bind(id).first<{ is_active: number }>()
+    newActive = current ? (current.is_active === 1 ? 0 : 1) : 0
+  }
+  await DB.prepare("UPDATE stores SET is_active = ? WHERE id = ?").bind(newActive, id).run()
+  const updated = await DB.prepare("SELECT id, name, is_active FROM stores WHERE id = ?")
+    .bind(id).first()
+  return c.json({ ok: true, store: updated })
+})
+
+// ── GET /admin/api/api-configs — Lista configs de API ─────
+admin.get('/api/api-configs', async (c) => {
+  const { DB } = c.env
+  const { results } = await DB.prepare(`
+    SELECT id, name, network, endpoint_url, feed_url, feed_type,
+           rate_limit_per_min, commission_rate, is_active,
+           last_sync_at, last_sync_status, last_sync_count,
+           -- Oculta segredos parcialmente
+           CASE WHEN api_key IS NOT NULL THEN '••••' || substr(api_key, -4) ELSE NULL END as api_key_preview,
+           CASE WHEN client_id IS NOT NULL THEN client_id ELSE NULL END as client_id
+    FROM api_configs ORDER BY name ASC
+  `).all()
+  return c.json(results)
+})
+
+// ── PATCH /admin/api/api-configs/:id — Atualiza config ───
+admin.patch('/api/api-configs/:id', async (c) => {
+  const { DB } = c.env
+  const id = c.req.param('id')
+  const body = await c.req.json()
+  const { api_key, client_id, client_secret, partner_tag, is_active, rate_limit_per_min, commission_rate } = body
+
+  await DB.prepare(`
+    UPDATE api_configs SET
+      api_key = COALESCE(?, api_key),
+      client_id = COALESCE(?, client_id),
+      client_secret = COALESCE(?, client_secret),
+      partner_tag = COALESCE(?, partner_tag),
+      is_active = COALESCE(?, is_active),
+      rate_limit_per_min = COALESCE(?, rate_limit_per_min),
+      commission_rate = COALESCE(?, commission_rate),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(api_key ?? null, client_id ?? null, client_secret ?? null,
+     partner_tag ?? null, is_active ?? null, rate_limit_per_min ?? null,
+     commission_rate ?? null, id).run()
+
+  return c.json({ ok: true })
+})
+
+// ── PATCH /admin/api/api-configs/:id/toggle ───────────────
+admin.patch('/api/api-configs/:id/toggle', async (c) => {
+  const { DB } = c.env
+  const id = c.req.param('id')
+  // Lê body com fallback — se não vier `active`, auto-toggle
+  const body = await c.req.json().catch(() => ({}))
+  let newActive: number
+  if (typeof body.active !== 'undefined') {
+    newActive = body.active ? 1 : 0
+  } else {
+    const current = await DB.prepare("SELECT is_active FROM api_configs WHERE id = ?")
+      .bind(id).first<{ is_active: number }>()
+    newActive = current ? (current.is_active === 1 ? 0 : 1) : 0
+  }
+  await DB.prepare("UPDATE api_configs SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .bind(newActive, id).run()
+  const updated = await DB.prepare("SELECT id, name, is_active FROM api_configs WHERE id = ?")
+    .bind(id).first()
+  return c.json({ ok: true, config: updated })
+})
+
+// ── GET /admin/api/users — Lista usuários ─────────────────
+admin.get('/api/users', async (c) => {
+  const { DB } = c.env
+  const page = Math.max(1, parseInt(c.req.query('page') || '1'))
+  const perPage = 20
+  const offset = (page - 1) * perPage
+  const q = c.req.query('q') || ''
+  const status = c.req.query('status') || ''
+
+  let where = 'WHERE 1=1'
+  const binds: any[] = []
+  if (q) { where += ' AND (email LIKE ? OR full_name LIKE ?)'; binds.push(`%${q}%`, `%${q}%`) }
+  if (status) { where += ' AND status = ?'; binds.push(status) }
+
+  const [count, data] = await Promise.all([
+    DB.prepare(`SELECT COUNT(*) as total FROM users ${where}`).bind(...binds).first<{ total: number }>(),
+    DB.prepare(`
+      SELECT id, email, full_name, role, status, last_login_at, login_count, created_at
+      FROM users ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?
+    `).bind(...binds, perPage, offset).all()
+  ])
+
+  return c.json({ users: data.results, total: count?.total || 0, page, per_page: perPage })
+})
+
+// ── PATCH /admin/api/users/:id/status — Bloquear/ativar ──
+admin.patch('/api/users/:id/status', async (c) => {
+  const { DB } = c.env
+  const id = c.req.param('id')
+  const { status } = await c.req.json()
+  if (!['active', 'blocked'].includes(status)) return c.json({ error: 'Status inválido' }, 400)
+  await DB.prepare("UPDATE users SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .bind(status, id).run()
+  return c.json({ ok: true })
+})
+
+// ── DELETE /admin/api/users/:id ───────────────────────────
+admin.delete('/api/users/:id', async (c) => {
+  const { DB } = c.env
+  const id = c.req.param('id')
+  await DB.prepare("DELETE FROM users WHERE id = ? AND role != 'admin'").bind(id).run()
+  return c.json({ ok: true })
+})
+
+// ── GET /admin/api/price-history/:productId ───────────────
+admin.get('/api/price-history/:productId', async (c) => {
+  const { DB } = c.env
+  const productId = parseInt(c.req.param('productId'))
+  const days = parseInt(c.req.query('days') || '30')
+
+  const { results } = await DB.prepare(`
+    SELECT ph.price, ph.in_stock, ph.recorded_at,
+           s.name as store_name, s.slug as store_slug
+    FROM price_history ph
+    JOIN stores s ON s.id = ph.store_id
+    WHERE ph.product_id = ? AND ph.recorded_at >= date('now', ?)
+    ORDER BY ph.recorded_at ASC
+    LIMIT 500
+  `).bind(productId, `-${days} days`).all()
+
+  return c.json(results)
+})
+
+// ── GET /admin/api/queue — Fila de atualização ────────────
+admin.get('/api/queue', async (c) => {
+  const { DB } = c.env
+  const { results } = await DB.prepare(`
+    SELECT pq.*, o.external_id, p.name as product_name, s.name as store_name
+    FROM price_update_queue pq
+    JOIN offers o ON o.id = pq.offer_id
+    JOIN products p ON p.id = o.product_id
+    JOIN stores s ON s.id = o.store_id
+    ORDER BY pq.priority ASC, pq.scheduled_for ASC
+    LIMIT 50
+  `).all()
+  return c.json(results)
+})
+
+// ── GET /admin/api/clicks — Analytics de cliques ─────────
+admin.get('/api/clicks', async (c) => {
+  const { DB } = c.env
+  const days = parseInt(c.req.query('days') || '7')
+
+  const [byDay, byStore, byProduct] = await Promise.all([
+    DB.prepare(`
+      SELECT date(clicked_at) as day, COUNT(*) as clicks
+      FROM click_events WHERE clicked_at >= date('now', ?)
+      GROUP BY day ORDER BY day ASC
+    `).bind(`-${days} days`).all(),
+    DB.prepare(`
+      SELECT s.name as store, s.slug, COUNT(ce.id) as clicks
+      FROM click_events ce
+      JOIN stores s ON s.id = ce.store_id
+      WHERE ce.clicked_at >= date('now', ?)
+      GROUP BY s.id ORDER BY clicks DESC LIMIT 10
+    `).bind(`-${days} days`).all(),
+    DB.prepare(`
+      SELECT p.name, p.slug, COUNT(ce.id) as clicks
+      FROM click_events ce
+      JOIN products p ON p.id = ce.product_id
+      WHERE ce.clicked_at >= date('now', ?)
+      GROUP BY p.id ORDER BY clicks DESC LIMIT 10
+    `).bind(`-${days} days`).all(),
+  ])
+
+  return c.json({ byDay: byDay.results, byStore: byStore.results, byProduct: byProduct.results })
+})
+
+// ── Página HTML do Admin (SPA) ────────────────────────────
+admin.get('*', async (c) => {
+  const path = new URL(c.req.url).pathname
+  return c.html(renderAdminSPA())
+})
+
+// ── Helpers ───────────────────────────────────────────────
+async function hashIP(ip: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(ip + 'salt_admin')
+  const hash = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 16)
+}
+
+function renderAdminSPA(): string {
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin — ShoppingCompare</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'sans-serif'] },
+          colors: {
+            brand: { 50:'#eff6ff', 100:'#dbeafe', 500:'#3b82f6', 600:'#2563eb', 700:'#1d4ed8', 900:'#1e3a8a' }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .sidebar-link { @apply flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-slate-300 hover:bg-white/10 hover:text-white transition-all cursor-pointer; }
+    .sidebar-link.active { @apply bg-white/15 text-white; }
+    .stat-card { @apply bg-white rounded-2xl p-5 border border-slate-100 shadow-sm; }
+    .table-th { @apply px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide bg-slate-50; }
+    .table-td { @apply px-4 py-3 text-sm text-slate-700 border-b border-slate-50; }
+    .badge-green { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700; }
+    .badge-red   { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700; }
+    .badge-yellow{ @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-700; }
+    .badge-blue  { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700; }
+    .btn-primary { @apply bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-all; }
+    .btn-secondary { @apply bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium px-4 py-2 rounded-xl transition-all; }
+    .btn-danger { @apply bg-red-50 hover:bg-red-100 text-red-600 text-sm font-medium px-3 py-1.5 rounded-lg transition-all; }
+    .btn-success { @apply bg-green-50 hover:bg-green-100 text-green-600 text-sm font-medium px-3 py-1.5 rounded-lg transition-all; }
+    .input { @apply w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent; }
+    .section { @apply space-y-6; }
+    #toast { position:fixed;bottom:1.5rem;right:1.5rem;padding:.75rem 1.25rem;background:#1e293b;color:white;border-radius:.75rem;font-size:.875rem;font-weight:500;z-index:9999;opacity:0;transform:translateY(8px);transition:all .25s;pointer-events:none; }
+    #toast.show { opacity:1;transform:translateY(0); }
+    .skeleton { background:linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:.5rem; }
+    @keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+    .toggle-switch { position:relative;display:inline-block;width:44px;height:24px; }
+    .toggle-switch input { opacity:0;width:0;height:0; }
+    .toggle-slider { position:absolute;cursor:pointer;inset:0;background:#cbd5e1;border-radius:24px;transition:.3s; }
+    .toggle-slider:before { position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background:white;border-radius:50%;transition:.3s; }
+    input:checked + .toggle-slider { background:#2563eb; }
+    input:checked + .toggle-slider:before { transform:translateX(20px); }
+    .modal-backdrop { position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:center;justify-content:center; }
+    .modal { background:white;border-radius:1.25rem;padding:1.5rem;width:100%;max-width:500px;box-shadow:0 25px 60px rgba(0,0,0,.2); }
+  </style>
+</head>
+<body class="bg-slate-50 antialiased">
+
+<!-- ── Login Screen ─────────────────────────────────────── -->
+<div id="login-screen" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-blue-900 p-4">
+  <div class="w-full max-w-sm">
+    <div class="text-center mb-8">
+      <div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-xl">
+        <span class="text-white text-3xl font-black">S</span>
+      </div>
+      <h1 class="text-2xl font-bold text-white">ShoppingCompare</h1>
+      <p class="text-slate-400 text-sm mt-1">Painel Administrativo</p>
+    </div>
+    <div class="bg-white rounded-2xl p-6 shadow-2xl">
+      <h2 class="text-lg font-bold text-slate-800 mb-5">Entrar no painel</h2>
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-1.5">Senha de acesso</label>
+          <input type="password" id="login-password" class="input" placeholder="••••••••"
+            onkeydown="if(event.key==='Enter') doLogin()">
+        </div>
+        <div id="login-error" class="hidden text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2"></div>
+        <button onclick="doLogin()" id="login-btn"
+          class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl transition-all text-sm">
+          Entrar
+        </button>
+      </div>
+      <p class="text-xs text-slate-400 text-center mt-4">
+        Senha padrão em dev: <code class="bg-slate-100 px-1.5 py-0.5 rounded">admin123</code>
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- ── Admin App ─────────────────────────────────────────── -->
+<div id="admin-app" class="hidden min-h-screen flex">
+
+  <!-- Sidebar -->
+  <aside id="sidebar" class="w-64 bg-slate-900 min-h-screen flex flex-col fixed left-0 top-0 bottom-0 z-40">
+    <!-- Logo -->
+    <div class="p-5 border-b border-white/10">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center shadow">
+          <span class="text-white font-black text-lg">S</span>
+        </div>
+        <div>
+          <div class="text-white font-bold text-sm">ShoppingCompare</div>
+          <div class="text-slate-400 text-xs">Painel Admin</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Nav -->
+    <nav class="flex-1 p-3 space-y-1">
+      <div onclick="showSection('dashboard')" class="sidebar-link active" data-section="dashboard">
+        <span class="text-lg">📊</span> Dashboard
+      </div>
+      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Catálogo</div>
+      <div onclick="showSection('top-deals')" class="sidebar-link" data-section="top-deals">
+        <span class="text-lg">🏷️</span> Top Deals
+      </div>
+      <div onclick="showSection('products')" class="sidebar-link" data-section="products">
+        <span class="text-lg">📦</span> Produtos
+      </div>
+      <div onclick="showSection('offers')" class="sidebar-link" data-section="offers">
+        <span class="text-lg">💰</span> Ofertas
+      </div>
+      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Integrações</div>
+      <div onclick="showSection('stores')" class="sidebar-link" data-section="stores">
+        <span class="text-lg">🏪</span> Lojas Parceiras
+      </div>
+      <div onclick="showSection('api-configs')" class="sidebar-link" data-section="api-configs">
+        <span class="text-lg">🔌</span> APIs & Feeds
+      </div>
+      <div onclick="showSection('queue')" class="sidebar-link" data-section="queue">
+        <span class="text-lg">⚡</span> Fila de Preços
+      </div>
+      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Análise</div>
+      <div onclick="showSection('analytics')" class="sidebar-link" data-section="analytics">
+        <span class="text-lg">📈</span> Analytics
+      </div>
+      <div onclick="showSection('users')" class="sidebar-link" data-section="users">
+        <span class="text-lg">👥</span> Usuários
+      </div>
+    </nav>
+
+    <!-- Footer sidebar -->
+    <div class="p-4 border-t border-white/10">
+      <div class="flex items-center justify-between">
+        <div class="text-sm text-slate-400">admin</div>
+        <button onclick="doLogout()" class="text-xs text-slate-400 hover:text-red-400 transition-colors">Sair →</button>
+      </div>
+      <a href="/" target="_blank" class="mt-2 block text-xs text-slate-500 hover:text-slate-300 transition-colors">
+        ← Ver site público
+      </a>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="flex-1 ml-64 min-h-screen">
+    <!-- Top bar -->
+    <header class="bg-white border-b border-slate-100 sticky top-0 z-30 px-6 py-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 id="page-title" class="text-lg font-bold text-slate-900">Dashboard</h2>
+          <p id="page-subtitle" class="text-sm text-slate-500">Visão geral do sistema</p>
+        </div>
+        <div class="flex items-center gap-3">
+          <div id="sync-status" class="hidden items-center gap-2 text-sm text-green-600 bg-green-50 px-3 py-1.5 rounded-lg">
+            <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+            Sincronizando...
+          </div>
+          <button onclick="loadSection(App.currentSection)" class="btn-secondary">↻ Atualizar</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Content Area -->
+    <div id="content-area" class="p-6"></div>
+  </main>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<!-- Modal container -->
+<div id="modal-container"></div>
+
+<script>
+// ============================================================
+// ADMIN SPA — JavaScript
+// ============================================================
+
+const App = {
+  token: localStorage.getItem('admin_token') || '',
+  currentSection: 'dashboard',
+  charts: {},
+}
+
+// ── Auth ─────────────────────────────────────────────────
+async function doLogin() {
+  const pwd = document.getElementById('login-password').value
+  const btn = document.getElementById('login-btn')
+  const err = document.getElementById('login-error')
+  if (!pwd) return
+  btn.textContent = 'Entrando...'
+  btn.disabled = true
+  try {
+    const res = await fetch('/admin/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pwd })
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Senha incorreta')
+    App.token = data.token
+    localStorage.setItem('admin_token', data.token)
+    err.classList.add('hidden')
+    document.getElementById('login-screen').classList.add('hidden')
+    document.getElementById('admin-app').classList.remove('hidden')
+    loadSection('dashboard')
+  } catch (e) {
+    err.textContent = e.message
+    err.classList.remove('hidden')
+    btn.textContent = 'Entrar'
+    btn.disabled = false
+  }
+}
+
+async function doLogout() {
+  await api('POST', '/admin/api/logout').catch(() => {})
+  localStorage.removeItem('admin_token')
+  App.token = ''
+  location.reload()
+}
+
+// ── API helper ───────────────────────────────────────────
+async function api(method, path, body) {
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + App.token }
+  }
+  if (body) opts.body = JSON.stringify(body)
+  const res = await fetch(path, opts)
+  if (res.status === 401) { doLogout(); return null }
+  return res.json()
+}
+
+// ── Toast ────────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const t = document.getElementById('toast')
+  const colors = { info:'#1e293b', success:'#166534', error:'#991b1b' }
+  t.style.background = colors[type] || colors.info
+  t.textContent = msg
+  t.classList.add('show')
+  clearTimeout(t._t)
+  t._t = setTimeout(() => t.classList.remove('show'), 3000)
+}
+
+// ── Format helpers ────────────────────────────────────────
+const fBRL = v => v != null ? new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(v) : '—'
+const fDate = d => d ? new Date(d).toLocaleDateString('pt-BR') : '—'
+const fDateTime = d => d ? new Date(d).toLocaleString('pt-BR') : '—'
+const badge = (text, color) => \`<span class="badge-\${color}">\${text}</span>\`
+const spin = \`<div class="flex items-center justify-center py-20"><div class="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div></div>\`
+
+// ── Navigation ────────────────────────────────────────────
+function showSection(name) {
+  App.currentSection = name
+  document.querySelectorAll('[data-section]').forEach(el => el.classList.remove('active'))
+  const link = document.querySelector(\`[data-section="\${name}"]\`)
+  if (link) link.classList.add('active')
+  loadSection(name)
+}
+
+async function loadSection(name) {
+  const area = document.getElementById('content-area')
+  area.innerHTML = spin
+  const titles = {
+    dashboard: ['Dashboard', 'Visão geral do sistema'],
+    'top-deals': ['Top Deals', 'Melhor preço por produto — GROUP BY MIN(price)'],
+    products: ['Produtos', 'Gerenciar catálogo de produtos'],
+    offers: ['Ofertas', 'Gerenciar ofertas por loja'],
+    stores: ['Lojas Parceiras', 'Ativar/desativar lojas e ver métricas'],
+    'api-configs': ['APIs & Feeds', 'Configurar integrações e chaves de API'],
+    queue: ['Fila de Preços', 'Jobs pendentes de atualização cirúrgica'],
+    analytics: ['Analytics', 'Cliques, conversões e performance'],
+    users: ['Usuários', 'Gerenciar clientes e membros'],
+  }
+  const [title, subtitle] = titles[name] || ['Admin', '']
+  document.getElementById('page-title').textContent = title
+  document.getElementById('page-subtitle').textContent = subtitle
+
+  const sections = {
+    dashboard: renderDashboard,
+    'top-deals': renderTopDeals,
+    products: renderProducts,
+    offers: renderOffers,
+    stores: renderStores,
+    'api-configs': renderApiConfigs,
+    queue: renderQueue,
+    analytics: renderAnalytics,
+    users: renderUsers,
+  }
+  if (sections[name]) await sections[name](area)
+}
+
+// ── DASHBOARD ─────────────────────────────────────────────
+async function renderDashboard(area) {
+  const data = await api('GET', '/admin/api/dashboard')
+  if (!data) return
+  const p = data.products || {}; const o = data.offers || {}; const s = data.stores || {}
+  const u = data.users || {}; const cl = data.clicks || {}; const q = data.queue || {}
+
+  area.innerHTML = \`
+    <div class="section">
+      <!-- Stats grid -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        \${statCard('📦', 'Produtos', p.total, \`\${p.with_offers || 0} com ofertas\`, 'blue')}
+        \${statCard('💰', 'Ofertas Ativas', o.total, \`\${o.in_stock || 0} em estoque\`, 'green')}
+        \${statCard('🏪', 'Lojas', s.total, \`\${s.active || 0} ativas\`, 'purple')}
+        \${statCard('👆', 'Cliques Hoje', cl.today, \`Fila: \${q.pending || 0} pendentes\`, 'orange')}
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Cliques por dia -->
+        <div class="stat-card">
+          <h3 class="font-bold text-slate-800 mb-4">📈 Cliques (7 dias)</h3>
+          <canvas id="clicks-chart" height="180"></canvas>
+        </div>
+
+        <!-- Top Categorias -->
+        <div class="stat-card">
+          <h3 class="font-bold text-slate-800 mb-4">📂 Top Categorias</h3>
+          <div class="space-y-3">
+            \${(data.topCategories || []).map(c => \`
+              <div class="flex items-center justify-between">
+                <span class="text-sm font-medium text-slate-700 capitalize">\${c.category || 'Outros'}</span>
+                <div class="flex items-center gap-3">
+                  <div class="w-32 bg-slate-100 rounded-full h-2 overflow-hidden">
+                    <div class="bg-blue-500 h-2 rounded-full" style="width:\${Math.min(100, (c.count / p.total) * 100)}%"></div>
+                  </div>
+                  <span class="text-sm font-bold text-slate-800 w-8 text-right">\${c.count}</span>
+                </div>
+              </div>
+            \`).join('')}
+          </div>
+        </div>
+
+        <!-- Top Lojas -->
+        <div class="stat-card">
+          <h3 class="font-bold text-slate-800 mb-4">🏆 Lojas por Ofertas</h3>
+          <table class="w-full">
+            <thead><tr>
+              <th class="text-left text-xs text-slate-500 font-semibold pb-2">Loja</th>
+              <th class="text-right text-xs text-slate-500 font-semibold pb-2">Ofertas</th>
+              <th class="text-right text-xs text-slate-500 font-semibold pb-2">Menor Preço</th>
+            </tr></thead>
+            <tbody>
+              \${(data.topStores || []).map(s => \`
+                <tr class="border-t border-slate-50 hover:bg-slate-50">
+                  <td class="py-2 text-sm font-medium text-slate-700">\${s.name}</td>
+                  <td class="py-2 text-sm text-right text-slate-600">\${s.offer_count}</td>
+                  <td class="py-2 text-sm text-right font-semibold text-green-700">\${fBRL(s.min_price)}</td>
+                </tr>
+              \`).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Faixa de preços -->
+        <div class="stat-card">
+          <h3 class="font-bold text-slate-800 mb-4">💵 Faixa de Preços</h3>
+          <div class="space-y-4">
+            \${priceRange('Menor preço', o.min_price, 'text-green-700')}
+            \${priceRange('Preço médio', o.avg_price, 'text-blue-700')}
+            \${priceRange('Maior preço', o.max_price, 'text-red-700')}
+          </div>
+          <div class="mt-4 pt-4 border-t border-slate-100">
+            <div class="text-xs text-slate-500">Usuários cadastrados</div>
+            <div class="flex items-baseline gap-2 mt-1">
+              <span class="text-2xl font-bold text-slate-800">\${u.total || 0}</span>
+              <span class="text-sm text-green-600">\${u.active || 0} ativos</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  \`
+
+  // Gráfico de cliques
+  const ctx = document.getElementById('clicks-chart')
+  if (ctx && data.clicksByDay) {
+    if (App.charts.clicks) App.charts.clicks.destroy()
+    App.charts.clicks = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: data.clicksByDay.map(d => new Date(d.day).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})),
+        datasets: [{ label: 'Cliques', data: data.clicksByDay.map(d => d.clicks),
+          backgroundColor: '#3b82f6', borderRadius: 6 }]
+      },
+      options: { responsive: true, plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+    })
+  }
+}
+
+function statCard(icon, label, value, sub, color) {
+  const colors = { blue:'border-blue-200 bg-blue-50', green:'border-green-200 bg-green-50',
+    purple:'border-purple-200 bg-purple-50', orange:'border-orange-200 bg-orange-50' }
+  return \`
+    <div class="stat-card border-l-4 \${colors[color] || ''}">
+      <div class="flex items-start justify-between">
+        <div>
+          <p class="text-sm font-medium text-slate-500">\${label}</p>
+          <p class="text-3xl font-black text-slate-900 mt-1">\${value ?? '—'}</p>
+          <p class="text-xs text-slate-400 mt-1">\${sub}</p>
+        </div>
+        <span class="text-3xl">\${icon}</span>
+      </div>
+    </div>
+  \`
+}
+
+function priceRange(label, value, cls) {
+  return \`
+    <div class="flex justify-between items-center">
+      <span class="text-sm text-slate-500">\${label}</span>
+      <span class="text-sm font-bold \${cls}">\${fBRL(value)}</span>
+    </div>
+  \`
+}
+
+// ── TOP DEALS ─────────────────────────────────────────────
+async function renderTopDeals(area) {
+  const data = await api('GET', '/admin/api/top-deals?limit=24')
+  if (!data) return
+  const rows = data.map((item, i) => \`
+    <tr class="hover:bg-slate-50 cursor-pointer" onclick="openProductPage('\${item.slug}')">
+      <td class="table-td w-8 font-bold text-slate-400">\${i+1}</td>
+      <td class="table-td">
+        <div class="flex items-center gap-3">
+          <img src="\${item.image_url || 'https://via.placeholder.com/48?text=P'}" class="w-10 h-10 object-contain bg-slate-50 rounded-lg" onerror="this.src='https://via.placeholder.com/48?text=P'">
+          <div>
+            <div class="font-semibold text-slate-800 text-sm max-w-xs truncate">\${item.name}</div>
+            <div class="text-xs text-slate-400">\${item.brand || ''} · EAN: \${item.ean || '—'}</div>
+          </div>
+        </div>
+      </td>
+      <td class="table-td">\${badge(item.category || 'outros', 'blue')}</td>
+      <td class="table-td">
+        <div class="flex items-center gap-2">
+          \${item.store_logo ? \`<img src="\${item.store_logo}" class="h-4 max-w-[60px] object-contain">\` : \`<span class="font-semibold text-xs">\${item.store_name}</span>\`}
+        </div>
+      </td>
+      <td class="table-td">
+        <div class="text-lg font-black text-green-700">\${fBRL(item.lowest_price)}</div>
+        \${item.original_price && item.original_price > item.lowest_price
+          ? \`<div class="text-xs text-slate-400 line-through">\${fBRL(item.original_price)}</div>\` : ''}
+      </td>
+      <td class="table-td">
+        \${item.discount_percent > 0 ? badge('-' + Math.round(item.discount_percent) + '%', 'red') : '—'}
+      </td>
+      <td class="table-td">
+        \${item.free_shipping ? badge('✓ Grátis', 'green') : badge('A consultar', 'yellow')}
+      </td>
+      <td class="table-td">
+        <span class="text-xs text-slate-400">\${item.offer_count} \${item.offer_count===1?'loja':'lojas'}</span>
+      </td>
+      <td class="table-td">
+        \${item.checkout_url ? \`<a href="\${item.checkout_url}" target="_blank" class="btn-success text-xs" onclick="event.stopPropagation()">Testar →</a>\` : '—'}
+      </td>
+    </tr>
+  \`).join('')
+
+  area.innerHTML = \`
+    <div class="section">
+      <div class="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-800 flex items-start gap-2">
+        <span class="text-lg">💡</span>
+        <div>
+          <strong>Query otimizada:</strong> <code class="bg-blue-100 px-1.5 py-0.5 rounded text-xs">GROUP BY p.id + MIN(o.price)</code>
+          — garante exatamente 1 linha por produto, sempre com a oferta mais barata. Se o estoque da loja mais barata acabar, a próxima assume automaticamente.
+        </div>
+      </div>
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+          <h3 class="font-bold text-slate-800">Melhor preço por produto <span class="text-slate-400 font-normal text-sm ml-1">\${data.length} resultados</span></h3>
+          <div class="flex gap-2">
+            \${['', 'smartphones', 'notebooks', 'tv', 'games', 'audio', 'eletrodomesticos'].map(cat =>
+              \`<button onclick="loadTopDealsCategory('\${cat}')" class="text-xs px-3 py-1.5 rounded-lg border \${cat===''?'bg-blue-600 text-white border-blue-600':'border-slate-200 hover:bg-slate-50'}">\${cat||'Todos'}</button>\`
+            ).join('')}
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full">
+            <thead><tr>
+              <th class="table-th">#</th>
+              <th class="table-th">Produto</th>
+              <th class="table-th">Categoria</th>
+              <th class="table-th">Loja</th>
+              <th class="table-th">Menor Preço</th>
+              <th class="table-th">Desconto</th>
+              <th class="table-th">Frete</th>
+              <th class="table-th">Lojas</th>
+              <th class="table-th">Ação</th>
+            </tr></thead>
+            <tbody>\${rows}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  \`
+}
+
+async function loadTopDealsCategory(cat) {
+  const area = document.getElementById('content-area')
+  area.innerHTML = spin
+  const url = cat ? \`/admin/api/top-deals?limit=24&category=\${cat}\` : '/admin/api/top-deals?limit=24'
+  App._topDealsUrl = url
+  const data = await api('GET', url)
+  if (!data) return
+  // Só re-renderiza a tabela
+  await renderTopDeals(area)
+}
+
+function openProductPage(slug) {
+  window.open('/produto/' + slug, '_blank')
+}
+
+// ── PRODUCTS ──────────────────────────────────────────────
+async function renderProducts(area, page = 1) {
+  const q = App.productSearch || ''
+  const data = await api('GET', \`/admin/api/products?page=\${page}&q=\${encodeURIComponent(q)}\`)
+  if (!data) return
+
+  const rows = data.products.map(p => \`
+    <tr class="hover:bg-slate-50">
+      <td class="table-td w-12">
+        <img src="\${p.image_url || 'https://via.placeholder.com/40?text=P'}" class="w-10 h-10 object-contain bg-slate-50 rounded-lg" onerror="this.src='https://via.placeholder.com/40?text=P'">
+      </td>
+      <td class="table-td max-w-xs">
+        <div class="font-semibold text-slate-800 text-sm truncate">\${p.name}</div>
+        <div class="text-xs text-slate-400">\${p.brand || ''} \${p.ean ? '· EAN: '+p.ean : ''}</div>
+      </td>
+      <td class="table-td">\${badge(p.category || 'outros', 'blue')}</td>
+      <td class="table-td font-bold text-green-700">\${fBRL(p.best_price)}</td>
+      <td class="table-td">
+        <span class="text-sm font-semibold text-blue-700">\${p.live_offers || 0}</span>
+        <span class="text-xs text-slate-400"> lojas</span>
+      </td>
+      <td class="table-td">\${fDateTime(p.updated_at)}</td>
+      <td class="table-td">\${p.is_active ? badge('Ativo','green') : badge('Inativo','red')}</td>
+      <td class="table-td">
+        <div class="flex gap-2">
+          <button onclick="editProduct(\${p.id})" class="btn-secondary text-xs">Editar</button>
+          <button onclick="toggleProduct(\${p.id}, \${p.is_active})" class="\${p.is_active?'btn-danger':'btn-success'} text-xs">
+            \${p.is_active?'Desativar':'Ativar'}
+          </button>
+        </div>
+      </td>
+    </tr>
+  \`).join('')
+
+  area.innerHTML = \`
+    <div class="section">
+      <div class="flex items-center gap-3 mb-4">
+        <input type="text" id="product-search" value="\${q}" placeholder="Buscar por nome, marca, EAN..."
+          class="input max-w-sm" oninput="App.productSearch=this.value" onkeydown="if(event.key==='Enter'){renderProducts(document.getElementById('content-area'))}">
+        <button onclick="renderProducts(document.getElementById('content-area'))" class="btn-primary">Buscar</button>
+        <span class="text-sm text-slate-500 ml-auto">\${data.total} produtos</span>
+      </div>
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full">
+            <thead><tr>
+              <th class="table-th"></th>
+              <th class="table-th">Produto</th>
+              <th class="table-th">Categoria</th>
+              <th class="table-th">Melhor Preço</th>
+              <th class="table-th">Ofertas</th>
+              <th class="table-th">Atualizado</th>
+              <th class="table-th">Status</th>
+              <th class="table-th">Ações</th>
+            </tr></thead>
+            <tbody>\${rows}</tbody>
+          </table>
+        </div>
+        \${renderPagination(data.page, data.total, data.per_page, (p) => renderProducts(document.getElementById('content-area'), p))}
+      </div>
+    </div>
+  \`
+}
+
+async function toggleProduct(id, currentActive) {
+  await api('DELETE', \`/admin/api/products/\${id}\`)
+  toast(currentActive ? 'Produto desativado' : 'Produto ativado', 'success')
+  renderProducts(document.getElementById('content-area'))
+}
+
+function editProduct(id) {
+  toast('Edição em desenvolvimento', 'info')
+}
+
+// ── OFFERS ────────────────────────────────────────────────
+async function renderOffers(area, page = 1) {
+  const data = await api('GET', \`/admin/api/offers?page=\${page}\`)
+  if (!data) return
+  const rows = data.offers.map(o => \`
+    <tr class="hover:bg-slate-50">
+      <td class="table-td max-w-xs">
+        <div class="font-medium text-slate-800 text-sm truncate">\${o.product_name}</div>
+        <div class="text-xs text-slate-400">ID: \${o.external_id}</div>
+      </td>
+      <td class="table-td">\${badge(o.store_name, 'blue')}</td>
+      <td class="table-td font-bold text-green-700 text-base">\${fBRL(o.price)}</td>
+      <td class="table-td">
+        \${o.original_price && o.original_price > o.price ? \`<span class="text-slate-400 line-through text-xs">\${fBRL(o.original_price)}</span>\` : '—'}
+      </td>
+      <td class="table-td">
+        \${o.discount_percent > 0 ? badge('-' + Math.round(o.discount_percent) + '%','red') : '—'}
+      </td>
+      <td class="table-td">\${o.in_stock ? badge('Em estoque','green') : badge('Sem estoque','red')}</td>
+      <td class="table-td">\${o.free_shipping ? badge('Grátis','green') : badge('A consultar','yellow')}</td>
+      <td class="table-td text-xs text-slate-400">\${fDateTime(o.last_updated)}</td>
+      <td class="table-td">
+        \${o.checkout_url ? \`<a href="\${o.checkout_url}" target="_blank" class="text-blue-600 text-xs hover:underline">Abrir →</a>\` : '—'}
+      </td>
+    </tr>
+  \`).join('')
+
+  area.innerHTML = \`
+    <div class="section">
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+          <h3 class="font-bold text-slate-800">Todas as Ofertas <span class="text-slate-400 font-normal text-sm ml-1">\${data.total} total</span></h3>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full">
+            <thead><tr>
+              <th class="table-th">Produto</th>
+              <th class="table-th">Loja</th>
+              <th class="table-th">Preço</th>
+              <th class="table-th">Preço original</th>
+              <th class="table-th">Desconto</th>
+              <th class="table-th">Estoque</th>
+              <th class="table-th">Frete</th>
+              <th class="table-th">Atualizado</th>
+              <th class="table-th">Link</th>
+            </tr></thead>
+            <tbody>\${rows}</tbody>
+          </table>
+        </div>
+        \${renderPagination(data.page, data.total, data.per_page, (p) => renderOffers(document.getElementById('content-area'), p))}
+      </div>
+    </div>
+  \`
+}
+
+// ── STORES ────────────────────────────────────────────────
+async function renderStores(area) {
+  const data = await api('GET', '/admin/api/stores')
+  if (!data) return
+  const cards = data.map(s => \`
+    <div class="stat-card hover:shadow-md transition-shadow">
+      <div class="flex items-start justify-between mb-4">
+        <div class="flex items-center gap-3">
+          \${s.logo_url ? \`<img src="\${s.logo_url}" class="h-8 max-w-[80px] object-contain">\` : \`<div class="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center font-bold text-slate-600">\${s.name[0]}</div>\`}
+          <div>
+            <div class="font-bold text-slate-800">\${s.name}</div>
+            <div class="text-xs text-slate-400">\${s.affiliate_network || '—'}</div>
+          </div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" \${s.is_active ? 'checked' : ''} onchange="toggleStore(\${s.id}, this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="grid grid-cols-3 gap-3 text-center">
+        <div class="bg-slate-50 rounded-xl p-2">
+          <div class="text-lg font-bold text-slate-800">\${s.offer_count || 0}</div>
+          <div class="text-xs text-slate-400">Ofertas</div>
+        </div>
+        <div class="bg-green-50 rounded-xl p-2">
+          <div class="text-sm font-bold text-green-700">\${fBRL(s.min_price)}</div>
+          <div class="text-xs text-slate-400">Min</div>
+        </div>
+        <div class="bg-blue-50 rounded-xl p-2">
+          <div class="text-sm font-semibold text-blue-700">\${s.commission_rate || 0}%</div>
+          <div class="text-xs text-slate-400">Comissão</div>
+        </div>
+      </div>
+      <div class="mt-3 pt-3 border-t border-slate-100 text-xs text-slate-400 truncate">
+        \${s.checkout_pattern || s.deeplink_base || '—'}
+      </div>
+    </div>
+  \`).join('')
+
+  area.innerHTML = \`
+    <div class="section">
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">\${cards}</div>
+    </div>
+  \`
+}
+
+async function toggleStore(id, active) {
+  await api('PATCH', \`/admin/api/stores/\${id}/toggle\`, { active })
+  toast(active ? 'Loja ativada ✓' : 'Loja desativada', active ? 'success' : 'info')
+}
+
+// ── API CONFIGS ───────────────────────────────────────────
+async function renderApiConfigs(area) {
+  const data = await api('GET', '/admin/api/api-configs')
+  if (!data) return
+  const networkColors = { 'amazon-pa-api':'blue','meli-api':'yellow','lomadee':'purple','awin':'orange','shopee':'red' }
+  const cards = data.map(cfg => {
+    const nc = networkColors[cfg.network] || 'slate'
+    const statusColor = cfg.is_active ? 'green' : 'slate'
+    return \`
+    <div class="stat-card border-t-4 border-\${nc}-400">
+      <div class="flex items-start justify-between mb-4">
+        <div>
+          <div class="font-bold text-slate-800 text-base">\${cfg.name}</div>
+          <div class="flex items-center gap-2 mt-1">
+            \${badge(cfg.network, nc)}
+            \${badge(cfg.feed_type, 'blue')}
+            \${cfg.is_active ? \`<span class="flex items-center gap-1 text-xs text-green-600"><span class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>Ativo</span>\`
+              : \`<span class="text-xs text-slate-400">Inativo</span>\`}
+          </div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" \${cfg.is_active ? 'checked' : ''} onchange="toggleApiConfig('\${cfg.id}', this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="space-y-2 text-sm">
+        <div class="flex justify-between">
+          <span class="text-slate-500">Rate limit</span>
+          <span class="font-medium">\${cfg.rate_limit_per_min}/min</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-slate-500">Comissão</span>
+          <span class="font-medium text-green-700">\${cfg.commission_rate}%</span>
+        </div>
+        \${cfg.api_key_preview ? \`<div class="flex justify-between"><span class="text-slate-500">API Key</span><code class="text-xs bg-slate-100 px-2 py-0.5 rounded">\${cfg.api_key_preview}</code></div>\` : ''}
+        \${cfg.last_sync_at ? \`<div class="flex justify-between"><span class="text-slate-500">Última sync</span><span class="text-xs">\${fDateTime(cfg.last_sync_at)}</span></div>\` : ''}
+        \${cfg.last_sync_status ? \`<div class="flex justify-between"><span class="text-slate-500">Status sync</span>\${badge(cfg.last_sync_status, cfg.last_sync_status==='ok'?'green':'red')}</div>\` : ''}
+      </div>
+
+      <button onclick="editApiConfig('\${cfg.id}', '\${cfg.name}')"
+        class="w-full mt-4 btn-secondary text-xs">
+        ✏️ Configurar credenciais
+      </button>
+    </div>
+  \`}).join('')
+
+  area.innerHTML = \`
+    <div class="section">
+      <div class="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800 flex items-start gap-2">
+        <span class="text-xl">🔒</span>
+        <div>
+          <strong>Segurança:</strong> As chaves são mascaradas na exibição. Em produção, use
+          <code class="bg-amber-100 px-1.5 py-0.5 rounded text-xs">wrangler secret put AMAZON_ACCESS_KEY</code>
+          para guardar segredos fora do banco de dados.
+          Habilite o <strong>Cloudflare Zero Trust Access</strong> na rota <code class="bg-amber-100 px-1 rounded text-xs">/admin</code> para proteção máxima.
+        </div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">\${cards}</div>
+    </div>
+  \`
+}
+
+async function toggleApiConfig(id, active) {
+  await api('PATCH', \`/admin/api/api-configs/\${id}/toggle\`, { active })
+  toast(active ? 'API ativada ✓' : 'API desativada', active ? 'success' : 'info')
+}
+
+function editApiConfig(id, name) {
+  const modal = document.getElementById('modal-container')
+  modal.innerHTML = \`
+    <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+      <div class="modal">
+        <h3 class="font-bold text-slate-800 text-lg mb-4">🔌 Configurar: \${name}</h3>
+        <div class="space-y-3">
+          <div>
+            <label class="block text-sm font-medium text-slate-600 mb-1">API Key / Token</label>
+            <input type="password" id="cfg-api-key" class="input" placeholder="••••••••••••">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-600 mb-1">Client ID</label>
+            <input type="text" id="cfg-client-id" class="input" placeholder="ex: app-12345">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-600 mb-1">Client Secret</label>
+            <input type="password" id="cfg-client-secret" class="input" placeholder="••••••••••••">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-600 mb-1">Partner Tag / Affiliate ID</label>
+            <input type="text" id="cfg-partner-tag" class="input" placeholder="ex: seusite-20">
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-sm font-medium text-slate-600 mb-1">Rate limit (req/min)</label>
+              <input type="number" id="cfg-rate-limit" class="input" placeholder="10">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-600 mb-1">Comissão (%)</label>
+              <input type="number" id="cfg-commission" class="input" placeholder="5.0" step="0.1">
+            </div>
+          </div>
+        </div>
+        <div class="flex gap-3 mt-5">
+          <button onclick="saveApiConfig('\${id}')" class="btn-primary flex-1">Salvar</button>
+          <button onclick="closeModal()" class="btn-secondary">Cancelar</button>
+        </div>
+      </div>
+    </div>
+  \`
+}
+
+async function saveApiConfig(id) {
+  const body = {
+    api_key: document.getElementById('cfg-api-key').value || undefined,
+    client_id: document.getElementById('cfg-client-id').value || undefined,
+    client_secret: document.getElementById('cfg-client-secret').value || undefined,
+    partner_tag: document.getElementById('cfg-partner-tag').value || undefined,
+    rate_limit_per_min: parseInt(document.getElementById('cfg-rate-limit').value) || undefined,
+    commission_rate: parseFloat(document.getElementById('cfg-commission').value) || undefined,
+  }
+  await api('PATCH', \`/admin/api/api-configs/\${id}\`, body)
+  toast('Configuração salva ✓', 'success')
+  closeModal()
+  renderApiConfigs(document.getElementById('content-area'))
+}
+
+function closeModal() {
+  document.getElementById('modal-container').innerHTML = ''
+}
+
+// ── QUEUE ─────────────────────────────────────────────────
+async function renderQueue(area) {
+  const data = await api('GET', '/admin/api/queue')
+  if (!data) return
+  const statusBadge = s => s === 'pending' ? badge(s,'yellow') : s === 'done' ? badge(s,'green') : badge(s,'red')
+  const rows = data.map(j => \`
+    <tr class="hover:bg-slate-50">
+      <td class="table-td text-xs text-slate-500">\${j.id}</td>
+      <td class="table-td font-medium text-sm">\${j.product_name}</td>
+      <td class="table-td text-sm">\${j.store_name}</td>
+      <td class="table-td text-xs text-slate-500">\${j.external_id}</td>
+      <td class="table-td">
+        <span class="text-sm font-bold \${j.priority<=2?'text-red-600':'text-slate-700'}">\${j.priority}</span>
+        \${j.priority<=2?'<span class="text-xs text-red-500 ml-1">(urgente)</span>':''}
+      </td>
+      <td class="table-td">\${statusBadge(j.status)}</td>
+      <td class="table-td text-xs text-slate-400">\${fDateTime(j.scheduled_for)}</td>
+      <td class="table-td text-xs text-slate-400">\${j.attempts}</td>
+    </tr>
+  \`).join('')
+
+  area.innerHTML = \`
+    <div class="section">
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+          <h3 class="font-bold text-slate-800">Fila de Atualização de Preços</h3>
+          <button onclick="processQueue()" class="btn-primary">⚡ Processar Agora</button>
+        </div>
+        \${data.length === 0
+          ? \`<div class="py-16 text-center text-slate-400"><div class="text-4xl mb-3">✅</div>Fila vazia — todos os preços atualizados</div>\`
+          : \`<div class="overflow-x-auto"><table class="w-full">
+              <thead><tr>
+                <th class="table-th">ID</th><th class="table-th">Produto</th>
+                <th class="table-th">Loja</th><th class="table-th">External ID</th>
+                <th class="table-th">Prioridade</th><th class="table-th">Status</th>
+                <th class="table-th">Agendado</th><th class="table-th">Tentativas</th>
+              </tr></thead>
+              <tbody>\${rows}</tbody>
+            </table></div>\`}
+      </div>
+    </div>
+  \`
+}
+
+async function processQueue() {
+  const syncStatus = document.getElementById('sync-status')
+  syncStatus.classList.remove('hidden')
+  syncStatus.classList.add('flex')
+  const data = await api('POST', '/api/cron/process-queue')
+  syncStatus.classList.add('hidden')
+  syncStatus.classList.remove('flex')
+  toast(\`Processados: \${data?.processed || 0} jobs\`, 'success')
+  renderQueue(document.getElementById('content-area'))
+}
+
+// ── ANALYTICS ─────────────────────────────────────────────
+async function renderAnalytics(area) {
+  const data = await api('GET', '/admin/api/clicks?days=7')
+  if (!data) return
+  area.innerHTML = \`
+    <div class="section">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="stat-card">
+          <h3 class="font-bold text-slate-800 mb-4">📈 Cliques por dia (7 dias)</h3>
+          <canvas id="analytics-daily" height="200"></canvas>
+        </div>
+        <div class="stat-card">
+          <h3 class="font-bold text-slate-800 mb-4">🏆 Cliques por loja</h3>
+          <canvas id="analytics-stores" height="200"></canvas>
+        </div>
+        <div class="stat-card col-span-full">
+          <h3 class="font-bold text-slate-800 mb-4">🔥 Produtos mais clicados</h3>
+          <div class="space-y-2">
+            \${(data.byProduct || []).map((p, i) => \`
+              <div class="flex items-center gap-3">
+                <span class="text-lg font-black text-slate-300 w-6">\${i+1}</span>
+                <div class="flex-1 bg-slate-100 rounded-full h-6 overflow-hidden">
+                  <div class="h-6 bg-gradient-to-r from-blue-500 to-blue-600 rounded-full flex items-center px-3" style="width:\${Math.max(5, (p.clicks/((data.byProduct[0]?.clicks)||1))*100)}%">
+                    <span class="text-white text-xs font-semibold truncate">\${p.name}</span>
+                  </div>
+                </div>
+                <span class="text-sm font-bold text-slate-700 w-12 text-right">\${p.clicks}</span>
+              </div>
+            \`).join('')}
+          </div>
+        </div>
+      </div>
+    </div>
+  \`
+
+  // Gráfico diário
+  if (data.byDay?.length) {
+    if (App.charts.daily) App.charts.daily.destroy()
+    App.charts.daily = new Chart(document.getElementById('analytics-daily'), {
+      type: 'line',
+      data: {
+        labels: data.byDay.map(d => new Date(d.day).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})),
+        datasets: [{ label:'Cliques', data: data.byDay.map(d=>d.clicks),
+          borderColor:'#3b82f6', backgroundColor:'rgba(59,130,246,0.1)',
+          fill:true, tension:.3, pointRadius:4 }]
+      },
+      options: { responsive:true, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
+    })
+  }
+
+  // Gráfico lojas
+  if (data.byStore?.length) {
+    if (App.charts.stores) App.charts.stores.destroy()
+    App.charts.stores = new Chart(document.getElementById('analytics-stores'), {
+      type: 'doughnut',
+      data: {
+        labels: data.byStore.map(s => s.store),
+        datasets: [{ data: data.byStore.map(s=>s.clicks),
+          backgroundColor: ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#f97316','#84cc16'] }]
+      },
+      options: { responsive:true, plugins:{legend:{position:'right'}} }
+    })
+  }
+}
+
+// ── USERS ─────────────────────────────────────────────────
+async function renderUsers(area, page = 1) {
+  const data = await api('GET', \`/admin/api/users?page=\${page}\`)
+  if (!data) return
+
+  const rows = (data.users || []).length > 0
+    ? data.users.map(u => \`
+      <tr class="hover:bg-slate-50">
+        <td class="table-td">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-sm">
+              \${(u.full_name || u.email || '?')[0].toUpperCase()}
+            </div>
+            <div>
+              <div class="font-semibold text-sm text-slate-800">\${u.full_name || '—'}</div>
+              <div class="text-xs text-slate-400">\${u.email}</div>
+            </div>
+          </div>
+        </td>
+        <td class="table-td">\${badge(u.role || 'customer', u.role==='admin' ? 'red' : 'blue')}</td>
+        <td class="table-td">\${u.status==='active' ? badge('Ativo','green') : badge('Bloqueado','red')}</td>
+        <td class="table-td text-xs text-slate-400">\${fDateTime(u.last_login_at)}</td>
+        <td class="table-td text-xs text-slate-400">\${fDate(u.created_at)}</td>
+        <td class="table-td">
+          <div class="flex gap-2">
+            \${u.status==='active'
+              ? \`<button onclick="setUserStatus('\${u.id}','blocked')" class="btn-danger text-xs">Bloquear</button>\`
+              : \`<button onclick="setUserStatus('\${u.id}','active')" class="btn-success text-xs">Ativar</button>\`}
+            \${u.role!=='admin' ? \`<button onclick="deleteUser('\${u.id}')" class="btn-danger text-xs">Excluir</button>\` : ''}
+          </div>
+        </td>
+      </tr>
+    \`).join('')
+    : \`<tr><td colspan="6" class="py-12 text-center text-slate-400">Nenhum usuário cadastrado ainda</td></tr>\`
+
+  area.innerHTML = \`
+    <div class="section">
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100">
+          <h3 class="font-bold text-slate-800">Usuários <span class="text-slate-400 font-normal text-sm ml-1">\${data.total || 0} total</span></h3>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full">
+            <thead><tr>
+              <th class="table-th">Usuário</th>
+              <th class="table-th">Role</th>
+              <th class="table-th">Status</th>
+              <th class="table-th">Último login</th>
+              <th class="table-th">Cadastro</th>
+              <th class="table-th">Ações</th>
+            </tr></thead>
+            <tbody>\${rows}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  \`
+}
+
+async function setUserStatus(id, status) {
+  await api('PATCH', \`/admin/api/users/\${id}/status\`, { status })
+  toast(status === 'active' ? 'Usuário ativado ✓' : 'Usuário bloqueado', status === 'active' ? 'success' : 'info')
+  renderUsers(document.getElementById('content-area'))
+}
+
+async function deleteUser(id) {
+  if (!confirm('Excluir este usuário? Esta ação não pode ser desfeita.')) return
+  await api('DELETE', \`/admin/api/users/\${id}\`)
+  toast('Usuário excluído', 'info')
+  renderUsers(document.getElementById('content-area'))
+}
+
+// ── Pagination helper ─────────────────────────────────────
+function renderPagination(page, total, perPage, onPage) {
+  const totalPages = Math.ceil(total / perPage)
+  if (totalPages <= 1) return ''
+  const btns = []
+  for (let i = 1; i <= Math.min(totalPages, 7); i++) {
+    btns.push(\`<button onclick="(\${onPage.toString()})(\${i})" class="px-3 py-1.5 text-sm rounded-lg border \${i===page?'bg-blue-600 text-white border-blue-600':'border-slate-200 hover:bg-slate-50'}">\${i}</button>\`)
+  }
+  return \`<div class="flex items-center gap-2 px-5 py-4 border-t border-slate-100">\${btns.join('')}<span class="text-sm text-slate-500 ml-2">\${total} total</span></div>\`
+}
+
+// ── Boot ──────────────────────────────────────────────────
+(function init() {
+  // Verifica se já tem token salvo
+  if (App.token) {
+    // Tenta validar
+    fetch('/admin/api/dashboard', { headers: { 'Authorization': 'Bearer ' + App.token } })
+      .then(r => {
+        if (r.ok) {
+          document.getElementById('login-screen').classList.add('hidden')
+          document.getElementById('admin-app').classList.remove('hidden')
+          loadSection('dashboard')
+        } else {
+          localStorage.removeItem('admin_token')
+          App.token = ''
+        }
+      }).catch(() => {})
+  }
+
+  // Enter no campo de senha
+  document.getElementById('login-password').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doLogin()
+  })
+})()
+</script>
+</body>
+</html>`
+}
+
+export default admin
