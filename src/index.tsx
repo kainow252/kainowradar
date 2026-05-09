@@ -104,72 +104,51 @@ app.get('/', async (c) => {
       <div class="hero-orb hero-orb-2"></div>
       <div class="hero-orb hero-orb-3"></div>
 
-      <div class="max-w-5xl mx-auto px-4 py-10 md:py-14 relative z-10">
+      <div class="max-w-4xl mx-auto px-4 py-7 md:py-9 relative z-10">
 
         <!-- Badge topo -->
-        <div class="flex justify-center mb-5">
-          <span class="inline-flex items-center gap-2 bg-white/15 backdrop-blur-sm border border-white/25 text-white text-xs font-semibold px-4 py-1.5 rounded-full">
-            <span class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
+        <div class="flex justify-center mb-3">
+          <span class="inline-flex items-center gap-1.5 bg-white/15 backdrop-blur-sm border border-white/25 text-white text-xs font-semibold px-3 py-1 rounded-full">
+            <span class="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"></span>
             Comparando preços em tempo real
           </span>
         </div>
 
         <!-- Título -->
-        <div class="text-center mb-7">
-          <h1 class="text-4xl md:text-5xl lg:text-6xl font-black text-white mb-3 leading-[1.1] tracking-tight">
-            Compare preços e<br>
-            <span class="hero-gradient-text">economize de verdade</span>
+        <div class="text-center mb-5">
+          <h1 class="text-3xl md:text-4xl lg:text-[2.75rem] font-black text-white mb-2 leading-tight tracking-tight whitespace-nowrap">
+            Compare preços e <span class="hero-gradient-text">economize de verdade</span>
           </h1>
-          <p class="text-blue-100/80 text-base md:text-lg max-w-xl mx-auto">
+          <p class="text-blue-100/75 text-sm whitespace-nowrap mx-auto">
             Veja de uma vez só o menor preço em Amazon, Magalu, Mercado Livre e muito mais.
           </p>
         </div>
 
-        <!-- Barra de busca grande -->
-        <div class="max-w-2xl mx-auto mb-7">
+        <!-- Barra de busca -->
+        <div class="max-w-xl mx-auto mb-4">
           <div class="relative">
-            <svg class="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
             </svg>
             <input type="text" id="hero-search"
               placeholder="O que você quer comprar hoje?"
-              class="w-full pl-14 pr-32 py-4 rounded-2xl text-gray-900 text-base md:text-lg shadow-2xl outline-none focus:ring-4 focus:ring-yellow-300/60 border-0 font-medium"
+              class="w-full pl-11 pr-24 py-3.5 rounded-xl text-gray-900 text-sm md:text-base shadow-xl outline-none focus:ring-4 focus:ring-yellow-300/60 border-0 font-medium"
               autocomplete="off"
               onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; searchProducts(); }"
               oninput="document.getElementById('search-input').value=this.value; debounceSearch(this.value)">
             <button
               onclick="document.getElementById('search-input').value=document.getElementById('hero-search').value; searchProducts();"
-              class="absolute right-2 top-1/2 -translate-y-1/2 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 active:scale-95 text-white px-5 py-2.5 rounded-xl font-bold text-sm transition-all shadow-lg">
+              class="absolute right-2 top-1/2 -translate-y-1/2 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 active:scale-95 text-white px-4 py-2 rounded-lg font-bold text-sm transition-all shadow-md">
               Buscar
             </button>
           </div>
           <!-- Tags rápidas -->
-          <div class="flex flex-wrap justify-center gap-2 mt-3">
+          <div class="flex flex-wrap justify-center gap-1.5 mt-2.5">
             ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV'].map(t =>
               `<button onclick="quickSearch('${t}')" class="quick-tag">${t}</button>`
             ).join('')}
           </div>
         </div>
-
-        <!-- Grade de categorias DENTRO do hero -->
-        ${categories.length > 0 ? `
-        <div class="hero-cats-panel">
-          <p class="text-white/60 text-xs font-bold uppercase tracking-widest text-center mb-4 flex items-center justify-center gap-2">
-            <span class="w-6 h-px bg-white/30"></span>
-            Escolha uma categoria
-            <span class="w-6 h-px bg-white/30"></span>
-          </p>
-          <div class="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-2">
-            ${categories.map((cat: any) => `
-              <a href="/categoria/${cat.slug}" class="hero-cat-btn">
-                <span class="hero-cat-icon">${cat.icon || '🛒'}</span>
-                <span class="hero-cat-name">${cat.name}</span>
-                ${cat.product_count > 0 ? `<span class="hero-cat-count">${cat.product_count}</span>` : ''}
-              </a>
-            `).join('')}
-          </div>
-        </div>
-        ` : ''}
 
       </div>
     </section>
@@ -188,11 +167,8 @@ app.get('/', async (c) => {
             <a href="/categoria/smartphones?loja=${s.slug}"
                class="store-pill group"
                title="${s.name}">
-              <div class="store-pill-logo" style="background:${s.bg}; border-color:${s.color}20;">
-                ${s.logo_url
-                  ? `<img src="${s.logo_url}" alt="${s.name}" class="w-8 h-8 object-contain">`
-                  : `<span class="font-black text-sm" style="color:${s.color}">${s.initial}</span>`
-                }
+              <div class="store-pill-logo" style="background:${s.color}; border-color:${s.color};">
+                <span class="font-black text-sm text-white leading-none">${s.initial}</span>
               </div>
               <span class="store-pill-name">${s.name}</span>
               <span class="store-pill-tag" style="color:${s.color}">${s.text}</span>
@@ -380,7 +356,7 @@ app.get('/', async (c) => {
     </section>
   `
 
-  const content = heroHTML + storesHTML + bannerHTML + searchResultsHTML + dealsHTML + catBlocksHTML + featuredHTML + howHTML
+  const content = heroHTML + storesHTML + bannerHTML + searchResultsHTML + dealsHTML + featuredHTML + howHTML
 
   return c.html(renderLayout('ShoppingCompare — Compare preços e economize', content))
 })

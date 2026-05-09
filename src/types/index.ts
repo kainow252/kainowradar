@@ -17,6 +17,25 @@ export type Bindings = {
   GOOGLE_CLIENT_ID?: string
   GOOGLE_CLIENT_SECRET?: string
   APP_URL?: string
+  // Email (Resend)
+  RESEND_API_KEY?: string
+  // IA
+  OPENAI_API_KEY?: string
+}
+
+export interface PriceAlert {
+  id: number
+  product_id: number
+  email: string
+  target_price: number
+  is_active: number
+  notified_at?: string
+  created_at: string
+  // Joins
+  product_name?: string
+  product_slug?: string
+  product_image?: string
+  current_price?: number
 }
 
 export interface ApiConfig {

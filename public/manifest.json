@@ -1,0 +1,103 @@
+{
+  "name": "MelhorPreço — Comparador de Produtos",
+  "short_name": "MelhorPreço",
+  "description": "Compare preços em centenas de lojas e economize dinheiro nas suas compras.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#2563eb",
+  "orientation": "portrait-primary",
+  "lang": "pt-BR",
+  "categories": ["shopping", "finance"],
+  "icons": [
+    {
+      "src": "/static/icons/icon-72.svg",
+      "sizes": "72x72",
+      "type": "image/svg+xml",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/static/icons/icon-96.svg",
+      "sizes": "96x96",
+      "type": "image/svg+xml",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/static/icons/icon-128.svg",
+      "sizes": "128x128",
+      "type": "image/svg+xml",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/static/icons/icon-144.svg",
+      "sizes": "144x144",
+      "type": "image/svg+xml",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/static/icons/icon-152.svg",
+      "sizes": "152x152",
+      "type": "image/svg+xml",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/static/icons/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/static/icons/icon-384.svg",
+      "sizes": "384x384",
+      "type": "image/svg+xml",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/static/icons/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable any"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/static/screenshot-wide.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Comparador de preços — visão desktop"
+    },
+    {
+      "src": "/static/screenshot-narrow.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Comparador de preços — visão mobile"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Buscar produtos",
+      "short_name": "Buscar",
+      "description": "Busque e compare preços",
+      "url": "/?focus=search",
+      "icons": [{ "src": "/static/icons/icon-96.png", "sizes": "96x96" }]
+    },
+    {
+      "name": "Meus alertas",
+      "short_name": "Alertas",
+      "description": "Ver alertas de preço configurados",
+      "url": "/meus-alertas",
+      "icons": [{ "src": "/static/icons/icon-96.png", "sizes": "96x96" }]
+    }
+  ],
+  "share_target": {
+    "action": "/buscar",
+    "method": "GET",
+    "params": {
+      "title": "q",
+      "text": "q",
+      "url": "url"
+    }
+  }
+}

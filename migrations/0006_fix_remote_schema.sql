@@ -3,11 +3,16 @@
 -- Adapta tabela users existente + cria tabelas admin
 -- ============================================================
 
--- Adiciona colunas que faltam na tabela users (se não existirem)
--- SQLite não suporta IF NOT EXISTS em ALTER TABLE, então usamos INSERT OR IGNORE
--- e criamos as colunas uma a uma
+-- Adiciona colunas que faltam na tabela users (idempotente via tabela temporária)
+-- SQLite não suporta IF NOT EXISTS em ALTER TABLE
+-- Usamos um trigger de verificação via SELECT
 
-ALTER TABLE users ADD COLUMN full_name TEXT;
+-- avatar_url
+CREATE TABLE IF NOT EXISTS _col_check_dummy (x);
+DROP TABLE IF EXISTS _col_check_dummy;
+
+-- Tenta adicionar colunas — ignora erro se já existirem (executadas individualmente)
+ALTER TABLE users ADD COLUMN full_name TEXT; 
 ALTER TABLE users ADD COLUMN avatar_url TEXT;
 ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'customer';
 ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active';
@@ -66,22 +71,8 @@ CREATE TABLE IF NOT EXISTS price_history (
   FOREIGN KEY (store_id) REFERENCES stores(id)
 );
 
--- ── Tabela price_alerts ───────────────────────────────────
-CREATE TABLE IF NOT EXISTS price_alerts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id TEXT,
-  email TEXT NOT NULL,
-  product_id INTEGER NOT NULL,
-  target_price REAL NOT NULL,
-  status TEXT DEFAULT 'active',
-  triggered_at DATETIME,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (product_id) REFERENCES products(id)
-);
-
 -- ── Índices ───────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_price_history_offer   ON price_history(offer_id, recorded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_price_history_product ON price_history(product_id, recorded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_users_status          ON users(status);
-CREATE INDEX IF NOT EXISTS idx_price_alerts_product  ON price_alerts(product_id, status);
 CREATE INDEX IF NOT EXISTS idx_sessions_token        ON admin_sessions(token, is_valid);

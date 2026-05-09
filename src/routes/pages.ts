@@ -42,30 +42,34 @@ pages.get('/go/:slug/:offerId', async (c) => {
   return c.redirect(finalUrl, 302)
 })
 
-// ── Página de produto ─────────────────────────────────────
+// ── Página de produto — COMPLETA (Feature 1+2+4) ────────────
 pages.get('/produto/:slug', async (c) => {
   const { DB, CACHE } = c.env
   const slug = c.req.param('slug')
   const cache = new CacheManager(CACHE)
 
-  const cached = await cache.getProduct(slug)
+  // Busca produto + ofertas + histórico em paralelo
   let product: Product | null = null
   let offers: Offer[] = []
+  let priceHistory: any[] = []
+  let related: Product[] = []
 
+  const cached = await cache.getProduct(slug)
   if (cached) {
     product = cached.product
-    offers = cached.offers
+    offers  = cached.offers
   } else {
     product = await DB
-      .prepare(`SELECT p.*, s.name as best_store_name FROM products p LEFT JOIN stores s ON s.id = p.best_store_id WHERE p.slug = ? AND p.is_active = 1`)
-      .bind(slug)
-      .first<Product>()
-
+      .prepare(`SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
+                FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
+                WHERE p.slug = ? AND p.is_active = 1`)
+      .bind(slug).first<Product>()
     if (product) {
       const { results } = await DB
-        .prepare(`SELECT o.*, s.name as store_name, s.slug as store_slug, s.logo_url as store_logo FROM offers o JOIN stores s ON s.id = o.store_id WHERE o.product_id = ? AND o.is_active = 1 ORDER BY o.price ASC`)
-        .bind(product.id)
-        .all<Offer>()
+        .prepare(`SELECT o.*, s.name as store_name, s.slug as store_slug, s.logo_url as store_logo
+                  FROM offers o JOIN stores s ON s.id = o.store_id
+                  WHERE o.product_id = ? AND o.is_active = 1 ORDER BY o.price ASC`)
+        .bind(product.id).all<Offer>()
       offers = results
       await cache.setProduct(slug, { product, offers })
     }
@@ -82,116 +86,321 @@ pages.get('/produto/:slug', async (c) => {
     `), 404)
   }
 
-  const specs = product.specs ? JSON.parse(product.specs) : {}
+  // Busca histórico + relacionados em paralelo
+  const [histResult, relResult] = await Promise.all([
+    DB.prepare(`
+      SELECT ph.price, ph.in_stock, ph.recorded_at, s.name as store_name, s.slug as store_slug
+      FROM price_history ph JOIN stores s ON s.id = ph.store_id
+      WHERE ph.product_id = ? AND ph.recorded_at >= date('now','-90 days')
+      ORDER BY ph.recorded_at ASC LIMIT 300
+    `).bind(product.id).all(),
+    DB.prepare(`
+      SELECT p.*, s.name as best_store_name FROM products p
+      LEFT JOIN stores s ON s.id = p.best_store_id
+      WHERE p.category = ? AND p.id != ? AND p.is_active = 1 AND p.best_price IS NOT NULL
+      ORDER BY p.offer_count DESC LIMIT 4
+    `).bind(product.category || '', product.id).all<Product>(),
+  ])
+  priceHistory = histResult.results as any[]
+  related      = relResult.results as Product[]
+
+  // ── DADOS CALCULADOS ────────────────────────────────────
+  const specs    = product.specs ? (() => { try { return JSON.parse(product.specs!) } catch { return {} } })() : {}
   const specKeys = Object.keys(specs)
+  const minPrice = offers.length ? Math.min(...offers.map(o => o.price)) : product.best_price || 0
+  const maxPrice = offers.length ? Math.max(...offers.map(o => o.price)) : minPrice
+  const savings  = maxPrice - minPrice
+  const histMin  = priceHistory.length ? Math.min(...priceHistory.map((h:any) => h.price)) : 0
+  const histMax  = priceHistory.length ? Math.max(...priceHistory.map((h:any) => h.price)) : 0
+  const isAtHistMin = histMin > 0 && minPrice <= histMin * 1.02
 
+  // ── SEO — meta tags ricas (Feature 4) ───────────────────
+  const seoTitle = `${product.name} — Menor Preço ${formatCurrency(minPrice)} | ShoppingCompare`
+  const seoDesc  = `Compare ${product.name} em ${offers.length} lojas. Menor preço: ${formatCurrency(minPrice)}${ offers[0]?.store_name ? ` na ${offers[0].store_name}` : '' }. ${ product.brand ? `Marca: ${product.brand}.` : '' } Economize até ${formatCurrency(savings)}.`
+  const seoImg   = product.image_url || ''
+  const seoUrl   = `https://shopping-compare.pages.dev/produto/${slug}`
+
+  // Schema.org JSON-LD
+  const jsonLd = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'Product',
+    name: product.name,
+    image: seoImg,
+    description: product.description || seoDesc,
+    brand: product.brand ? { '@type': 'Brand', name: product.brand } : undefined,
+    sku: product.ean,
+    offers: offers.map(o => ({
+      '@type': 'Offer',
+      url: `${seoUrl}/go/${o.id}`,
+      priceCurrency: 'BRL',
+      price: o.price.toFixed(2),
+      availability: o.in_stock ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock',
+      seller: { '@type': 'Organization', name: o.store_name },
+    })),
+    aggregateRating: product.rating > 0 ? {
+      '@type': 'AggregateRating',
+      ratingValue: product.rating,
+      reviewCount: product.review_count || 1,
+    } : undefined,
+  })
+
+  // ── OFERTAS HTML ─────────────────────────────────────────
   const offersHTML = offers.map((o, i) => {
-    const trackUrl = `/go/${slug}/${o.id}`
-    const savings = o.original_price && o.original_price > o.price
-      ? `<span class="text-green-600 text-sm font-medium">Economize ${formatCurrency(o.original_price - o.price)}</span>` : ''
-    const badge = i === 0 ? '<span class="badge badge-green">Melhor Preço</span>' : ''
-    const discountBadge = o.discount_percent > 0 ? `<span class="badge badge-red">-${Math.round(o.discount_percent)}%</span>` : ''
-    const shipping = o.free_shipping ? '<span class="text-green-600 text-xs font-medium">✓ Frete Grátis</span>' : '<span class="text-gray-400 text-xs">Frete a consultar</span>'
-    const storeLogoHTML = o.store_logo
-      ? `<img src="${o.store_logo}" alt="${o.store_name}" class="h-6 max-w-[80px] object-contain">`
-      : `<span class="font-bold text-sm text-gray-700">${o.store_name}</span>`
-
+    const trackUrl   = `/go/${slug}/${o.id}`
+    const isBest     = i === 0
+    const discount   = o.discount_percent > 0 ? Math.round(o.discount_percent) : 0
+    const storeAv    = o.store_logo
+      ? `<img src="${o.store_logo}" alt="${o.store_name}" class="h-7 max-w-[90px] object-contain">`
+      : `<span class="font-black text-sm text-gray-800">${o.store_name}</span>`
     return `
-      <div class="offer-card ${i === 0 ? 'border-2 border-green-400 bg-green-50' : 'border border-gray-200 bg-white'}">
-        <div class="flex items-center justify-between mb-3">
-          <div class="flex items-center gap-2">${storeLogoHTML} ${badge} ${discountBadge}</div>
-          <div class="text-right">${shipping}</div>
-        </div>
-        <div class="flex items-end justify-between">
-          <div>
-            ${o.original_price && o.original_price > o.price ? `<div class="text-sm text-gray-400 line-through">${formatCurrency(o.original_price)}</div>` : ''}
-            <div class="text-3xl font-bold text-gray-900">${formatCurrency(o.price)}</div>
-            ${savings}
-            ${o.installments_count ? `<div class="text-sm text-gray-500">ou ${o.installments_count}x de ${formatCurrency(o.installments_value || o.price / o.installments_count)}</div>` : ''}
+    <div class="rounded-2xl border-2 p-4 transition-all ${
+      isBest ? 'border-green-400 bg-gradient-to-r from-green-50 to-emerald-50 shadow-md shadow-green-100' : 'border-gray-100 bg-white hover:border-blue-200'
+    }">
+      ${ isBest ? '<div class="text-xs font-black text-green-700 bg-green-100 inline-flex items-center gap-1 px-2 py-0.5 rounded-full mb-2">🏆 MELHOR PREÇO</div>' : '' }
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-12 h-12 bg-white rounded-xl border border-gray-100 flex items-center justify-center p-1 shadow-sm">
+            ${storeAv}
           </div>
-          <a href="${trackUrl}" target="_blank" rel="noopener sponsored"
-             onclick="trackClick(${o.id}, ${product!.id}, ${o.store_id})"
-             class="btn-buy">
-            Comprar Agora →
-          </a>
+          <div>
+            ${ o.original_price && o.original_price > o.price
+              ? `<div class="text-xs text-gray-400 line-through">${formatCurrency(o.original_price)}</div>` : '' }
+            <div class="text-2xl font-black text-gray-900">${formatCurrency(o.price)}</div>
+            <div class="flex items-center gap-2 mt-0.5">
+              ${ o.free_shipping ? '<span class="text-xs font-semibold text-green-600">✓ Frete grátis</span>' : '<span class="text-xs text-gray-400">Frete a consultar</span>' }
+              ${ discount > 0 ? `<span class="text-xs font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded-lg">-${discount}%</span>` : '' }
+              ${ o.installments_count ? `<span class="text-xs text-gray-500">${o.installments_count}x ${formatCurrency((o.installments_value || o.price/o.installments_count))}</span>` : '' }
+            </div>
+          </div>
         </div>
-        ${o.seller_name ? `<div class="text-xs text-gray-400 mt-2">Vendido por: ${o.seller_name}</div>` : ''}
+        <a href="${trackUrl}" target="_blank" rel="noopener sponsored"
+           onclick="trackClick(${o.id},${product!.id},${o.store_id})"
+           class="btn-buy flex-shrink-0 ${ isBest ? 'bg-green-600 hover:bg-green-700' : '' }">
+          Comprar →
+        </a>
       </div>
-    `
+      ${ o.seller_name ? `<div class="text-xs text-gray-400 mt-2 pl-1">Vendido por: ${o.seller_name}</div>` : '' }
+    </div>`
   }).join('')
 
+  // ── HISTÓRICO DE PREÇOS — dados para Chart.js (Feature 2) ─
+  // Agrupa por dia, pega menor preço
+  const histByDay: Record<string, number> = {}
+  priceHistory.forEach((h: any) => {
+    const day = h.recorded_at.substring(0, 10)
+    if (!histByDay[day] || h.price < histByDay[day]) histByDay[day] = h.price
+  })
+  const histLabels = Object.keys(histByDay).sort()
+  const histPrices = histLabels.map(d => histByDay[d])
+
+  const priceChartHTML = histLabels.length > 1 ? `
+    <div class="bg-white rounded-2xl shadow-sm border p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-bold text-gray-800">📈 Histórico de Preços (90 dias)</h2>
+        <div class="flex gap-4 text-xs">
+          <span class="text-green-600 font-bold">Mín: ${formatCurrency(histMin)}</span>
+          <span class="text-red-500 font-bold">Máx: ${formatCurrency(histMax)}</span>
+        </div>
+      </div>
+      ${ isAtHistMin ? `
+        <div class="bg-green-50 border border-green-200 rounded-xl px-3 py-2 mb-4 text-sm text-green-800 font-medium flex items-center gap-2">
+          🎉 <strong>Preço mínimo histórico!</strong> Este é o menor preço registrado nos últimos 90 dias.
+        </div>` : '' }
+      <div style="position:relative;height:200px">
+        <canvas id="price-chart"></canvas>
+      </div>
+      <script>
+        (function(){
+          const ctx = document.getElementById('price-chart')
+          if (!ctx || !window.Chart) return
+          new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: ${JSON.stringify(histLabels.map(d => {
+                const dt = new Date(d+'T12:00:00')
+                return dt.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})
+              }))},
+              datasets: [{
+                label: 'Preço',
+                data: ${JSON.stringify(histPrices)},
+                borderColor: '#2563eb',
+                backgroundColor: 'rgba(37,99,235,0.08)',
+                borderWidth: 2.5,
+                pointRadius: 3,
+                pointBackgroundColor: '#2563eb',
+                tension: 0.35,
+                fill: true,
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { display: false }, tooltip: {
+                callbacks: { label: ctx => 'R$ ' + ctx.parsed.y.toLocaleString('pt-BR',{minimumFractionDigits:2}) }
+              }},
+              scales: {
+                x: { grid: { display: false }, ticks: { maxTicksLimit: 8, font: { size: 11 } } },
+                y: { grid: { color: '#f1f5f9' }, ticks: {
+                  font: { size: 11 },
+                  callback: v => 'R$' + (v/1000).toFixed(1) + 'k'
+                }}
+              }
+            }
+          })
+        })()
+      </script>
+    </div>
+  ` : ''
+
+  // ── ESPECIFICAÇÕES HTML ───────────────────────────────────
   const specsHTML = specKeys.length > 0 ? `
-    <div class="bg-white rounded-2xl shadow-sm border p-6 mt-6">
+    <div class="bg-white rounded-2xl shadow-sm border p-6">
       <h2 class="text-lg font-bold text-gray-800 mb-4">📋 Especificações Técnicas</h2>
-      <div class="grid grid-cols-2 gap-3">
+      <div class="grid grid-cols-2 gap-2">
         ${specKeys.map(k => `
-          <div class="flex flex-col bg-gray-50 rounded-lg p-3">
-            <span class="text-xs text-gray-500 uppercase tracking-wide">${k.replace(/_/g, ' ')}</span>
-            <span class="font-semibold text-gray-800">${specs[k]}</span>
+          <div class="flex flex-col bg-gray-50 rounded-xl p-3">
+            <span class="text-xs text-gray-500 uppercase tracking-wide mb-0.5">${k.replace(/_/g,' ')}</span>
+            <span class="font-semibold text-gray-800 text-sm">${specs[k]}</span>
           </div>
         `).join('')}
       </div>
     </div>
   ` : ''
 
-  const priceRangeHTML = offers.length > 1 ? (() => {
-    const min = Math.min(...offers.map(o => o.price))
-    const max = Math.max(...offers.map(o => o.price))
-    const diff = max - min
-    return `<div class="text-sm text-gray-500 mt-1">Variação: <span class="text-green-600 font-medium">${formatCurrency(min)}</span> até <span class="text-red-500 font-medium">${formatCurrency(max)}</span> — Economize até <strong>${formatCurrency(diff)}</strong></div>`
-  })() : ''
-
-  const content = `
-    <div class="max-w-6xl mx-auto px-4 py-8">
-      <!-- Breadcrumb -->
-      <nav class="text-sm text-gray-500 mb-6 flex items-center gap-2">
-        <a href="/" class="hover:text-blue-600">Início</a> /
-        <a href="/categoria/${product.category}" class="hover:text-blue-600 capitalize">${product.category || 'Outros'}</a> /
-        <span class="text-gray-800 font-medium truncate max-w-xs">${product.name}</span>
-      </nav>
-
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <!-- Imagem -->
-        <div class="sticky top-4">
-          <div class="bg-white rounded-2xl shadow-sm border p-8 flex items-center justify-center min-h-[350px]">
-            <img src="${product.image_url || 'https://via.placeholder.com/400x400?text=Produto'}"
-                 alt="${product.name}" class="max-h-80 object-contain mx-auto">
-          </div>
-          ${product.brand ? `<div class="text-center mt-3 text-sm text-gray-500">Marca: <strong>${product.brand}</strong></div>` : ''}
-          ${product.ean ? `<div class="text-center text-xs text-gray-400">EAN: ${product.ean}</div>` : ''}
-        </div>
-
-        <!-- Info + Ofertas -->
-        <div>
-          <h1 class="text-2xl font-bold text-gray-900 mb-2 leading-tight">${product.name}</h1>
-          
-          <div class="flex items-center gap-3 mb-4">
-            <div class="flex items-center gap-1 text-yellow-500">★★★★☆</div>
-            <span class="text-sm text-gray-500">${offers.length} oferta${offers.length !== 1 ? 's' : ''} encontrada${offers.length !== 1 ? 's' : ''}</span>
-          </div>
-
-          ${priceRangeHTML}
-
-          <!-- Comparador de preços -->
-          <div class="mt-6">
-            <h2 class="text-lg font-bold text-gray-800 mb-3">🏷️ Compare os Preços</h2>
-            <div class="space-y-3">${offersHTML}</div>
-          </div>
-
-          ${product.description ? `
-            <div class="bg-blue-50 rounded-xl p-4 mt-6">
-              <h2 class="text-sm font-bold text-blue-800 mb-2">Sobre o produto</h2>
-              <p class="text-sm text-gray-700">${product.description}</p>
+  // ── RELACIONADOS HTML ─────────────────────────────────────
+  const relatedHTML = related.length > 0 ? `
+    <div class="bg-white rounded-2xl shadow-sm border p-6">
+      <h2 class="text-lg font-bold text-gray-800 mb-4">🔗 Produtos Relacionados</h2>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        ${related.map(r => `
+          <a href="/produto/${r.slug}" class="group flex flex-col rounded-xl border border-gray-100 hover:border-blue-300 hover:shadow-md transition-all overflow-hidden bg-gray-50">
+            <div class="h-28 flex items-center justify-center p-3 bg-white">
+              <img src="${r.image_url || ''}" alt="${r.name}" class="max-h-full object-contain group-hover:scale-105 transition-transform" onerror="this.style.display='none'">
             </div>
-          ` : ''}
-        </div>
+            <div class="p-2.5">
+              <div class="text-xs text-gray-700 font-medium leading-tight line-clamp-2">${r.name}</div>
+              <div class="text-sm font-black text-blue-700 mt-1">${r.best_price ? formatCurrency(r.best_price) : '—'}</div>
+            </div>
+          </a>
+        `).join('')}
       </div>
+    </div>
+  ` : ''
 
-      ${specsHTML}
+  // ── ALERTA DE PREÇO CTA ───────────────────────────────────
+  const alertCtaHTML = `
+    <div class="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl p-5 text-white">
+      <div class="flex items-center gap-4">
+        <div class="text-4xl flex-shrink-0">🔔</div>
+        <div class="flex-1">
+          <div class="font-black text-lg leading-tight">Quer pagar menos?</div>
+          <div class="text-blue-100 text-sm mt-0.5">Te avisamos por email quando o preço cair abaixo do seu alvo.</div>
+        </div>
+        <button onclick="openAlertModal('${product!.id}','${product!.name.replace(/'/g,'').substring(0,50)}','${product!.image_url||''}','${formatCurrency(minPrice)}')"
+          class="flex-shrink-0 bg-white text-blue-700 font-black text-sm px-4 py-2.5 rounded-xl hover:bg-yellow-300 hover:text-blue-900 transition-colors shadow-lg whitespace-nowrap">
+          Criar Alerta Grátis
+        </button>
+      </div>
     </div>
   `
 
-  return c.html(renderLayout(`${product.name} — Menor Preço | Shopping`, content))
+  // ── CONTEÚDO FINAL ────────────────────────────────────────
+  const content = `
+    <div class="max-w-6xl mx-auto px-4 py-6">
+
+      <!-- Breadcrumb -->
+      <nav class="text-xs text-gray-400 mb-5 flex items-center gap-1.5 flex-wrap">
+        <a href="/" class="hover:text-blue-600">Início</a>
+        <span>/</span>
+        <a href="/categoria/${product.category}" class="hover:text-blue-600 capitalize">${product.category || 'Produtos'}</a>
+        <span>/</span>
+        <span class="text-gray-600 font-medium truncate max-w-[200px]">${product.name}</span>
+      </nav>
+
+      <div class="grid grid-cols-1 lg:grid-cols-[400px_1fr] gap-6">
+
+        <!-- COL ESQUERDA: Imagem sticky -->
+        <div class="space-y-4">
+          <div class="sticky top-4 space-y-4">
+            <!-- Imagem -->
+            <div class="bg-white rounded-2xl shadow-sm border p-6 flex items-center justify-center min-h-[320px]">
+              <img src="${product.image_url || ''}" alt="${product.name}"
+                   class="max-h-72 max-w-full object-contain mx-auto"
+                   onerror="this.src='https://via.placeholder.com/300x300?text=Produto'">
+            </div>
+            <!-- Info rápida -->
+            <div class="bg-white rounded-2xl shadow-sm border p-4 space-y-2 text-sm">
+              ${ product.brand ? `<div class="flex justify-between"><span class="text-gray-500">Marca</span><span class="font-semibold">${product.brand}</span></div>` : '' }
+              ${ product.ean ? `<div class="flex justify-between"><span class="text-gray-500">EAN / GTIN</span><code class="text-xs bg-gray-100 px-2 py-0.5 rounded">${product.ean}</code></div>` : '' }
+              <div class="flex justify-between"><span class="text-gray-500">Lojas</span><span class="font-semibold text-blue-600">${offers.length} comparando</span></div>
+              ${ offers.length > 1 ? `<div class="flex justify-between"><span class="text-gray-500">Economia</span><span class="font-bold text-green-600">${formatCurrency(savings)}</span></div>` : '' }
+              ${ histMin > 0 ? `<div class="flex justify-between"><span class="text-gray-500">Mín. histórico</span><span class="font-bold ${ isAtHistMin ? 'text-green-600' : 'text-gray-700'}">${formatCurrency(histMin)}</span></div>` : '' }
+            </div>
+            <!-- Alerta CTA -->
+            ${alertCtaHTML}
+          </div>
+        </div>
+
+        <!-- COL DIREITA: Detalhes -->
+        <div class="space-y-5">
+
+          <!-- Título + Badge histórico -->
+          <div>
+            ${ product.brand ? `<span class="text-xs font-black text-blue-600 uppercase tracking-widest">${product.brand}</span>` : '' }
+            <h1 class="text-xl md:text-2xl font-black text-gray-900 mt-1 leading-tight">${product.name}</h1>
+            ${ isAtHistMin ? `<div class="inline-flex items-center gap-1.5 mt-2 bg-green-50 border border-green-200 text-green-800 text-xs font-bold px-3 py-1 rounded-full">🎉 Menor preço dos últimos 90 dias!</div>` : '' }
+          </div>
+
+          <!-- Preço resumo -->
+          ${ offers.length > 1 ? `
+          <div class="bg-gray-50 rounded-2xl p-4 border border-gray-100">
+            <div class="text-xs text-gray-500 mb-1">Faixa de preços encontrada</div>
+            <div class="flex items-center gap-3">
+              <div class="text-2xl font-black text-green-700">${formatCurrency(minPrice)}</div>
+              <div class="text-gray-400 text-sm">até</div>
+              <div class="text-xl font-bold text-gray-500">${formatCurrency(maxPrice)}</div>
+            </div>
+            <div class="w-full bg-gray-200 rounded-full h-1.5 mt-2">
+              <div class="bg-green-500 h-1.5 rounded-full" style="width:30%"></div>
+            </div>
+          </div>` : '' }
+
+          <!-- Ofertas por loja -->
+          <div>
+            <h2 class="text-base font-black text-gray-800 mb-3">🏪 Compare nas lojas</h2>
+            <div class="space-y-3">${offersHTML || '<div class="text-center py-8 text-gray-400">Sem ofertas disponíveis no momento.</div>'}</div>
+          </div>
+
+          <!-- Descrição -->
+          ${ product.description ? `
+          <div class="bg-blue-50 rounded-2xl p-5 border border-blue-100">
+            <h2 class="text-sm font-bold text-blue-800 mb-2">ℹ️ Sobre o produto</h2>
+            <p class="text-sm text-gray-700 leading-relaxed">${product.description}</p>
+          </div>` : '' }
+
+        </div>
+      </div>
+
+      <!-- Seção abaixo (largura total) -->
+      <div class="space-y-6 mt-6">
+        ${priceChartHTML}
+        ${specsHTML}
+        ${relatedHTML}
+      </div>
+
+    </div>
+
+    <!-- Chart.js para o histórico -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  `
+
+  // SEO extra: injeta meta tags OG + JSON-LD via opts
+  return c.html(renderLayout(seoTitle, content, {
+    description: seoDesc,
+    ogImage: seoImg,
+    canonical: seoUrl,
+    jsonLd,
+  }))
 })
 
 // ── Página de categoria ───────────────────────────────────
@@ -271,14 +480,32 @@ function renderProductCard(p: Product): string {
   `
 }
 
-export function renderLayout(title: string, content: string, opts: { hideHeader?: boolean } = {}): string {
+export function renderLayout(title: string, content: string, opts: { hideHeader?: boolean; description?: string; ogImage?: string; canonical?: string; jsonLd?: string } = {}): string {
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title}</title>
-  <meta name="description" content="Compare preços em dezenas de lojas e economize. Amazon, Magalu, Mercado Livre e mais.">
+  <meta name="description" content="${opts.description || 'Compare preços em dezenas de lojas e economize. Amazon, Magalu, Mercado Livre e mais.'}">
+  ${opts.canonical ? `<link rel="canonical" href="${opts.canonical}">` : ''}
+  <!-- Open Graph -->
+  <meta property="og:title" content="${title}">
+  <meta property="og:description" content="${opts.description || 'Compare preços e economize no ShoppingCompare.'}">
+  <meta property="og:type" content="product">
+  <meta property="og:site_name" content="ShoppingCompare">
+  ${opts.ogImage ? `<meta property="og:image" content="${opts.ogImage}">` : ''}
+  ${opts.canonical ? `<meta property="og:url" content="${opts.canonical}">` : ''}
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="${title}">
+  <meta name="twitter:description" content="${opts.description || ''}">
+  ${opts.ogImage ? `<meta name="twitter:image" content="${opts.ogImage}">` : ''}
+  <!-- PWA -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#2563eb">
+  <link rel="apple-touch-icon" href="/static/icon-192.svg">
+  ${opts.jsonLd ? `<script type="application/ld+json">${opts.jsonLd}</script>` : ''}
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -443,6 +670,17 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
 
   <script src="/static/app.js"></script>
 
+  <!-- PWA: Service Worker -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/static/sw.js')
+          .then(reg => console.log('[SW] Registrado:', reg.scope))
+          .catch(err => console.warn('[SW] Falha:', err))
+      })
+    }
+  </script>
+
   <!-- Modal de alerta de preço -->
   <div id="alert-modal" class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeAlertModal()"></div>
@@ -477,12 +715,113 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
       <p id="alert-login-msg" class="hidden text-center text-sm text-gray-500 mt-3">
         <a href="/auth/google" class="text-blue-600 font-semibold hover:underline">Faça login com Google</a> para criar alertas gratuitos
       </p>
+      <!-- Campos do modal de alerta -->
+      <input type="hidden" id="alert-product-id" value="">
+      <div class="mt-4">
+        <label class="block text-sm font-semibold text-gray-700 mb-1">Seu email:</label>
+        <input type="email" id="alert-email-input" placeholder="seu@email.com"
+          class="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900">
+      </div>
     </div>
   </div>
 
 </body>
 </html>`
 }
+
+// ── Página: Meus Alertas ──────────────────────────────────
+pages.get('/meus-alertas', async (c) => {
+  const email = c.req.query('email') || ''
+
+  const content = `
+  <div class="max-w-3xl mx-auto px-4 py-10">
+    <div class="flex items-center gap-3 mb-8">
+      <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center">
+        <i class="fas fa-bell text-white"></i>
+      </div>
+      <div>
+        <h1 class="text-2xl font-bold text-gray-900">Meus Alertas de Preço</h1>
+        <p class="text-sm text-gray-500">Receba emails quando o preço cair no seu alvo</p>
+      </div>
+    </div>
+
+    <!-- Busca por email -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
+      <label class="block text-sm font-semibold text-gray-700 mb-2">Buscar alertas pelo seu email:</label>
+      <div class="flex gap-3">
+        <input type="email" id="search-email" value="${email}"
+          placeholder="seu@email.com"
+          class="flex-1 px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm">
+        <button onclick="loadAlerts()"
+          class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-3 rounded-xl transition-colors">
+          <i class="fas fa-search mr-2"></i>Buscar
+        </button>
+      </div>
+    </div>
+
+    <!-- Lista de alertas -->
+    <div id="alerts-list">
+      ${email ? '<div class="text-center py-8"><div class="animate-spin text-blue-600 text-3xl mb-3">⏳</div><p class="text-gray-500">Carregando alertas...</p></div>' : '<div class="text-center py-12 text-gray-400"><div class="text-5xl mb-4">🔔</div><p class="text-lg font-medium">Digite seu email para ver seus alertas</p></div>'}
+    </div>
+  </div>
+
+  <script>
+    const initEmail = ${JSON.stringify(email)};
+    if (initEmail) { setTimeout(loadAlerts, 100); }
+
+    async function loadAlerts() {
+      const email = document.getElementById('search-email').value.trim();
+      if (!email) return;
+      const list = document.getElementById('alerts-list');
+      list.innerHTML = '<div class="text-center py-8 text-gray-400"><div class="text-3xl mb-3">⏳</div><p>Carregando...</p></div>';
+
+      try {
+        const res = await fetch('/api/price-alerts?email=' + encodeURIComponent(email));
+        const alerts = await res.json();
+
+        if (!Array.isArray(alerts) || alerts.length === 0) {
+          list.innerHTML = '<div class="text-center py-12"><div class="text-5xl mb-4">📭</div><p class="text-lg font-medium text-gray-500">Nenhum alerta encontrado para este email</p><p class="text-sm text-gray-400 mt-2">Crie alertas nas páginas de produtos!</p></div>';
+          return;
+        }
+
+        list.innerHTML = alerts.map(a => {
+          const saving = a.target_price - (a.current_price || a.target_price);
+          const triggered = a.current_price && a.current_price <= a.target_price;
+          return \`<div class="bg-white rounded-2xl shadow-sm border \${triggered ? 'border-green-300 ring-2 ring-green-100' : 'border-gray-100'} p-5 mb-4 flex items-center gap-4">
+            <div class="relative flex-shrink-0">
+              <img src="\${a.product_image || '/static/placeholder.svg'}" class="w-16 h-16 object-contain rounded-xl bg-gray-50" onerror="this.src='/static/placeholder.svg'">
+              \${triggered ? '<div class="absolute -top-1 -right-1 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center"><i class=\'fas fa-check text-white text-xs\'></i></div>' : ''}
+            </div>
+            <div class="flex-1 min-w-0">
+              <a href="/produto/\${a.product_slug}" class="font-semibold text-gray-900 hover:text-blue-600 line-clamp-1 block">\${a.product_name}</a>
+              <div class="flex items-center gap-3 mt-1">
+                <span class="text-sm text-gray-500">Alvo: <strong class="text-gray-900">R$ \${Number(a.target_price).toFixed(2)}</strong></span>
+                \${a.current_price ? \`<span class="text-sm \${triggered ? 'text-green-600 font-bold' : 'text-gray-500'}">Atual: R$ \${Number(a.current_price).toFixed(2)}</span>\` : ''}
+              </div>
+              \${triggered ? '<div class="mt-1 text-xs font-semibold text-green-600 bg-green-50 px-2 py-0.5 rounded-full inline-block">✅ Alvo atingido!</div>' : ''}
+            </div>
+            <button onclick="deleteAlert(\${a.id}, this)" class="flex-shrink-0 w-8 h-8 flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Remover alerta">
+              <i class="fas fa-trash text-sm"></i>
+            </button>
+          </div>\`
+        }).join('');
+      } catch(e) {
+        list.innerHTML = '<div class="text-center py-8 text-red-400"><p>Erro ao carregar alertas. Tente novamente.</p></div>';
+      }
+    }
+
+    async function deleteAlert(id, btn) {
+      if (!confirm('Remover este alerta?')) return;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin text-sm"></i>';
+      await fetch('/api/price-alerts/' + id, { method: 'DELETE' });
+      btn.closest('div.bg-white').remove();
+    }
+  </script>`
+
+  return c.html(renderLayout('Meus Alertas de Preço', content, {
+    description: 'Gerencie seus alertas de preço. Receba emails quando o produto baixar de preço.',
+  }))
+})
 
 export { renderProductCard, formatCurrency }
 export default pages

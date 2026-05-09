@@ -153,42 +153,44 @@ function injectStoreBadges() {
 
 // ── Modal de Alerta de Preço ──────────────────────────────
 
-function openAlertModal(productId, productName, currentPrice, imageUrl) {
+function openAlertModal(productId, productName, imageUrl, currentPrice) {
   State.alertProductId    = productId
-  State.alertCurrentPrice = currentPrice
+  State.alertCurrentPrice = typeof currentPrice === 'number' ? currentPrice : parseFloat((currentPrice || '0').replace(/[^0-9,.]/g, '').replace(',', '.')) || 0
 
   // Preenche info do produto no modal
-  const img   = el('alert-product-img')
-  const name  = el('alert-product-name')
-  const price = el('alert-current-price')
-  const input = el('alert-price-input')
+  const img      = el('alert-product-img')
+  const name     = el('alert-product-name')
+  const price    = el('alert-current-price')
+  const input    = el('alert-price-input')
+  const pidInput = el('alert-product-id')
+  const emailIn  = el('alert-email-input')
 
-  if (img)   img.src = imageUrl || ''
-  if (name)  name.textContent = productName
-  if (price) price.textContent = currentPrice ? `Preço atual: ${formatBRL(currentPrice)}` : ''
+  if (img)      img.src = imageUrl || ''
+  if (name)     name.textContent = productName
+  if (price)    price.textContent = State.alertCurrentPrice ? `Preço atual: ${formatBRL(State.alertCurrentPrice)}` : ''
+  if (pidInput) pidInput.value = productId || ''
   if (input) {
     // Sugere 10% abaixo do preço atual
-    const suggested = currentPrice ? Math.floor(currentPrice * 0.9) : ''
+    const suggested = State.alertCurrentPrice ? (State.alertCurrentPrice * 0.9).toFixed(2) : ''
     input.value = suggested
     input.placeholder = suggested ? `Ex: ${suggested}` : '0,00'
   }
 
-  // Mostra ou oculta msg de login
+  // Sempre mostra o botão e campo de email (alertas sem login)
   const loginMsg = el('alert-login-msg')
   const saveBtn  = el('alert-save-btn')
-  if (!State.user) {
-    if (loginMsg) loginMsg.classList.remove('hidden')
-    if (saveBtn)  saveBtn.classList.add('hidden')
-  } else {
-    if (loginMsg) loginMsg.classList.add('hidden')
-    if (saveBtn)  saveBtn.classList.remove('hidden')
+  if (loginMsg) loginMsg.classList.add('hidden')
+  if (saveBtn)  saveBtn.classList.remove('hidden')
+
+  // Pré-preenche email salvo no localStorage
+  if (emailIn) {
+    emailIn.value = localStorage.getItem('alert_email') || (State.user?.email || '')
   }
 
   const modal = el('alert-modal')
   if (modal) {
     modal.classList.remove('hidden')
-    // Foca no input de preço
-    setTimeout(() => { if (input) input.focus() }, 100)
+    setTimeout(() => { if (emailIn && !emailIn.value) emailIn.focus(); else if (input) input.focus() }, 100)
   }
 }
 
@@ -200,17 +202,21 @@ function closeAlertModal() {
 }
 
 async function saveAlert() {
-  if (!State.user) {
-    window.location.href = '/auth/google'
+  const input       = el('alert-price-input')
+  const emailInput  = el('alert-email-input')
+  const saveBtn     = el('alert-save-btn')
+  const targetPrice = parseFloat(input?.value)
+  const email       = emailInput?.value?.trim() || State.user?.email || ''
+
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    showToast('⚠️ Digite um email válido', 'error')
+    if (emailInput) emailInput.focus()
     return
   }
 
-  const input      = el('alert-price-input')
-  const saveBtn    = el('alert-save-btn')
-  const targetPrice = parseFloat(input?.value)
-
   if (!targetPrice || targetPrice <= 0) {
     showToast('⚠️ Digite um preço válido', 'error')
+    if (input) input.focus()
     return
   }
 
@@ -220,35 +226,35 @@ async function saveAlert() {
   }
 
   if (saveBtn) {
-    saveBtn.textContent = 'Salvando...'
+    saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Salvando...'
     saveBtn.disabled = true
   }
 
   try {
-    const res = await fetch('/auth/alerts', {
+    const res = await fetch('/api/price-alerts', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
-        product_id:   State.alertProductId,
+        product_id:   parseInt(State.alertProductId),
+        email:        email,
         target_price: targetPrice,
       }),
     })
     const data = await res.json()
 
     if (data.ok) {
+      // Salva email no localStorage para próximas vezes
+      localStorage.setItem('alert_email', email)
       closeAlertModal()
-      showToast(`🔔 Alerta criado! Te avisamos quando baixar para ${formatBRL(targetPrice)}`)
-      // Atualiza estado
-      State.alerts = [...State.alerts, { product_id: State.alertProductId, target_price: targetPrice }]
-      renderUserArea()
+      showToast(`🔔 Alerta criado! Você receberá um email quando baixar para ${formatBRL(targetPrice)}`)
     } else {
       throw new Error(data.error || 'Erro ao salvar')
     }
   } catch (err) {
-    showToast('❌ Erro ao criar alerta. Tente novamente.', 'error')
+    showToast('❌ ' + (err.message || 'Erro ao criar alerta. Tente novamente.'), 'error')
   } finally {
     if (saveBtn) {
-      saveBtn.textContent = 'Criar Alerta Gratuito'
+      saveBtn.innerHTML = 'Criar Alerta Gratuito'
       saveBtn.disabled = false
     }
   }

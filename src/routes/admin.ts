@@ -313,6 +313,7 @@ admin.get('/api/api-configs', async (c) => {
     SELECT id, name, network, endpoint_url, feed_url, feed_type,
            rate_limit_per_min, commission_rate, is_active,
            last_sync_at, last_sync_status, last_sync_count,
+           logo_url,
            -- Oculta segredos parcialmente
            CASE WHEN api_key IS NOT NULL THEN '••••' || substr(api_key, -4) ELSE NULL END as api_key_preview,
            CASE WHEN client_id IS NOT NULL THEN client_id ELSE NULL END as client_id
@@ -326,7 +327,7 @@ admin.patch('/api/api-configs/:id', async (c) => {
   const { DB } = c.env
   const id = c.req.param('id')
   const body = await c.req.json()
-  const { api_key, client_id, client_secret, partner_tag, is_active, rate_limit_per_min, commission_rate } = body
+  const { api_key, client_id, client_secret, partner_tag, is_active, rate_limit_per_min, commission_rate, logo_url } = body
 
   await DB.prepare(`
     UPDATE api_configs SET
@@ -337,11 +338,12 @@ admin.patch('/api/api-configs/:id', async (c) => {
       is_active = COALESCE(?, is_active),
       rate_limit_per_min = COALESCE(?, rate_limit_per_min),
       commission_rate = COALESCE(?, commission_rate),
+      logo_url = COALESCE(?, logo_url),
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).bind(api_key ?? null, client_id ?? null, client_secret ?? null,
      partner_tag ?? null, is_active ?? null, rate_limit_per_min ?? null,
-     commission_rate ?? null, id).run()
+     commission_rate ?? null, logo_url ?? null, id).run()
 
   return c.json({ ok: true })
 })
@@ -1191,66 +1193,632 @@ async function toggleStore(id, active) {
 }
 
 // ── API CONFIGS ───────────────────────────────────────────
+// Catálogo estático de todas as redes suportadas
+const AFFILIATE_NETWORKS = [
+  // ── Marketplaces ──────────────────────────────────────
+  {
+    id: 'amazon',
+    name: 'Amazon Associados',
+    group: 'Marketplaces',
+    icon: '🟠',
+    color: '#FF9900',
+    bg: '#fff8ee',
+    border: '#FF9900',
+    desc: 'Amazon PA-API v5 — produtos, preços, imagens e links de afiliado',
+    fields: ['api_key:API Key (Access Key ID)', 'client_secret:Secret Access Key', 'partner_tag:Associate Tag (ex: seusite-20)', 'client_id:Tracking ID'],
+    docsUrl: 'https://webservices.amazon.com.br/paapi5/documentation/',
+    commission: '1–10%',
+    network: 'amazon-pa-api',
+  },
+  {
+    id: 'mercadolivre',
+    name: 'Mercado Livre Afiliados',
+    group: 'Marketplaces',
+    icon: '🟡',
+    color: '#FFE600',
+    bg: '#fffde6',
+    border: '#e6c800',
+    desc: 'MELI Affiliates — feed de produtos e deep links rastreados',
+    fields: ['client_id:App ID', 'client_secret:Client Secret', 'partner_tag:Affiliate ID', 'api_key:Access Token'],
+    docsUrl: 'https://developers.mercadolivre.com.br/',
+    commission: '2–15%',
+    network: 'meli-api',
+  },
+  {
+    id: 'magalu',
+    name: 'Magalu Parceiro',
+    group: 'Marketplaces',
+    icon: '🔵',
+    color: '#0086FF',
+    bg: '#eef5ff',
+    border: '#0086FF',
+    desc: 'Magazine Luiza — feed XML/CSV + API de produtos e rastreamento',
+    fields: ['api_key:API Key', 'client_id:Client ID', 'client_secret:Client Secret', 'partner_tag:Publisher ID'],
+    docsUrl: 'https://parceiro.magazineluiza.com.br/',
+    commission: '2–12%',
+    network: 'magalu-api',
+  },
+  {
+    id: 'shopee',
+    name: 'Shopee Afiliados',
+    group: 'Marketplaces',
+    icon: '🟠',
+    color: '#EE4D2D',
+    bg: '#fff3f0',
+    border: '#EE4D2D',
+    desc: 'Shopee Affiliate — API de produtos, deep links e rastreamento',
+    fields: ['api_key:API Key', 'client_id:App ID', 'client_secret:App Secret', 'partner_tag:Sub ID'],
+    docsUrl: 'https://open.shopee.com/documents',
+    commission: '1–12%',
+    network: 'shopee-api',
+  },
+  {
+    id: 'shein',
+    name: 'Shein Afiliados',
+    group: 'Marketplaces',
+    icon: '🖤',
+    color: '#000000',
+    bg: '#f5f5f5',
+    border: '#444444',
+    desc: 'Shein Affiliate Program — feed de produtos de moda e links de afiliado',
+    fields: ['api_key:API Key', 'partner_tag:Affiliate ID', 'client_id:Publisher ID'],
+    docsUrl: 'https://affiliate.shein.com/',
+    commission: '10–20%',
+    network: 'shein-api',
+  },
+  {
+    id: 'aliexpress',
+    name: 'AliExpress Portals',
+    group: 'Marketplaces',
+    icon: '🔴',
+    color: '#FF4747',
+    bg: '#fff0f0',
+    border: '#FF4747',
+    desc: 'AliExpress Affiliate — Portals API para produtos, hotlinks e comissões',
+    fields: ['api_key:App Key', 'client_secret:App Secret', 'partner_tag:Tracking ID', 'client_id:Publisher SiteID'],
+    docsUrl: 'https://portals.aliexpress.com/',
+    commission: '3–9%',
+    network: 'aliexpress-portals',
+  },
+  {
+    id: 'dafiti',
+    name: 'Dafiti Afiliados',
+    group: 'Marketplaces',
+    icon: '👟',
+    color: '#2C2C2C',
+    bg: '#f8f8f8',
+    border: '#555555',
+    desc: 'Dafiti — moda, calçados e acessórios. Feed de produtos via Awin/Lomadee',
+    fields: ['api_key:API Token', 'partner_tag:Publisher ID', 'client_id:Site ID'],
+    docsUrl: 'https://www.dafiti.com.br/afiliados/',
+    commission: '5–10%',
+    network: 'dafiti-api',
+  },
+  // ── Infoprodutos ──────────────────────────────────────
+  {
+    id: 'hotmart',
+    name: 'Hotmart',
+    group: 'Infoprodutos',
+    icon: '🔥',
+    color: '#FF5722',
+    bg: '#fff3f0',
+    border: '#FF5722',
+    desc: 'Hotmart Club — cursos, e-books e infoprodutos digitais brasileiros',
+    fields: ['client_id:Client ID', 'client_secret:Client Secret', 'api_key:Basic Token', 'partner_tag:HotLink ID'],
+    docsUrl: 'https://developers.hotmart.com/',
+    commission: '20–80%',
+    network: 'hotmart-api',
+  },
+  {
+    id: 'eduzz',
+    name: 'Eduzz',
+    group: 'Infoprodutos',
+    icon: '🟣',
+    color: '#7C3AED',
+    bg: '#f5f3ff',
+    border: '#7C3AED',
+    desc: 'Eduzz — marketplace de infoprodutos, cursos e assinaturas',
+    fields: ['api_key:API Key', 'client_id:Publisher ID', 'partner_tag:Affiliate Token'],
+    docsUrl: 'https://api.eduzz.com/',
+    commission: '20–80%',
+    network: 'eduzz-api',
+  },
+  {
+    id: 'monetizze',
+    name: 'Monetizze',
+    group: 'Infoprodutos',
+    icon: '💚',
+    color: '#00B359',
+    bg: '#f0fdf4',
+    border: '#00B359',
+    desc: 'Monetizze — infoprodutos físicos e digitais com rastreamento avançado',
+    fields: ['api_key:API Key', 'client_id:Publisher ID', 'partner_tag:Affiliate Slug'],
+    docsUrl: 'https://app.monetizze.com.br/afiliados',
+    commission: '20–70%',
+    network: 'monetizze-api',
+  },
+  {
+    id: 'braip',
+    name: 'Braip',
+    group: 'Infoprodutos',
+    icon: '🔷',
+    color: '#1565C0',
+    bg: '#e8f0fe',
+    border: '#1565C0',
+    desc: 'Braip — plataforma de vendas de produtos físicos e digitais afiliados',
+    fields: ['api_key:API Key', 'partner_tag:Affiliate ID', 'client_id:Account ID'],
+    docsUrl: 'https://braip.com/afiliados',
+    commission: '20–60%',
+    network: 'braip-api',
+  },
+  // ── Redes Multimarcas ─────────────────────────────────
+  {
+    id: 'socialsoul',
+    name: 'SocialSoul / Lomadee',
+    group: 'Redes Multimarcas',
+    icon: '🌐',
+    color: '#6366F1',
+    bg: '#f0f0ff',
+    border: '#6366F1',
+    desc: 'SocialSoul (ex-Lomadee) — rede multimarcas B2W, C&A, Renner e mais',
+    fields: ['api_key:Token de Acesso', 'client_id:Source ID', 'partner_tag:Publisher ID'],
+    docsUrl: 'https://developer.socialsoul.com.br/',
+    commission: '2–15%',
+    network: 'lomadee',
+  },
+  {
+    id: 'awin',
+    name: 'Awin',
+    group: 'Redes Multimarcas',
+    icon: '🌍',
+    color: '#007AC9',
+    bg: '#e8f4fd',
+    border: '#007AC9',
+    desc: 'Awin — rede global de afiliados com centenas de anunciantes no Brasil',
+    fields: ['api_key:API Key', 'client_id:Publisher ID', 'partner_tag:Campaign ID'],
+    docsUrl: 'https://wiki.awin.com/index.php/API',
+    commission: '1–20%',
+    network: 'awin',
+  },
+  {
+    id: 'rakuten',
+    name: 'Rakuten Advertising',
+    group: 'Redes Multimarcas',
+    icon: '🔴',
+    color: '#BF0000',
+    bg: '#fff0f0',
+    border: '#BF0000',
+    desc: 'Rakuten — rede de performance marketing com grandes marcas globais',
+    fields: ['api_key:Security Token', 'client_id:Publisher ID', 'client_secret:API Secret', 'partner_tag:Site ID'],
+    docsUrl: 'https://developers.rakutenadvertising.com/',
+    commission: '1–15%',
+    network: 'rakuten',
+  },
+  // ── Tecnologia & SaaS ─────────────────────────────────
+  {
+    id: 'hostinger',
+    name: 'Hostinger',
+    group: 'Tecnologia & SaaS',
+    icon: '🟣',
+    color: '#673DE6',
+    bg: '#f5f0ff',
+    border: '#673DE6',
+    desc: 'Hostinger Affiliate — hospedagem, domínios e ferramentas web',
+    fields: ['api_key:API Token', 'partner_tag:Referral Code', 'client_id:Account ID'],
+    docsUrl: 'https://www.hostinger.com.br/afiliados',
+    commission: '40–60%',
+    network: 'hostinger-api',
+  },
+  {
+    id: 'shopify',
+    name: 'Shopify Partners',
+    group: 'Tecnologia & SaaS',
+    icon: '🟢',
+    color: '#96BF48',
+    bg: '#f0f7ea',
+    border: '#96BF48',
+    desc: 'Shopify Affiliate — indicação de lojas e soluções de e-commerce',
+    fields: ['api_key:API Key', 'client_id:Partner ID', 'client_secret:API Secret Key', 'partner_tag:Referral Tag'],
+    docsUrl: 'https://www.shopify.com/partners',
+    commission: '20% recorrente',
+    network: 'shopify-partners',
+  },
+  {
+    id: 'nuvemshop',
+    name: 'Nuvemshop / Tiendanube',
+    group: 'Tecnologia & SaaS',
+    icon: '☁️',
+    color: '#0070F3',
+    bg: '#e6f0ff',
+    border: '#0070F3',
+    desc: 'Nuvemshop Afiliados — indicação de plataforma de e-commerce para PMEs',
+    fields: ['api_key:Token de Afiliado', 'partner_tag:Publisher ID', 'client_id:Campaign ID'],
+    docsUrl: 'https://www.nuvemshop.com.br/afiliados',
+    commission: '20–30%',
+    network: 'nuvemshop-api',
+  },
+  // ── Outros / CPG ──────────────────────────────────────
+  {
+    id: 'nestle',
+    name: 'Nestlé',
+    group: 'Outros',
+    icon: '🍫',
+    color: '#C8102E',
+    bg: '#fff0f2',
+    border: '#C8102E',
+    desc: 'Nestlé — programa de afiliados para produtos alimentícios e parceiros',
+    fields: ['api_key:API Key', 'partner_tag:Publisher ID', 'client_id:Account ID'],
+    docsUrl: 'https://www.nestle.com.br/',
+    commission: 'Sob consulta',
+    network: 'nestle-api',
+  },
+]
+
+const AFFILIATE_GROUPS = ['Marketplaces', 'Infoprodutos', 'Redes Multimarcas', 'Tecnologia & SaaS', 'Outros']
+
 async function renderApiConfigs(area) {
-  const data = await api('GET', '/admin/api/api-configs')
-  if (!data) return
-  const networkColors = { 'amazon-pa-api':'blue','meli-api':'yellow','lomadee':'purple','awin':'orange','shopee':'red' }
-  const cards = data.map(cfg => {
-    const nc = networkColors[cfg.network] || 'slate'
-    const statusColor = cfg.is_active ? 'green' : 'slate'
+  const dbData = await api('GET', '/admin/api/api-configs')
+  if (!dbData) return
+
+  // Mapeia configs do banco por network id
+  const dbMap = {}
+  ;(dbData || []).forEach(cfg => { dbMap[cfg.network] = cfg })
+
+  const groupIcons = {
+    'Marketplaces': '🛒',
+    'Infoprodutos': '🎓',
+    'Redes Multimarcas': '🌐',
+    'Tecnologia & SaaS': '⚙️',
+    'Outros': '🏷️',
+  }
+
+  function buildCard(net) {
+    const db = dbMap[net.network] || {}
+    const isActive = db.is_active ?? 0
+    const configId = db.id || null
+    const hasKey = !!db.api_key_preview
+    const hasLogo = !!db.logo_url
+    const lastSync = db.last_sync_at
+    const syncStatus = db.last_sync_status
+
+    // Avatar: logo salva no banco > emoji padrão
+    const avatarHTML = hasLogo
+      ? \`<div style="width:38px;height:38px;border-radius:9px;background:#fff;border:1px solid \${net.border}30;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;box-shadow:0 2px 6px rgba(0,0,0,0.08)">
+           <img src="\${db.logo_url}" alt="\${net.name}" style="width:30px;height:30px;object-fit:contain;"
+                onerror="this.parentElement.innerHTML='<span style=\\'font-size:1.3rem\\'>\${net.icon}</span>'">
+         </div>\`
+      : \`<div style="width:38px;height:38px;border-radius:9px;background:\${net.color}22;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+           <span style="font-size:1.3rem">\${net.icon}</span>
+         </div>\`
+
     return \`
-    <div class="stat-card border-t-4 border-\${nc}-400">
-      <div class="flex items-start justify-between mb-4">
-        <div>
-          <div class="font-bold text-slate-800 text-base">\${cfg.name}</div>
-          <div class="flex items-center gap-2 mt-1">
-            \${badge(cfg.network, nc)}
-            \${badge(cfg.feed_type, 'blue')}
-            \${cfg.is_active ? \`<span class="flex items-center gap-1 text-xs text-green-600"><span class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>Ativo</span>\`
-              : \`<span class="text-xs text-slate-400">Inativo</span>\`}
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden hover:shadow-md transition-shadow"
+           id="aff-card-\${net.id}">
+        <!-- Header colorido -->
+        <div class="px-4 py-3 flex items-center justify-between"
+             style="background:\${net.bg}; border-bottom: 2px solid \${net.border}20">
+          <div class="flex items-center gap-2.5">
+            \${avatarHTML}
+            <div>
+              <div class="font-bold text-slate-800 text-sm leading-tight">\${net.name}</div>
+              <div class="text-xs font-medium mt-0.5" style="color:\${net.color}">\${net.commission} comissão</div>
+            </div>
+          </div>
+          <label class="toggle-switch flex-shrink-0">
+            <input type="checkbox" \${isActive ? 'checked' : ''}
+              onchange="toggleAffNetwork('\${net.network}', '\${configId}', this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <!-- Body -->
+        <div class="px-4 py-3">
+          <p class="text-xs text-slate-500 mb-3 leading-relaxed">\${net.desc}</p>
+
+          <!-- Status row -->
+          <div class="flex items-center gap-2 flex-wrap mb-3">
+            \${isActive
+              ? \`<span class="flex items-center gap-1 text-xs font-medium text-green-700 bg-green-50 px-2 py-0.5 rounded-full">
+                  <span class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>Ativo
+                </span>\`
+              : \`<span class="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">Inativo</span>\`
+            }
+            \${hasKey
+              ? \`<span class="text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full">🔑 Chave configurada</span>\`
+              : \`<span class="text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">⚠️ Sem credenciais</span>\`
+            }
+            \${hasLogo
+              ? \`<span class="text-xs text-purple-700 bg-purple-50 px-2 py-0.5 rounded-full">🖼️ Logo OK</span>\`
+              : ''
+            }
+            \${syncStatus === 'ok'
+              ? \`<span class="text-xs text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">✓ Sync OK</span>\`
+              : syncStatus === 'error'
+                ? \`<span class="text-xs text-red-700 bg-red-50 px-2 py-0.5 rounded-full">✗ Erro sync</span>\`
+                : ''
+            }
+          </div>
+
+          \${lastSync ? \`<div class="text-xs text-slate-400 mb-2">Última sync: \${fDateTime(lastSync)}</div>\` : ''}
+
+          <!-- Ações -->
+          <div class="flex items-center gap-2 mt-2">
+            <button onclick="openAffModal('\${net.id}')"
+              class="flex-1 text-xs font-semibold py-2 px-3 rounded-xl border transition-all
+                     \${hasKey
+                        ? 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                        : 'bg-blue-600 border-blue-600 text-white hover:bg-blue-700'
+                     }">
+              \${hasKey ? '✏️ Editar credenciais' : '🔌 Configurar'}
+            </button>
+            <a href="\${net.docsUrl}" target="_blank"
+               class="text-xs text-slate-400 hover:text-blue-600 transition-colors px-2" title="Ver documentação">
+              📄
+            </a>
           </div>
         </div>
-        <label class="toggle-switch">
-          <input type="checkbox" \${cfg.is_active ? 'checked' : ''} onchange="toggleApiConfig('\${cfg.id}', this.checked)">
-          <span class="toggle-slider"></span>
-        </label>
       </div>
+    \`
+  }
 
-      <div class="space-y-2 text-sm">
-        <div class="flex justify-between">
-          <span class="text-slate-500">Rate limit</span>
-          <span class="font-medium">\${cfg.rate_limit_per_min}/min</span>
+  let groupsHTML = ''
+  AFFILIATE_GROUPS.forEach(group => {
+    const nets = AFFILIATE_NETWORKS.filter(n => n.group === group)
+    if (!nets.length) return
+    const activeCount = nets.filter(n => (dbMap[n.network]?.is_active ?? 0)).length
+    groupsHTML += \`
+      <div class="mb-8">
+        <div class="flex items-center gap-3 mb-4">
+          <span class="text-xl">\${groupIcons[group]}</span>
+          <h3 class="text-base font-bold text-slate-800">\${group}</h3>
+          <span class="text-xs font-medium px-2 py-0.5 rounded-full \${activeCount > 0 ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}">
+            \${activeCount}/\${nets.length} ativos
+          </span>
         </div>
-        <div class="flex justify-between">
-          <span class="text-slate-500">Comissão</span>
-          <span class="font-medium text-green-700">\${cfg.commission_rate}%</span>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          \${nets.map(buildCard).join('')}
         </div>
-        \${cfg.api_key_preview ? \`<div class="flex justify-between"><span class="text-slate-500">API Key</span><code class="text-xs bg-slate-100 px-2 py-0.5 rounded">\${cfg.api_key_preview}</code></div>\` : ''}
-        \${cfg.last_sync_at ? \`<div class="flex justify-between"><span class="text-slate-500">Última sync</span><span class="text-xs">\${fDateTime(cfg.last_sync_at)}</span></div>\` : ''}
-        \${cfg.last_sync_status ? \`<div class="flex justify-between"><span class="text-slate-500">Status sync</span>\${badge(cfg.last_sync_status, cfg.last_sync_status==='ok'?'green':'red')}</div>\` : ''}
       </div>
+    \`
+  })
 
-      <button onclick="editApiConfig('\${cfg.id}', '\${cfg.name}')"
-        class="w-full mt-4 btn-secondary text-xs">
-        ✏️ Configurar credenciais
-      </button>
-    </div>
-  \`}).join('')
+  // Sumário geral
+  const totalActive = AFFILIATE_NETWORKS.filter(n => dbMap[n.network]?.is_active).length
+  const totalConfigured = AFFILIATE_NETWORKS.filter(n => dbMap[n.network]?.api_key_preview).length
 
   area.innerHTML = \`
     <div class="section">
-      <div class="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800 flex items-start gap-2">
-        <span class="text-xl">🔒</span>
+      <!-- Banner de segurança -->
+      <div class="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800 flex items-start gap-3">
+        <span class="text-xl flex-shrink-0">🔒</span>
         <div>
-          <strong>Segurança:</strong> As chaves são mascaradas na exibição. Em produção, use
+          <strong>Segurança:</strong> As chaves são mascaradas na exibição. Em produção, prefira usar
           <code class="bg-amber-100 px-1.5 py-0.5 rounded text-xs">wrangler secret put AMAZON_ACCESS_KEY</code>
-          para guardar segredos fora do banco de dados.
-          Habilite o <strong>Cloudflare Zero Trust Access</strong> na rota <code class="bg-amber-100 px-1 rounded text-xs">/admin</code> para proteção máxima.
+          para guardar segredos fora do banco. Ative o <strong>Cloudflare Zero Trust</strong> na rota
+          <code class="bg-amber-100 px-1 rounded text-xs">/admin</code> para proteção máxima.
         </div>
       </div>
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">\${cards}</div>
+
+      <!-- Sumário -->
+      <div class="grid grid-cols-3 gap-4">
+        <div class="stat-card text-center border-t-4 border-blue-400">
+          <div class="text-3xl font-black text-slate-800">\${AFFILIATE_NETWORKS.length}</div>
+          <div class="text-sm text-slate-500 mt-1">Redes disponíveis</div>
+        </div>
+        <div class="stat-card text-center border-t-4 border-green-400">
+          <div class="text-3xl font-black text-green-700">\${totalActive}</div>
+          <div class="text-sm text-slate-500 mt-1">Redes ativas</div>
+        </div>
+        <div class="stat-card text-center border-t-4 border-amber-400">
+          <div class="text-3xl font-black text-amber-700">\${totalConfigured}</div>
+          <div class="text-sm text-slate-500 mt-1">Com credenciais</div>
+        </div>
+      </div>
+
+      <!-- Cards por grupo -->
+      \${groupsHTML}
     </div>
   \`
+}
+
+// Abre modal de configuração da rede pelo id estático
+function openAffModal(netId) {
+  const net = AFFILIATE_NETWORKS.find(n => n.id === netId)
+  if (!net) return
+
+  const fieldsHTML = net.fields.map(f => {
+    const [fieldKey, fieldLabel] = f.split(':')
+    const isSecret = ['api_key','client_secret'].includes(fieldKey)
+    const placeholders = {
+      api_key: '••••••••••••••••',
+      client_id: 'ex: 12345678',
+      client_secret: '••••••••••••••••',
+      partner_tag: 'ex: seusite-20',
+    }
+    return \`
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-1">\${fieldLabel}</label>
+        <input type="\${isSecret ? 'password' : 'text'}"
+               id="modal-\${fieldKey}"
+               class="input"
+               placeholder="\${placeholders[fieldKey] || ''}">
+      </div>
+    \`
+  }).join('')
+
+  const modal = document.getElementById('modal-container')
+  modal.innerHTML = \`
+    <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+      <div class="modal max-w-lg" style="max-height:90vh;overflow-y:auto;">
+
+        <!-- Header com logo preview -->
+        <div class="flex items-center gap-3 mb-5 pb-4 border-b border-slate-100">
+          <div id="modal-logo-preview"
+               style="width:52px;height:52px;border-radius:12px;background:\${net.color};flex-shrink:0;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,0.15);overflow:hidden;">
+            <span class="text-2xl" id="modal-logo-emoji">\${net.icon}</span>
+          </div>
+          <div class="flex-1 min-w-0">
+            <h3 class="font-bold text-slate-800 text-lg leading-tight">\${net.name}</h3>
+            <p class="text-xs text-slate-500 mt-0.5 truncate">\${net.desc}</p>
+          </div>
+        </div>
+
+        <!-- Campo Logo URL (destaque visual) -->
+        <div class="bg-slate-50 rounded-xl p-3 mb-4 border border-slate-200">
+          <label class="block text-sm font-bold text-slate-700 mb-2">
+            🖼️ Logo da empresa
+          </label>
+          <div class="flex gap-2 items-center">
+            <input type="url" id="modal-logo-url" class="input flex-1 text-xs"
+                   placeholder="https://logo.clearbit.com/amazon.com.br"
+                   oninput="previewLogo(this.value, '\${net.color}')">
+            <button type="button" onclick="autoFetchLogo('\${net.id}', '\${net.name}', '\${net.color}')"
+                    class="flex-shrink-0 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold px-3 py-2 rounded-lg transition-all whitespace-nowrap">
+              ✨ Auto
+            </button>
+          </div>
+          <p class="text-xs text-slate-400 mt-1.5">
+            Cole a URL da logo (PNG/SVG) ou clique em <strong>Auto</strong> para buscar automaticamente
+          </p>
+          <!-- Sugestões rápidas -->
+          <div class="flex flex-wrap gap-1.5 mt-2">
+            <button onclick="previewLogo('https://logo.clearbit.com/\${net.id}.com', '\${net.color}'); document.getElementById('modal-logo-url').value='https://logo.clearbit.com/\${net.id}.com'"
+                    class="text-xs bg-white border border-slate-200 text-slate-600 px-2 py-0.5 rounded-md hover:border-blue-300 hover:text-blue-600 transition-all">
+              Clearbit
+            </button>
+            <button onclick="previewLogo('https://www.google.com/s2/favicons?domain=\${net.id}.com.br&sz=64', '\${net.color}'); document.getElementById('modal-logo-url').value='https://www.google.com/s2/favicons?domain=\${net.id}.com.br&sz=64'"
+                    class="text-xs bg-white border border-slate-200 text-slate-600 px-2 py-0.5 rounded-md hover:border-blue-300 hover:text-blue-600 transition-all">
+              Google Favicon
+            </button>
+            <button onclick="document.getElementById('modal-logo-url').value=''; previewLogo('', '\${net.color}')"
+                    class="text-xs bg-white border border-red-100 text-red-400 px-2 py-0.5 rounded-md hover:bg-red-50 transition-all">
+              Limpar
+            </button>
+          </div>
+        </div>
+
+        <!-- Demais campos -->
+        <div class="space-y-3">
+          \${fieldsHTML}
+          <div class="grid grid-cols-2 gap-3 pt-1">
+            <div>
+              <label class="block text-sm font-medium text-slate-600 mb-1">Rate limit (req/min)</label>
+              <input type="number" id="modal-rate-limit" class="input" placeholder="10">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-600 mb-1">Comissão base (%)</label>
+              <input type="number" id="modal-commission" class="input" placeholder="5.0" step="0.1">
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3 mt-5 pt-4 border-t border-slate-100">
+          <button onclick="saveAffConfig('\${net.network}', \${JSON.stringify(net.fields).replace(/'/g,'&#39;')})"
+            class="btn-primary flex-1">💾 Salvar configuração</button>
+          <button onclick="closeModal()" class="btn-secondary">Cancelar</button>
+          <a href="\${net.docsUrl}" target="_blank"
+             class="text-xs text-slate-400 hover:text-blue-600 transition-colors flex-shrink-0" title="Ver documentação">📄</a>
+        </div>
+      </div>
+    </div>
+  \`
+}
+
+// Preview da logo em tempo real no header do modal
+function previewLogo(url, color) {
+  const preview = document.getElementById('modal-logo-preview')
+  const emoji   = document.getElementById('modal-logo-emoji')
+  if (!preview) return
+  if (!url) {
+    // Volta para emoji/ícone
+    preview.style.background = color
+    preview.innerHTML = \`<span class="text-2xl" id="modal-logo-emoji">\${emoji ? emoji.textContent : '🔌'}</span>\`
+    return
+  }
+  // Mostra spinner enquanto carrega
+  preview.innerHTML = \`<div style="width:20px;height:20px;border:2px solid white;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite"></div>\`
+  const img = new Image()
+  img.onload = () => {
+    preview.style.background = '#fff'
+    preview.innerHTML = \`<img src="\${url}" style="width:42px;height:42px;object-fit:contain;border-radius:6px;">\`
+  }
+  img.onerror = () => {
+    preview.style.background = color
+    preview.innerHTML = \`<span style="color:white;font-size:11px;font-weight:700;text-align:center;padding:2px;">Erro</span>\`
+    toast('URL inválida ou imagem não carregou', 'error')
+  }
+  img.src = url
+}
+
+// Auto-busca a logo pela Clearbit usando o domínio da rede
+function autoFetchLogo(netId, netName, color) {
+  const domainMap = {
+    amazon:       'amazon.com.br',
+    mercadolivre: 'mercadolivre.com.br',
+    magalu:       'magazineluiza.com.br',
+    shopee:       'shopee.com.br',
+    shein:        'shein.com',
+    aliexpress:   'aliexpress.com',
+    dafiti:       'dafiti.com.br',
+    hotmart:      'hotmart.com',
+    eduzz:        'eduzz.com',
+    monetizze:    'monetizze.com.br',
+    braip:        'braip.com',
+    socialsoul:   'socialsoul.com.br',
+    awin:         'awin.com',
+    rakuten:      'rakuten.com',
+    hostinger:    'hostinger.com.br',
+    shopify:      'shopify.com',
+    nuvemshop:    'nuvemshop.com.br',
+    nestle:       'nestle.com.br',
+  }
+  const domain = domainMap[netId] || (netId + '.com')
+  const url = \`https://logo.clearbit.com/\${domain}\`
+  const input = document.getElementById('modal-logo-url')
+  if (input) input.value = url
+  previewLogo(url, color)
+  toast('Buscando logo...', 'info')
+}
+
+async function saveAffConfig(network, fields) {
+  // Monta o body lendo os inputs do modal
+  const body = { rate_limit_per_min: undefined, commission_rate: undefined }
+  fields.forEach(f => {
+    const [fieldKey] = f.split(':')
+    const el = document.getElementById(\`modal-\${fieldKey}\`)
+    if (el && el.value.trim()) body[fieldKey] = el.value.trim()
+  })
+  const rateEl = document.getElementById('modal-rate-limit')
+  const commEl = document.getElementById('modal-commission')
+  const logoEl = document.getElementById('modal-logo-url')
+  if (rateEl && rateEl.value) body.rate_limit_per_min = parseInt(rateEl.value)
+  if (commEl && commEl.value) body.commission_rate = parseFloat(commEl.value)
+  if (logoEl && logoEl.value.trim()) body.logo_url = logoEl.value.trim()
+
+  // Busca o id da config no banco pelo network
+  const all = await api('GET', '/admin/api/api-configs')
+  const existing = (all || []).find(c => c.network === network)
+  if (existing) {
+    await api('PATCH', \`/admin/api/api-configs/\${existing.id}\`, body)
+  }
+  toast('Configuração salva ✓', 'success')
+  closeModal()
+  renderApiConfigs(document.getElementById('content-area'))
+}
+
+async function toggleAffNetwork(network, configId, active) {
+  if (configId && configId !== 'null') {
+    await api('PATCH', \`/admin/api/api-configs/\${configId}/toggle\`, { active })
+  } else {
+    // Busca o id pelo network
+    const all = await api('GET', '/admin/api/api-configs')
+    const existing = (all || []).find(c => c.network === network)
+    if (existing) {
+      await api('PATCH', \`/admin/api/api-configs/\${existing.id}/toggle\`, { active })
+    }
+  }
+  toast(active ? '✓ Integração ativada' : 'Integração desativada', active ? 'success' : 'info')
+  renderApiConfigs(document.getElementById('content-area'))
 }
 
 async function toggleApiConfig(id, active) {
