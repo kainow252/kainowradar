@@ -8,16 +8,16 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "shopping-compare-production",
-      "database_id": "placeholder-will-be-replaced"
+      "database_name": "webapp-production",
+      "database_id": "271288fa-fb7b-45c9-a801-e25b8973e635"
     }
   ],
 
   "kv_namespaces": [
     {
       "binding": "CACHE",
-      "id": "placeholder-will-be-replaced",
-      "preview_id": "placeholder-will-be-replaced"
+      "id": "81f0b165fc0c4669a1d45c9c267de55e",
+      "preview_id": "81f0b165fc0c4669a1d45c9c267de55e"
     }
   ]
 }
