@@ -651,3 +651,124 @@ body {
 /* ── HEADER SHADOW ON SCROLL ──────────────────────────────── */
 header { transition: box-shadow 0.2s; }
 header.scrolled { box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+
+/* ══════════════════════════════════════════════════════════════
+   MENU HAMBÚRGUER MOBILE
+══════════════════════════════════════════════════════════════ */
+
+/* Barrinhas do botão hambúrguer */
+.ham-bar {
+  display: block;
+  width: 20px;
+  height: 2px;
+  background: #374151;
+  border-radius: 2px;
+  transition: transform 0.25s ease, opacity 0.2s ease, width 0.2s ease;
+  transform-origin: center;
+}
+
+/* Estado "aberto" — X animado */
+#hamburger-btn.is-open .ham-bar:nth-child(1) {
+  transform: translateY(7px) rotate(45deg);
+}
+#hamburger-btn.is-open .ham-bar:nth-child(2) {
+  opacity: 0;
+  width: 0;
+}
+#hamburger-btn.is-open .ham-bar:nth-child(3) {
+  transform: translateY(-7px) rotate(-45deg);
+}
+
+/* Drawer lateral */
+#mob-drawer {
+  transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 0.32s ease;
+  will-change: transform;
+}
+.mob-drawer-closed {
+  transform: translateX(-100%);
+  box-shadow: none;
+}
+.mob-drawer-open {
+  transform: translateX(0);
+  box-shadow: 8px 0 40px rgba(0,0,0,0.18);
+}
+
+/* Overlay do menu */
+#mob-overlay {
+  transition: opacity 0.3s ease;
+}
+#mob-overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+#mob-overlay:not(.hidden) {
+  opacity: 1;
+}
+
+/* Body bloqueado durante o menu */
+body.mob-menu-open {
+  overflow: hidden;
+  touch-action: none;
+}
+
+/* Links do menu mobile */
+.mob-menu-link {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.7rem 0.875rem;
+  border-radius: 0.875rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: #374151;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s, transform 0.1s;
+  position: relative;
+}
+.mob-menu-link:active {
+  transform: scale(0.98);
+}
+.mob-menu-link:hover,
+.mob-menu-link:focus-visible {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.mob-menu-link-hot {
+  color: #dc2626 !important;
+}
+.mob-menu-link-hot:hover {
+  background: #fff1f1 !important;
+  color: #b91c1c !important;
+}
+.mob-menu-icon {
+  font-size: 1.125rem;
+  width: 1.5rem;
+  text-align: center;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+/* Animação de entrada dos itens do drawer */
+#mob-drawer.mob-drawer-open .mob-menu-link {
+  animation: slideInItem 0.3s ease both;
+}
+#mob-drawer.mob-drawer-open .mob-menu-link:nth-child(1)  { animation-delay: 0.04s; }
+#mob-drawer.mob-drawer-open .mob-menu-link:nth-child(2)  { animation-delay: 0.07s; }
+#mob-drawer.mob-drawer-open .mob-menu-link:nth-child(3)  { animation-delay: 0.10s; }
+#mob-drawer.mob-drawer-open .mob-menu-link:nth-child(4)  { animation-delay: 0.13s; }
+#mob-drawer.mob-drawer-open .mob-menu-link:nth-child(5)  { animation-delay: 0.16s; }
+#mob-drawer.mob-drawer-open .mob-menu-link:nth-child(6)  { animation-delay: 0.19s; }
+#mob-drawer.mob-drawer-open .mob-menu-link:nth-child(7)  { animation-delay: 0.22s; }
+#mob-drawer.mob-drawer-open .mob-menu-link:nth-child(8)  { animation-delay: 0.25s; }
+
+@keyframes slideInItem {
+  from { opacity: 0; transform: translateX(-12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Subnav de categorias — escondido no mobile (já está no drawer) */
+@media (max-width: 767px) {
+  #cat-subnav { display: none !important; }
+  #user-area  { display: none !important; }
+}

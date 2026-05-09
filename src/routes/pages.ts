@@ -526,15 +526,184 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
 <body class="bg-gray-50 font-sans antialiased">
 
   ${opts.hideHeader ? '' : `
+  <!-- ═══════════════════════════════════════════════════════
+       DRAWER MENU MOBILE (Hambúrguer)
+  ═══════════════════════════════════════════════════════ -->
+
+  <!-- Overlay escuro -->
+  <div id="mob-overlay" onclick="closeHamburger()"
+    class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[90] hidden"
+    aria-hidden="true"></div>
+
+  <!-- Drawer lateral esquerdo -->
+  <aside id="mob-drawer"
+    class="fixed top-0 left-0 h-full w-[300px] max-w-[85vw] bg-white z-[100]
+           flex flex-col shadow-2xl
+           mob-drawer-closed"
+    aria-label="Menu principal" role="dialog" aria-modal="true">
+
+    <!-- Cabeçalho do drawer -->
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-blue-600 to-blue-700 shrink-0">
+      <a href="/" onclick="closeHamburger()" class="flex items-center gap-2">
+        <div class="w-8 h-8 bg-white/20 rounded-xl flex items-center justify-center">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+          </svg>
+        </div>
+        <div class="leading-none">
+          <span class="font-black text-white text-base tracking-tight">Shopping</span><span class="font-black text-yellow-300 text-base tracking-tight">Compare</span>
+        </div>
+      </a>
+      <button onclick="closeHamburger()" aria-label="Fechar menu"
+        class="w-8 h-8 flex items-center justify-center rounded-full text-white/70 hover:text-white hover:bg-white/15 transition-colors">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Busca rápida dentro do drawer -->
+    <div class="px-4 py-3 border-b border-gray-100 shrink-0">
+      <div class="relative">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+        <input type="text" id="mob-search-input"
+          placeholder="Buscar produto..."
+          class="w-full pl-9 pr-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+          autocomplete="off"
+          onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; closeHamburger(); searchProducts(); }"
+          oninput="document.getElementById('search-input').value=this.value; debounceSearch(this.value)">
+      </div>
+    </div>
+
+    <!-- Conteúdo rolável -->
+    <div class="flex-1 overflow-y-auto overscroll-contain py-2">
+
+      <!-- Categorias -->
+      <div class="px-3 pt-2 pb-1">
+        <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-3 mb-2">Categorias</p>
+        <nav class="space-y-0.5">
+          <a href="/categoria/smartphones" onclick="closeHamburger()" class="mob-menu-link">
+            <span class="mob-menu-icon">📱</span> Celulares
+          </a>
+          <a href="/categoria/notebooks" onclick="closeHamburger()" class="mob-menu-link">
+            <span class="mob-menu-icon">💻</span> Notebooks
+          </a>
+          <a href="/categoria/tv" onclick="closeHamburger()" class="mob-menu-link">
+            <span class="mob-menu-icon">📺</span> TVs
+          </a>
+          <a href="/categoria/games" onclick="closeHamburger()" class="mob-menu-link">
+            <span class="mob-menu-icon">🎮</span> Games
+          </a>
+          <a href="/categoria/eletrodomesticos" onclick="closeHamburger()" class="mob-menu-link">
+            <span class="mob-menu-icon">🏠</span> Eletrodomésticos
+          </a>
+          <a href="/categoria/audio" onclick="closeHamburger()" class="mob-menu-link">
+            <span class="mob-menu-icon">🎧</span> Áudio
+          </a>
+          <a href="/categoria/cameras" onclick="closeHamburger()" class="mob-menu-link">
+            <span class="mob-menu-icon">📷</span> Câmeras
+          </a>
+          <a href="/categoria/moda" onclick="closeHamburger()" class="mob-menu-link">
+            <span class="mob-menu-icon">👗</span> Moda
+          </a>
+        </nav>
+      </div>
+
+      <!-- Divisor -->
+      <div class="h-px bg-gray-100 mx-4 my-3"></div>
+
+      <!-- Links rápidos -->
+      <div class="px-3 pb-1">
+        <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-3 mb-2">Links Rápidos</p>
+        <nav class="space-y-0.5">
+          <a href="/ofertas" onclick="closeHamburger()" class="mob-menu-link mob-menu-link-hot">
+            <span class="mob-menu-icon">🔥</span> Ofertas do Dia
+            <span class="ml-auto text-[10px] bg-red-100 text-red-600 font-bold px-2 py-0.5 rounded-full">HOT</span>
+          </a>
+          <a href="/meus-alertas" onclick="closeHamburger()" class="mob-menu-link">
+            <span class="mob-menu-icon">🔔</span> Meus Alertas
+          </a>
+        </nav>
+      </div>
+
+      <!-- Divisor -->
+      <div class="h-px bg-gray-100 mx-4 my-3"></div>
+
+      <!-- Lojas parceiras -->
+      <div class="px-3 pb-2">
+        <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-3 mb-3">Lojas Parceiras</p>
+        <div class="grid grid-cols-4 gap-2 px-1">
+          ${[
+            { name:'Amazon',    color:'#FF9900', initial:'A' },
+            { name:'Magalu',    color:'#0086FF', initial:'M' },
+            { name:'Mercado',   color:'#FFE600', initial:'ML' },
+            { name:'Americana', color:'#E60014', initial:'Am' },
+            { name:'C.Bahia',   color:'#0057A8', initial:'CB' },
+            { name:'Kabum',     color:'#F47920', initial:'K' },
+            { name:'FastShop',  color:'#00843D', initial:'FS' },
+            { name:'Ponto Frio',color:'#00AAFF', initial:'PF' },
+          ].map(s => `
+            <a href="/categoria/smartphones?loja=${s.name.toLowerCase().replace(/[^a-z]/g,'')}" onclick="closeHamburger()" class="flex flex-col items-center gap-1 p-1 rounded-xl hover:bg-gray-50 transition-colors">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center" style="background:${s.color}">
+                <span class="font-black text-xs text-white leading-none">${s.initial}</span>
+              </div>
+              <span class="text-[10px] text-gray-600 font-medium text-center leading-tight">${s.name}</span>
+            </a>
+          `).join('')}
+        </div>
+      </div>
+
+    </div><!-- fim overflow-y-auto -->
+
+    <!-- Rodapé do drawer: login -->
+    <div class="shrink-0 border-t border-gray-100 p-4">
+      <div id="mob-user-area">
+        <a href="/auth/google" onclick="closeHamburger()"
+           class="flex items-center justify-center gap-2 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-2xl transition-colors text-sm">
+          <svg class="w-4 h-4" viewBox="0 0 24 24">
+            <path fill="white" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+            <path fill="white" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" opacity=".7"/>
+            <path fill="white" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" opacity=".5"/>
+            <path fill="white" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" opacity=".3"/>
+          </svg>
+          Entrar com Google
+        </a>
+      </div>
+      <div id="mob-user-logged" class="hidden">
+        <div class="flex items-center gap-3 mb-3">
+          <img id="mob-avatar" src="" class="w-10 h-10 rounded-full border-2 border-blue-200" alt="">
+          <div>
+            <div id="mob-user-name" class="text-sm font-bold text-gray-800"></div>
+            <div class="text-xs text-gray-400">Conta conectada</div>
+          </div>
+        </div>
+        <a href="/auth/logout" onclick="closeHamburger()" class="flex items-center justify-center gap-2 w-full border border-red-200 text-red-500 hover:bg-red-50 font-semibold py-2.5 rounded-2xl transition-colors text-sm">
+          🚪 Sair
+        </a>
+      </div>
+    </div>
+
+  </aside>
+
   <!-- HEADER PRINCIPAL -->
   <header class="sticky top-0 z-50 bg-white border-b border-gray-100" id="main-header">
 
-    <!-- Barra superior: logo + busca + usuário -->
-    <div class="max-w-7xl mx-auto px-4">
-      <div class="flex items-center gap-3 h-[60px]">
+    <!-- Barra superior: hambúrguer + logo + busca + usuário -->
+    <div class="max-w-7xl mx-auto px-3 md:px-4">
+      <div class="flex items-center gap-2 md:gap-3 h-[60px]">
+
+        <!-- Botão Hambúrguer (só mobile) -->
+        <button id="hamburger-btn" onclick="openHamburger()" aria-label="Abrir menu"
+          class="md:hidden flex-shrink-0 w-10 h-10 flex flex-col items-center justify-center gap-[5px] rounded-xl hover:bg-gray-100 active:bg-gray-200 transition-colors">
+          <span class="ham-bar"></span>
+          <span class="ham-bar"></span>
+          <span class="ham-bar"></span>
+        </button>
 
         <!-- Logo -->
-        <a href="/" class="flex items-center gap-2 shrink-0 mr-2">
+        <a href="/" class="flex items-center gap-2 shrink-0">
           <div class="w-9 h-9 bg-gradient-to-br from-blue-500 to-blue-700 rounded-xl flex items-center justify-center shadow-md shadow-blue-200">
             <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
@@ -565,7 +734,7 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
           </div>
         </div>
 
-        <!-- Alertas (ícone) -->
+        <!-- Alertas (ícone) — só desktop -->
         <a href="/meus-alertas" title="Meus Alertas"
            class="hidden md:flex items-center gap-1.5 text-gray-500 hover:text-blue-600 transition-colors px-2 shrink-0">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -574,8 +743,8 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
           <span class="text-xs font-semibold">Alertas</span>
         </a>
 
-        <!-- Área do usuário: botão Google ou Avatar -->
-        <div id="user-area" class="shrink-0">
+        <!-- Área do usuário: só desktop -->
+        <div id="user-area" class="hidden md:block shrink-0">
           <a href="/auth/google"
              class="flex items-center gap-2 bg-white border border-gray-200 hover:border-blue-400 hover:bg-blue-50 text-gray-700 text-sm font-semibold px-3 py-2 rounded-xl transition-all whitespace-nowrap">
             <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24">
@@ -591,7 +760,7 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
           <button onclick="toggleUserMenu()" class="flex items-center gap-2 hover:bg-gray-100 rounded-xl px-2 py-1.5 transition-all">
             <img id="user-avatar" src="" class="w-8 h-8 rounded-full object-cover border-2 border-blue-200" alt="">
             <span id="user-name" class="text-sm font-semibold text-gray-700 hidden md:block max-w-[100px] truncate"></span>
-            <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            <svg class="w-3.5 h-3.5 text-gray-400 hidden md:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
           </button>
           <div id="user-dropdown" class="hidden absolute right-0 top-full mt-2 w-52 bg-white rounded-2xl shadow-xl border border-gray-100 py-2 z-50">
             <a href="/meus-alertas" class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 rounded-lg mx-1">🔔 Meus Alertas</a>
@@ -604,8 +773,8 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
       </div>
     </div>
 
-    <!-- Sub-nav de categorias -->
-    <nav class="border-t border-gray-100 bg-white" id="cat-subnav">
+    <!-- Sub-nav de categorias (só desktop) -->
+    <nav class="border-t border-gray-100 bg-white hidden md:block" id="cat-subnav">
       <div class="max-w-7xl mx-auto px-4">
         <div class="flex items-center gap-0.5 overflow-x-auto scrollbar-hide h-10">
           <a href="/categoria/smartphones"   class="subnav-link">📱 Celulares</a>

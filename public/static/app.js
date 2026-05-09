@@ -4,6 +4,113 @@
    sistema de alertas de preço, menu usuário
    ============================================================ */
 
+// ══════════════════════════════════════════════════════════════
+// MENU HAMBÚRGUER MOBILE
+// ══════════════════════════════════════════════════════════════
+
+let _hamStartX = 0
+let _hamCurrentX = 0
+let _hamIsDragging = false
+
+function openHamburger() {
+  const drawer  = el('mob-drawer')
+  const overlay = el('mob-overlay')
+  const btn     = el('hamburger-btn')
+  if (!drawer) return
+
+  drawer.classList.remove('mob-drawer-closed')
+  drawer.classList.add('mob-drawer-open')
+  overlay.classList.remove('hidden')
+  btn?.classList.add('is-open')
+  document.body.classList.add('mob-menu-open')
+
+  // Foca no campo de busca do drawer
+  setTimeout(() => el('mob-search-input')?.focus(), 350)
+
+  // Suporte a fechar com swipe ← no drawer
+  drawer.addEventListener('touchstart', _hamTouchStart, { passive: true })
+  drawer.addEventListener('touchmove',  _hamTouchMove,  { passive: false })
+  drawer.addEventListener('touchend',   _hamTouchEnd,   { passive: true })
+}
+
+function closeHamburger() {
+  const drawer  = el('mob-drawer')
+  const overlay = el('mob-overlay')
+  const btn     = el('hamburger-btn')
+  if (!drawer) return
+
+  drawer.classList.remove('mob-drawer-open')
+  drawer.classList.add('mob-drawer-closed')
+  overlay.classList.add('hidden')
+  btn?.classList.remove('is-open')
+  document.body.classList.remove('mob-menu-open')
+  drawer.style.transform = '' // reseta transform manual do swipe
+
+  drawer.removeEventListener('touchstart', _hamTouchStart)
+  drawer.removeEventListener('touchmove',  _hamTouchMove)
+  drawer.removeEventListener('touchend',   _hamTouchEnd)
+}
+
+function _hamTouchStart(e) {
+  _hamStartX   = e.touches[0].clientX
+  _hamCurrentX = _hamStartX
+  _hamIsDragging = true
+}
+
+function _hamTouchMove(e) {
+  if (!_hamIsDragging) return
+  _hamCurrentX = e.touches[0].clientX
+  const delta  = _hamCurrentX - _hamStartX
+  if (delta < 0) {
+    // só arrastar para esquerda (fechar)
+    const drawer = el('mob-drawer')
+    if (drawer) drawer.style.transform = `translateX(${delta}px)`
+    e.preventDefault()
+  }
+}
+
+function _hamTouchEnd() {
+  if (!_hamIsDragging) return
+  _hamIsDragging = false
+  const delta = _hamCurrentX - _hamStartX
+  if (delta < -80) {
+    closeHamburger()
+  } else {
+    const drawer = el('mob-drawer')
+    if (drawer) drawer.style.transform = ''
+  }
+}
+
+// Fecha com tecla Escape
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const drawer = el('mob-drawer')
+    if (drawer && drawer.classList.contains('mob-drawer-open')) {
+      closeHamburger()
+    }
+  }
+})
+
+// Sincroniza estado do usuário no drawer (após loadUser)
+function syncMobUserArea() {
+  const u = State.user
+  const areaLogin  = el('mob-user-area')
+  const areaLogged = el('mob-user-logged')
+  if (!areaLogin || !areaLogged) return
+
+  if (u) {
+    areaLogin.classList.add('hidden')
+    areaLogged.classList.remove('hidden')
+    const mobAvatar = el('mob-avatar')
+    const mobName   = el('mob-user-name')
+    if (mobAvatar) mobAvatar.src = u.avatar_url || ''
+    if (mobName)   mobName.textContent = u.full_name?.split(' ')[0] || u.email
+  } else {
+    areaLogin.classList.remove('hidden')
+    areaLogged.classList.add('hidden')
+  }
+}
+
 // ── Estado global ─────────────────────────────────────────
 const State = {
   searchTimer: null,
@@ -57,30 +164,33 @@ function renderUserArea() {
   const u = State.user
   if (!u) return
 
+  // ── Desktop: troca botão Entrar pelo avatar ────────────────
   const btnLogin = el('user-area')
   const menuArea = el('user-menu')
   if (btnLogin) btnLogin.classList.add('hidden')
-  if (!menuArea) return
+  if (menuArea) {
+    menuArea.classList.remove('hidden')
+    const avatar = el('user-avatar')
+    const name   = el('user-name')
+    if (avatar) avatar.src = u.avatar_url || ''
+    if (name)   name.textContent = u.full_name?.split(' ')[0] || u.email
 
-  menuArea.classList.remove('hidden')
-
-  const avatar = el('user-avatar')
-  const name   = el('user-name')
-  if (avatar) avatar.src = u.avatar_url || ''
-  if (name)   name.textContent = u.full_name?.split(' ')[0] || u.email
-
-  // Badge de alertas ativos
-  const activeAlerts = State.alerts.length
-  if (activeAlerts > 0) {
-    const menuBtn = menuArea.querySelector('button')
-    if (menuBtn) {
-      const badge = document.createElement('span')
-      badge.className = 'absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center'
-      badge.textContent = activeAlerts > 9 ? '9+' : activeAlerts
-      menuBtn.style.position = 'relative'
-      menuBtn.appendChild(badge)
+    // Badge de alertas ativos
+    const activeAlerts = State.alerts.length
+    if (activeAlerts > 0) {
+      const menuBtn = menuArea.querySelector('button')
+      if (menuBtn) {
+        const badge = document.createElement('span')
+        badge.className = 'absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center'
+        badge.textContent = activeAlerts > 9 ? '9+' : activeAlerts
+        menuBtn.style.position = 'relative'
+        menuBtn.appendChild(badge)
+      }
     }
   }
+
+  // ── Mobile drawer: atualiza área de usuário ────────────────
+  syncMobUserArea()
 }
 
 function toggleUserMenu() {
