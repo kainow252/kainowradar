@@ -1,348 +1,270 @@
-# ShoppingCompare 🛒
+# ShoppingCompare — Comparador de Preços estilo Buscapé
 
-Shopping comparador de preços estilo Buscapé — construído com Hono + Cloudflare Pages + D1 + KV.
+## URLs de Produção
 
-## 🌐 URLs
-- **Local (sandbox):** https://3000-it6xuh3lcux4gzjw0rjqh-5c13a017.sandbox.novita.ai
-- **Admin (sandbox):** https://3000-it6xuh3lcux4gzjw0rjqh-5c13a017.sandbox.novita.ai/admin
-- **Produção:** (deploy via `npm run deploy` no Cloudflare Pages)
+| Ambiente | URL |
+|----------|-----|
+| **Homepage** | https://shopping-compare.pages.dev/ |
+| **Admin Panel** | https://shopping-compare.pages.dev/admin |
+| **API Base** | https://shopping-compare.pages.dev/api |
+| **Deploy** | Cloudflare Pages (Edge global) |
 
----
-
-## ✅ Funcionalidades Implementadas
-
-### Round 1 — Shopping Comparador
-- [x] Homepage SSR com produtos em destaque, top deals e categorias
-- [x] Página de produto com comparação de ofertas entre lojas
-- [x] Página de categoria com filtros e ordenação
-- [x] Rastreamento de cliques com redirect para checkout
-- [x] Busca com autocompletar e sugestões
-- [x] Design system completo (cards, badges, skeleton, toast)
-- [x] Frontend JS: busca, sugestões, tracking, lazy loading
-
-### Round 2 — Painel Administrativo
-- [x] SPA admin em `/admin` (login com senha + Bearer token)
-- [x] Dashboard com métricas em tempo real (produtos, ofertas, lojas, cliques)
-- [x] Gerenciamento de lojas (listar, ativar/desativar toggle)
-- [x] Gerenciamento de API configs (credenciais mascaradas, toggle ativo/inativo)
-- [x] Gerenciamento de usuários (listar, bloquear, deletar)
-- [x] Analytics: cliques por dia, por loja, por produto
-- [x] Gerenciamento da fila de atualização de preços
-- [x] Top Deals com query `GROUP BY p.id + MIN(o.price)` (preço mais barato por produto)
-- [x] Histórico de preços por produto
+**Senha admin (produção):** `kainow@admin2025`
 
 ---
 
-## 🏗️ Arquitetura
+## Visão Geral
 
-### Banco de Dados Híbrido
-| Camada | Tecnologia | O que guarda |
-|--------|-----------|--------------|
-| Estrutura | **Cloudflare D1** (SQLite) | Produtos, lojas, categorias, ofertas, fila de jobs |
-| Velocidade | **Cloudflare KV** | Cache de preços (TTL 1h), buscas (TTL 5min), produtos (TTL 30min) |
+Comparador de preços com 8 lojas parceiras, painel administrativo completo, motor de ingestão de feeds e deeplinks de checkout direto.
 
-### Tabelas D1
+**Lojas:** Amazon · Magalu · Mercado Livre · Shopee · Americanas · Casas Bahia · Submarino · AliExpress
+
+---
+
+## Arquitetura
+
 ```
-products            → Produto único (EAN como chave mestre)
-offers              → 1 oferta por loja por produto (preço, checkout_url, etc.)
-stores              → 8 lojas parceiras + padrões de deeplink
-url_patterns        → Templates de URL configurável por loja
-categories          → Categorias com ícone e contagem
-click_events        → Analytics de cliques (IP hasheado)
-price_update_queue  → Fila de background jobs para atualização cirúrgica
-api_configs         → Configurações de APIs de afiliados (credenciais criptografadas)
-users               → Usuários cadastrados (comparações salvas, alertas)
-admin_sessions      → Sessões autenticadas do painel admin (Bearer token)
-price_history       → Histórico de variações de preço por oferta
-price_alerts        → Alertas de preço configurados por usuários
+Cloudflare Pages (Edge)
+├── Hono Framework (SSR + API)
+├── Cloudflare D1 (SQLite — webapp-production: 271288fa)
+├── Cloudflare KV  (Cache — CACHE: 81f0b165)
+└── Wrangler Secrets (ADMIN_SECRET, API keys)
+```
+
+### Módulos principais
+
+| Módulo | Arquivo | Função |
+|--------|---------|--------|
+| **Rotas API** | `src/routes/api.ts` | Produtos, busca, ofertas, cliques, ingest |
+| **Páginas SSR** | `src/routes/pages.ts` | Homepage, produto, categoria, redirect |
+| **Admin SPA** | `src/routes/admin.ts` | Painel completo (vanilla JS) |
+| **Cache** | `src/lib/cache.ts` | KV wrapper com TTL diferenciado |
+| **Matching** | `src/lib/matching.ts` | EAN → SKU → Jaro-Winkler (0.72) |
+| **Ingestão** | `src/lib/ingest.ts` | Batch upsert + processamento de fila |
+| **Deeplinks** | `src/lib/deeplink.ts` | Geração de URLs de checkout direto |
+
+---
+
+## API Reference
+
+### Públicas
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| `GET` | `/api/products` | Lista com filtros: `?q=`, `?category=`, `?store=`, `?sort=`, `?page=`, `?limit=` |
+| `GET` | `/api/products/:slug` | Produto + ofertas comparadas |
+| `GET` | `/api/search/suggestions?q=` | Autocomplete (5 sugestões) |
+| `GET` | `/api/featured` | Produtos em destaque |
+| `GET` | `/api/deals` | Melhores ofertas |
+| `GET` | `/api/categories` | Categorias com contagem |
+| `GET` | `/api/stores` | Lojas ativas |
+| `POST` | `/api/click` | Rastrear clique em oferta |
+| `POST` | `/api/ingest` | Ingestão em lote (Bearer token) |
+| `POST` | `/api/cron/process-queue` | Processar fila de atualização |
+
+### Admin (Bearer token obrigatório)
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| `POST` | `/admin/api/login` | Login → retorna token |
+| `POST` | `/admin/api/logout` | Invalida sessão |
+| `GET` | `/admin/api/dashboard` | Métricas: produtos, ofertas, cliques, fila |
+| `GET` | `/admin/api/top-deals` | GROUP BY MIN(price) por produto |
+| `GET` | `/admin/api/products` | Lista produtos com filtros |
+| `PATCH` | `/admin/api/products/:id` | Editar produto |
+| `DELETE` | `/admin/api/products/:id` | Remover produto |
+| `GET` | `/admin/api/offers` | Lista ofertas |
+| `GET` | `/admin/api/stores` | Lojas + métricas |
+| `PATCH` | `/admin/api/stores/:id/toggle` | Ativar/desativar loja |
+| `GET` | `/admin/api/api-configs` | Configurações de APIs/integrações |
+| `PATCH` | `/admin/api/api-configs/:id` | Editar chaves de API |
+| `PATCH` | `/admin/api/api-configs/:id/toggle` | Ativar/desativar integração |
+| `GET` | `/admin/api/users` | Lista usuários |
+| `PATCH` | `/admin/api/users/:id/status` | Bloquear/desbloquear usuário |
+| `DELETE` | `/admin/api/users/:id` | Remover usuário |
+| `GET` | `/admin/api/price-history/:productId` | Histórico de preços |
+| `GET` | `/admin/api/queue` | Fila de atualização de preços |
+| `GET` | `/admin/api/clicks` | Análise de cliques por dia/loja/produto |
+
+### Páginas SSR
+
+| Rota | Descrição |
+|------|-----------|
+| `/` | Homepage com hero, busca, destaques, categorias |
+| `/produto/:slug` | Página de produto com comparação de preços |
+| `/categoria/:slug` | Listagem por categoria |
+| `/go/:slug/:offerId` | Redirect com rastreamento de clique |
+
+---
+
+## Schema do Banco (D1)
+
+### Tabelas principais
+
+| Tabela | Propósito |
+|--------|-----------|
+| `products` | Produto normalizado (EAN único, best_price denormalizado) |
+| `offers` | Ofertas por loja (UNIQUE: product_id+store_id+external_id) |
+| `stores` | 8 lojas com checkout_pattern e affiliate_id |
+| `url_patterns` | Padrões de URL por loja (configurável via admin) |
+| `categories` | Categorias com ícone e contagem |
+| `price_update_queue` | Fila de atualização (priority 1-10) |
+| `click_events` | Cliques com ip_hash (SHA-256) para privacidade |
+| `api_configs` | Configurações de APIs/redes de afiliados |
+| `users` | Clientes/membros com wishlist e alertas |
+| `admin_sessions` | Tokens de sessão admin (Bearer, 8h TTL) |
+| `price_history` | Histórico para gráficos de evolução |
+| `price_alerts` | Alertas de preço (target_price) |
+
+### Query top-deals (GROUP BY MIN price)
+
+```sql
+SELECT p.id, p.name, MIN(o.price) AS lowest_price, ...
+FROM products p
+JOIN offers o  ON o.product_id = p.id AND o.is_active = 1 AND o.in_stock = 1
+JOIN offers o2 ON o2.product_id = p.id
+  AND o2.price = (SELECT MIN(o3.price) FROM offers o3
+                  WHERE o3.product_id = p.id AND o3.is_active = 1 AND o3.in_stock = 1)
+JOIN stores s  ON s.id = o2.store_id AND s.is_active = 1
+WHERE p.is_active = 1
+GROUP BY p.id
+ORDER BY lowest_price ASC
 ```
 
 ---
 
-## 🧠 Módulos Implementados
+## Matching de Produtos
 
-### Módulo 1 — Cache Manager (`src/lib/cache.ts`)
-- `CacheManager` wrapping Cloudflare KV
-- TTLs diferenciados: preços (1h), produtos (30min), buscas (5min), categorias (1h)
-- Invalidação granular por slug ou productId
+Cascade de 3 níveis:
+1. **EAN/GTIN** — 100% confiança (barcode idêntico)
+2. **SKU** — 95% confiança (ID externo da loja)
+3. **Jaro-Winkler + Jaccard** — threshold 0.72 (nome normalizado sem stopwords)
 
-### Módulo 2 — Motor de Ingestão (`src/lib/ingest.ts`)
-- `IngestEngine.ingestBatch()` → processa feeds XML/CSV em lotes de 50
-- Upsert inteligente: atualiza se existe, cria se não existe
-- `queuePriceUpdate(offerId, priority)` → prioridade 1 (clicou) a 10 (baixo)
-- `processQueue(limit)` → background job para atualização cirúrgica
-
-### Módulo 3 — Algoritmo de Matching (`src/lib/matching.ts`)
-Cascata de 3 etapas em ordem de confiança:
-1. **EAN/GTIN** → confiança 100% (código de barras idêntico)
-2. **SKU externo** → confiança 95% (mesmo external_id na mesma loja)
-3. **Jaro-Winkler + Jaccard tokenizado** → confiança variável (threshold 0.72)
-
-```
-"iPhone 15 128GB Preto Lacrado" ↔ "Apple iPhone 15 128GB" = 0.78 ✅ MATCH
-"Samsung TV 55 4K"              ↔ "LG TV 55 4K"           = 0.61 ❌ NO MATCH
-```
-
-### Módulo 4 — Deeplink Engine (`src/lib/deeplink.ts`)
-Gera URL de checkout direto por loja:
-
-| Loja | Tipo | URL gerada |
-|------|------|-----------|
-| Amazon | Cart:Create | `amazon.com.br/gp/aws/cart/add.html?ASIN.1={ID}` |
-| Magalu | Carrinho | `magazineluiza.com.br/carrinho/adicionar/{ID}/` |
-| Mercado Livre | Checkout direto | `mercadolivre.com.br/checkout/buy?item_id={ID}` |
-| Casas Bahia | Carrinho | `casasbahia.com.br/produto/{ID}/carrinho` |
-| Americanas | Add-to-cart | `americanas.com.br/produto/{ID}/add-to-cart` |
+`normalizeName()` remove: acentos, pontuação, stopwords de cor/condição ("preto", "lacrado", "original", etc.)
 
 ---
 
-## 🔌 API REST Pública
+## Cache KV (TTL)
+
+| Tipo | TTL | Chave |
+|------|-----|-------|
+| Preços | 1h | `price:{offerId}` |
+| Produtos | 30min | `product:{slug}` |
+| Busca | 5min | `search:{hash}` |
+| Categorias | 1h | `category:{slug}` |
+| Ofertas | 15min | `offers:{productId}` |
+
+---
+
+## Deeplinks de Checkout
+
+| Loja | Padrão |
+|------|--------|
+| Amazon | `Cart:Create` — `?ASIN.1={ID}&Quantity.1=1` |
+| Mercado Livre | `/checkout/buy?item_id={ID}&quantity=1` |
+| Magalu | `/carrinho/adicionar/{ID}/` |
+| Americanas/Sub | `/produto/{ID}/add-to-cart` |
+| Casas Bahia | `/produto/{ID}/add-to-cart` |
+| Shopee | `/product/{SHOP_ID}/{ID}` |
+| AliExpress | `/item/{ID}.html` |
+
+---
+
+## Infraestrutura Cloudflare
+
+| Recurso | ID | Nome |
+|---------|----|------|
+| **Pages Project** | `9d34ae23-...` | `shopping-compare` |
+| **D1 Database** | `271288fa-fb7b-45c9-a801-e25b8973e635` | `webapp-production` |
+| **KV Namespace** | `81f0b165fc0c4669a1d45c9c267de55e` | `CACHE` |
+
+---
+
+## Setup Local
 
 ```bash
-# Busca de produtos
-GET /api/products?q=iphone&category=smartphones&sort=price_asc&page=1
+# Instalar dependências
+npm install
 
-# Produto com ofertas
-GET /api/products/:slug
-
-# Autocompletar
-GET /api/search/suggestions?q=ipho
-
-# Destaques / Deals
-GET /api/featured
-GET /api/deals
-
-# Categorias e Lojas
-GET /api/categories
-GET /api/stores
-
-# Rastrear clique (prioriza update de preço)
-POST /api/click { offer_id, product_id, store_id }
-
-# Ingestão de dados (Bearer token obrigatório)
-POST /api/ingest { items: IngestItem[] }
-
-# Background job
-POST /api/cron/process-queue
-```
-
-### Redirect com rastreamento
-```
-GET /go/:productSlug/:offerId
-→ Registra clique → Gera URL de afiliado → 302 para loja
-```
-
----
-
-## 🛡️ API REST Admin — `/admin/api/*`
-
-Todas as rotas protegidas por `Authorization: Bearer <token>`.
-
-```bash
-# Autenticação
-POST /admin/api/login   { password }  → { ok, token, expires_at }
-POST /admin/api/logout                → { ok }
-
-# Dashboard
-GET  /admin/api/dashboard             → métricas gerais + gráficos
-GET  /admin/api/top-deals?limit=20    → top deals (MIN price por produto)
-
-# Produtos
-GET    /admin/api/products?page=1&q=iphone
-PATCH  /admin/api/products/:id        { name, brand, category, is_active }
-DELETE /admin/api/products/:id
-
-# Ofertas
-GET    /admin/api/offers?product_id=1&store_id=2&limit=20
-
-# Lojas
-GET    /admin/api/stores
-PATCH  /admin/api/stores/:id/toggle   → ativa/desativa (auto-toggle)
-
-# API Configs
-GET    /admin/api/api-configs         → credenciais mascaradas (••••últimos 4)
-PATCH  /admin/api/api-configs/:id     { api_key, is_active, rate_limit_per_min }
-PATCH  /admin/api/api-configs/:id/toggle  → ativa/desativa (auto-toggle)
-
-# Usuários
-GET    /admin/api/users?page=1&q=email&status=active
-PATCH  /admin/api/users/:id/status    { status: "active"|"blocked" }
-DELETE /admin/api/users/:id
-
-# Histórico de preços
-GET    /admin/api/price-history/:productId
-
-# Fila de atualização
-GET    /admin/api/queue?status=pending
-
-# Analytics
-GET    /admin/api/clicks?days=7       → byDay, byStore, byProduct
-```
-
-### Autenticação Admin
-```bash
-# 1. Login (obtém token JWT de 24h)
-TOKEN=$(curl -s http://localhost:3000/admin/api/login \
-  -X POST -H "Content-Type: application/json" \
-  -d '{"password":"admin123"}' | jq -r .token)
-
-# 2. Usar token nas requests
-curl http://localhost:3000/admin/api/dashboard \
-  -H "Authorization: Bearer $TOKEN"
-
-# 3. Logout (invalida token no banco)
-curl -X POST http://localhost:3000/admin/api/logout \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-> **Segurança em produção:** Configurar `ADMIN_SECRET` via `wrangler pages secret put ADMIN_SECRET`
-> e proteger `/admin` com Cloudflare Zero Trust Access.
-
----
-
-## 📦 Estrutura do Projeto
-
-```
-webapp/
-├── src/
-│   ├── index.tsx           # Entry point + homepage SSR + monta rotas
-│   ├── types/index.ts      # TypeScript types + Bindings Cloudflare
-│   ├── lib/
-│   │   ├── cache.ts        # CacheManager (KV)
-│   │   ├── matching.ts     # MatchingEngine (EAN/SKU/Jaro-Winkler)
-│   │   ├── ingest.ts       # IngestEngine (feeds + fila)
-│   │   └── deeplink.ts     # DeeplinkEngine (checkout direto)
-│   └── routes/
-│       ├── api.ts          # Endpoints /api/* públicos
-│       ├── admin.ts        # Painel admin SPA + endpoints /admin/api/*
-│       └── pages.ts        # SSR das páginas HTML
-├── public/static/
-│   ├── style.css           # Design system completo
-│   └── app.js              # Frontend JS (search, suggestions, tracking)
-├── migrations/
-│   ├── 0001_initial_schema.sql      # Schema core
-│   ├── 0002_seed_stores.sql         # 8 lojas + padrões de URL
-│   ├── 0003_seed_products.sql       # 7 produtos demo + 16 ofertas
-│   ├── 0004_admin_tables.sql        # Tabelas admin (sessions, users, etc.)
-│   └── 0005_seed_api_configs.sql    # 6 API configs (amazon, ml, etc.)
-├── ecosystem.config.cjs    # PM2 config para sandbox
-└── wrangler.jsonc          # Config Cloudflare Pages + D1 + KV
-```
-
----
-
-## 🚀 Setup e Deploy
-
-### Desenvolvimento local (sandbox)
-```bash
-# Aplicar migrations e seeds
+# Aplicar migrations locais
 npm run db:migrate:local
+
+# Seeds de teste
 npm run db:seed
 
-# Build
+# Iniciar servidor local
 npm run build
-
-# Iniciar com PM2
 pm2 start ecosystem.config.cjs
 
 # Testar
 curl http://localhost:3000/api/products
-curl -X POST http://localhost:3000/admin/api/login \
-  -H "Content-Type: application/json" \
-  -d '{"password":"admin123"}'
 ```
 
-### Deploy para Cloudflare Pages (produção)
+## Deploy para Produção
 
-#### 1. Criar banco D1
 ```bash
-npx wrangler d1 create shopping-compare-production
-# Copiar o database_id para wrangler.jsonc
-```
+# Build
+npm run build
 
-#### 2. Criar KV namespace
-```bash
-npx wrangler kv:namespace create CACHE
-npx wrangler kv:namespace create CACHE --preview
-# Copiar os IDs para wrangler.jsonc
-```
+# Aplicar migrations na D1 remota
+npx wrangler d1 execute webapp-production --remote --file=migrations/XXXX.sql
 
-#### 3. Aplicar migrations em produção
-```bash
-npm run db:migrate:prod
-```
+# Deploy
+npx wrangler pages deploy dist --project-name shopping-compare --commit-dirty=true
 
-#### 4. Configurar segredos
-```bash
-# Admin
-npx wrangler pages secret put ADMIN_SECRET --project-name shopping-compare
-
-# APIs de afiliados
-npx wrangler pages secret put AMAZON_ACCESS_KEY  --project-name shopping-compare
-npx wrangler pages secret put AMAZON_SECRET_KEY  --project-name shopping-compare
+# Configurar secrets (quando tiver as chaves)
+npx wrangler pages secret put AMAZON_ACCESS_KEY --project-name shopping-compare
+npx wrangler pages secret put AMAZON_SECRET_KEY --project-name shopping-compare
 npx wrangler pages secret put AMAZON_PARTNER_TAG --project-name shopping-compare
-npx wrangler pages secret put LOMADEE_SOURCE_ID  --project-name shopping-compare
-npx wrangler pages secret put AWIN_PUBLISHER_ID  --project-name shopping-compare
-npx wrangler pages secret put MELI_ACCESS_TOKEN  --project-name shopping-compare
-```
-
-#### 5. Deploy
-```bash
-npm run deploy
+npx wrangler pages secret put MELI_ACCESS_TOKEN --project-name shopping-compare
+npx wrangler pages secret put LOMADEE_SOURCE_ID --project-name shopping-compare
+npx wrangler pages secret put AWIN_PUBLISHER_ID --project-name shopping-compare
 ```
 
 ---
 
-## 🛍️ Lojas Parceiras
+## Features Implementadas ✅
 
-| Loja | Rede | Comissão | Deeplink |
-|------|------|----------|---------|
-| Amazon | PA-API v5 | 8% | Cart:Create (cookie 90 dias) |
-| Magazine Luiza | Lomadee | 5% | Carrinho direto |
-| Mercado Livre | ML API | 3% | Checkout direto |
-| Shopee | Lomadee | 6% | Link parametrizado |
-| Americanas | Awin | 4.5% | Add-to-cart |
-| Casas Bahia | Awin | 4% | Carrinho |
-| Submarino | Awin | 4.5% | Produto |
-| AliExpress | Awin | 7% | Produto |
+- [x] Homepage com hero, busca, sugestões autocomplete, destaques, categorias
+- [x] Página de produto com tabela de comparação de preços por loja
+- [x] Deeplinks de checkout direto (Amazon Cart:Create, ML, Magalu, Americanas)
+- [x] EAN/SKU/Jaro-Winkler matching para deduplicação de produtos
+- [x] Motor de ingestão em lote (XML/CSV feeds)
+- [x] Fila de atualização de preços com prioridade
+- [x] Cache KV com TTL diferenciado por tipo de dado
+- [x] Rastreamento de cliques com ip_hash (privacidade LGPD)
+- [x] Admin Panel SPA completo (vanilla JS, sem framework)
+- [x] Dashboard com métricas reais do banco
+- [x] Gestão de lojas (toggle ativo/inativo, métricas)
+- [x] Gestão de APIs/integrações (chaves, status, última sync)
+- [x] Gestão de usuários (bloquear/desbloquear/deletar)
+- [x] Visualizador da fila de atualização de preços
+- [x] Análise de cliques por dia/loja (Chart.js)
+- [x] Top-deals com `GROUP BY p.id + MIN(o.price)` correlated subquery
+- [x] Auth admin: Bearer token + sessão em DB + fallback ADMIN_SECRET
+- [x] Deploy Cloudflare Pages com D1 + KV bindings reais
 
----
+## Roadmap 🔜
 
-## 🗺️ Próximos Passos
-
-### Fase 2 — Ingestão real de dados
-- [ ] Conectar Amazon PA-API 5.0 (Cart:Create real)
-- [ ] Integrar Lomadee feed XML (download noturno)
-- [ ] Integrar Awin feed CSV
-- [ ] Webhook de Mercado Livre para preços em tempo real
-- [ ] Cron job Cloudflare para processar fila a cada 5 min
-
-### Fase 3 — Funcionalidades avançadas
-- [ ] Alertas de preço (e-mail quando preço baixar)
-- [ ] Histórico de preços com gráfico Chart.js na página do produto
-- [ ] Comparação lado a lado (até 4 produtos)
-- [ ] Filtros avançados: frete grátis, condição, vendedor oficial
-- [ ] SEO: sitemap.xml + meta tags Open Graph + JSON-LD
-- [ ] PWA: service worker + manifest.json
-
-### Fase 4 — Escala
-- [ ] Cloudflare R2 para imagens (CDN próprio)
-- [ ] Algolia para busca full-text avançada
-- [ ] Cloudflare Zero Trust para proteger `/admin` em produção
-- [ ] A/B testing de layouts de produto
+- [ ] Gamification (Kainow Coins: login diário, compartilhar, resgatar)
+- [ ] Gráficos de histórico de preços (Chart.js na página do produto)
+- [ ] Anti-fraude Black Friday (detecção de inflação artificial de preço)
+- [ ] Alertas de preço por email/push (price_alerts table pronta)
+- [ ] Comunidade: grupos Telegram/WhatsApp de ofertas
+- [ ] Browser extension (auto-fill checkout)
+- [ ] Guest checkout / proxy checkout (Stripe + automação)
+- [ ] Ads nativos + AdSense + brand insights
 
 ---
 
-## 📊 Status Atual
+## Tech Stack
 
-| Item | Status |
-|------|--------|
-| Plataforma | Cloudflare Pages (edge) |
-| D1 local | ✅ Ativo com migrations + seeds |
-| KV local | ✅ Ativo com TTL configurado |
-| PM2 | ✅ `shopping-compare` online |
-| Build | ✅ `dist/_worker.js` 132KB |
-| Painel Admin | ✅ `/admin` — login + SPA |
-| API REST | ✅ Todos endpoints testados |
-| Commit | `55bcb65` |
-| Última atualização | 2026-05-09 |
+- **Backend:** Hono 4.x (TypeScript, edge-first)
+- **Deploy:** Cloudflare Pages + Workers
+- **DB:** Cloudflare D1 (SQLite distribuído)
+- **Cache:** Cloudflare KV
+- **Frontend:** Vanilla JS + Tailwind CSS (CDN) + Chart.js
+- **Build:** Vite + @hono/vite-cloudflare-pages
+- **Dev:** Wrangler 4.x + PM2
+
+**Última atualização:** 2026-05-09
