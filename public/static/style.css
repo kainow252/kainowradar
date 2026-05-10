@@ -118,6 +118,7 @@ body {
   line-height: 1.15;
   letter-spacing: -0.03em;
   margin: 0 0 0.45rem;
+  padding-right: 0.15em;   /* folga pro ponto final "Sempre." não ser cortado */
   min-width: 0;
   text-align: left;
   white-space: nowrap;
@@ -126,12 +127,12 @@ body {
 }
 
 /* Subtítulo ─ 1 linha garantida em TODOS os viewports
-   Fórmula: fs = (100vw - 32px) / (90chars × 0.50fator)
-            fs = 2.22vw - 0.71px  →  escala exato com o container
-   max = 1280/(90×0.50) = 28.4px = 1.78rem  (satura em vp ≥ 1312px)
+   Fórmula: fs = (100vw - 32px) / (90chars × 0.53fator)
+            fs = 2.08vw - 0.67px  →  fator real Inter 400 = 0.53
+   max = 1.5rem = 24px (conservador — garante folga)
    min = 0.62rem (mobile fallback) */
 .hero-sub {
-  font-size: clamp(0.62rem, 2.22vw - 0.71px, 1.78rem);
+  font-size: clamp(0.62rem, 2.08vw - 0.67px, 1.5rem);
   color: rgba(191,219,254,0.85);
   line-height: 1.5;
   margin: 0 0 1rem;
