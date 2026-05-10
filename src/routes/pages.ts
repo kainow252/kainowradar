@@ -800,14 +800,14 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
         </button>
 
         <!-- Logo -->
-        <a href="/" class="flex items-center gap-2 shrink-0">
-          <div class="w-9 h-9 bg-gradient-to-br from-blue-500 to-blue-700 rounded-xl flex items-center justify-center shadow-md shadow-blue-200">
-            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <a href="/" class="flex items-center gap-2.5 shrink-0">
+          <div class="w-11 h-11 bg-gradient-to-br from-blue-500 to-blue-700 rounded-xl flex items-center justify-center shadow-md shadow-blue-200">
+            <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
             </svg>
           </div>
           <div class="hidden sm:block">
-            <span class="font-black text-lg text-gray-900 tracking-tight leading-none">Kainow</span><span class="font-black text-lg text-blue-600 tracking-tight leading-none">Radar</span>
+            <span class="font-black text-2xl text-gray-900 tracking-tight leading-none">Kainow</span><span class="font-black text-2xl text-blue-600 tracking-tight leading-none">Radar</span>
           </div>
         </a>
 
