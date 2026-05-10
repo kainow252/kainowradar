@@ -2122,7 +2122,7 @@ async function renderApiConfigs(area) {
       +     '</div>'
       +   '</div>'
       +   '<label class="toggle-switch flex-shrink-0">'
-      +     '<input type="checkbox" ' + checked + ' onchange="toggleAffNetwork(\'' + net.network + '\', \'' + configId + '\', this.checked)">'
+      +     '<input type="checkbox" ' + checked + ' data-network="' + net.network + '" data-config-id="' + configId + '" onchange="toggleAffNetwork(this.dataset.network, this.dataset.configId, this.checked)">'
       +     '<span class="toggle-slider"></span>'
       +   '</label>'
       + '</div>'
@@ -2131,7 +2131,7 @@ async function renderApiConfigs(area) {
       +   '<div class="flex items-center gap-2 flex-wrap mb-3">' + activeBadge + keyBadge + logoBadge + syncBadge + '</div>'
       +   syncLine
       +   '<div class="flex items-center gap-2 mt-2">'
-      +     '<button onclick="openAffModal(\'' + net.id + '\')" class="flex-1 text-xs font-semibold py-2 px-3 rounded-xl border transition-all ' + btnClass + '">' + btnLabel + '</button>'
+      +     '<button data-net-id="' + net.id + '" onclick="openAffModal(this.dataset.netId)" class="flex-1 text-xs font-semibold py-2 px-3 rounded-xl border transition-all ' + btnClass + '">' + btnLabel + '</button>'
       +     '<a href="' + net.docsUrl + '" target="_blank" class="text-xs text-slate-400 hover:text-blue-600 transition-colors px-2" title="Ver documenta\u00E7\u00E3o">\uD83D\uDCC4</a>'
       +   '</div>'
       + '</div>'
@@ -2249,8 +2249,11 @@ function openAffModal(netId) {
           <div class="flex gap-2 items-center">
             <input type="url" id="modal-logo-url" class="input flex-1 text-xs"
                    placeholder="https://logo.clearbit.com/amazon.com.br"
-                   oninput="previewLogo(this.value, '\${net.color}')">
-            <button type="button" onclick="autoFetchLogo('\${net.id}', '\${net.name}', '\${net.color}')"
+                   data-net-color="\${net.color}"
+                   oninput="previewLogo(this.value, this.dataset.netColor)">
+            <button type="button"
+                    data-net-id="\${net.id}" data-net-name="\${net.name}" data-net-color="\${net.color}"
+                    onclick="autoFetchLogo(this.dataset.netId, this.dataset.netName, this.dataset.netColor)"
                     class="flex-shrink-0 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold px-3 py-2 rounded-lg transition-all whitespace-nowrap">
               ✨ Auto
             </button>
@@ -2260,15 +2263,18 @@ function openAffModal(netId) {
           </p>
           <!-- Sugestões rápidas -->
           <div class="flex flex-wrap gap-1.5 mt-2">
-            <button onclick="previewLogo('https://logo.clearbit.com/\${net.id}.com', '\${net.color}'); document.getElementById('modal-logo-url').value='https://logo.clearbit.com/\${net.id}.com'"
+            <button data-logo-url="https://logo.clearbit.com/\${net.id}.com" data-net-color="\${net.color}"
+                    onclick="var u=this.dataset.logoUrl; document.getElementById('modal-logo-url').value=u; previewLogo(u, this.dataset.netColor)"
                     class="text-xs bg-white border border-slate-200 text-slate-600 px-2 py-0.5 rounded-md hover:border-blue-300 hover:text-blue-600 transition-all">
               Clearbit
             </button>
-            <button onclick="previewLogo('https://www.google.com/s2/favicons?domain=\${net.id}.com.br&sz=64', '\${net.color}'); document.getElementById('modal-logo-url').value='https://www.google.com/s2/favicons?domain=\${net.id}.com.br&sz=64'"
+            <button data-logo-url="https://www.google.com/s2/favicons?domain=\${net.id}.com.br&sz=64" data-net-color="\${net.color}"
+                    onclick="var u=this.dataset.logoUrl; document.getElementById('modal-logo-url').value=u; previewLogo(u, this.dataset.netColor)"
                     class="text-xs bg-white border border-slate-200 text-slate-600 px-2 py-0.5 rounded-md hover:border-blue-300 hover:text-blue-600 transition-all">
               Google Favicon
             </button>
-            <button onclick="document.getElementById('modal-logo-url').value=''; previewLogo('', '\${net.color}')"
+            <button data-net-color="\${net.color}"
+                    onclick="document.getElementById('modal-logo-url').value=String(); previewLogo(String(), this.dataset.netColor)"
                     class="text-xs bg-white border border-red-100 text-red-400 px-2 py-0.5 rounded-md hover:bg-red-50 transition-all">
               Limpar
             </button>
@@ -2604,9 +2610,9 @@ async function renderUsers(area, page = 1) {
         <td class="table-td">
           <div class="flex gap-2">
             \${u.status==='active'
-              ? \`<button onclick="setUserStatus('\${u.id}','blocked')" class="btn-danger text-xs">Bloquear</button>\`
-              : \`<button onclick="setUserStatus('\${u.id}','active')" class="btn-success text-xs">Ativar</button>\`}
-            \${u.role!=='admin' ? \`<button onclick="deleteUser('\${u.id}')" class="btn-danger text-xs">Excluir</button>\` : ''}
+              ? \`<button data-uid="\${u.id}" data-status="blocked" onclick="setUserStatus(this.dataset.uid, this.dataset.status)" class="btn-danger text-xs">Bloquear</button>\`
+              : \`<button data-uid="\${u.id}" data-status="active" onclick="setUserStatus(this.dataset.uid, this.dataset.status)" class="btn-success text-xs">Ativar</button>\`}
+            \${u.role!=='admin' ? \`<button data-uid="\${u.id}" onclick="deleteUser(this.dataset.uid)" class="btn-danger text-xs">Excluir</button>\` : ''}
           </div>
         </td>
       </tr>
