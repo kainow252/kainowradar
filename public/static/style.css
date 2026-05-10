@@ -23,7 +23,10 @@ body {
 .hero-section {
   position: relative;
   overflow: hidden;
-  background: linear-gradient(160deg, #0c1445 0%, #1a2f7a 40%, #1e40af 75%, #1d4ed8 100%);
+  background: linear-gradient(135deg, #0f1b4c 0%, #1a2f7a 45%, #1e40af 80%, #2563eb 100%);
+  min-height: 320px;           /* altura mínima generosa */
+  display: flex;
+  align-items: center;         /* centraliza verticalmente o conteúdo */
 }
 
 /* Orbs animados */
@@ -89,68 +92,72 @@ body {
   box-sizing: border-box;
 }
 
-/* Inner wrapper — TODOS os filhos têm exatamente a mesma largura
-   Segredo: max-width + margin:auto + padding lateral fixo
-   O H1, subtítulo, search e tags são todos filhos diretos do grid → 1fr = igual */
+/* Inner wrapper ─ único container que define a largura de TUDO
+   H1, sub, search e tags são todos filhos diretos → mesma largura garantida
+   Container: ~80% do viewport, máx 900px (igual ao modelo) */
 .hero-inner {
   display: grid;
   grid-template-columns: 1fr;
-  width: 100%;
-  max-width: 720px;              /* largura máxima do bloco inteiro */
-  margin: 0 auto;               /* centraliza na tela */
-  padding: 0.75rem 1.5rem 1.25rem;  /* padding-top pequeno = sem espaço azul vago */
+  width: min(900px, 100% - 4rem);
+  margin: 0 auto;
+  padding: 2.75rem 0 2.25rem;
   box-sizing: border-box;
   position: relative;
   z-index: 10;
 }
 
-/* H1 — mesma largura da search bar (filho do grid 1fr) */
+/* H1 ─ 1 linha garantida em desktop
+   32 chars · Inter 900 · container max 900px
+   max seguro = 900 / (32 × 0.56) = 50.2px ≈ 3.14rem
+   preferred = 50.2 / 9.64 = 5.21vw (satura em vp ≥ 964px)
+   min = 0.95rem (mobile — texto pequeno mas visível, overflow:hidden corta se precisar) */
 .hero-h1 {
-  font-size: clamp(1.35rem, 3vw, 2.25rem);  /* cresce até 2.25rem máx — não extrapola */
+  font-size: clamp(0.95rem, 5.21vw, 3.14rem);
   font-weight: 900;
   color: #fff;
-  line-height: 1.18;
-  letter-spacing: -0.02em;
-  margin: 0 0 0.4rem 0;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  margin: 0 0 0.45rem;
   min-width: 0;
-  width: 100%;                  /* garante 100% do grid cell */
-  box-sizing: border-box;
-  overflow-wrap: break-word;
-  word-break: break-word;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
 }
 
-/* Subtítulo — mesma largura da search bar (filho do grid 1fr) */
+/* Subtítulo ─ 1 linha garantida em desktop
+   90 chars · Inter 400 · container max 900px
+   max seguro = 900 / (90 × 0.50) = 20px = 1.25rem
+   preferred = 20 / 9.64 = 2.07vw (satura em vp ≥ 964px)
+   min = 0.62rem (mobile) */
 .hero-sub {
-  font-size: clamp(0.78rem, 1.4vw, 0.9375rem);  /* pequeno e discreto */
-  color: rgba(191,219,254,0.75);
+  font-size: clamp(0.62rem, 2.07vw, 1.25rem);
+  color: rgba(191,219,254,0.85);
   line-height: 1.5;
-  margin: 0 0 0.85rem 0;
+  margin: 0 0 1rem;
   min-width: 0;
-  width: 100%;                  /* garante 100% do grid cell */
-  box-sizing: border-box;
-  overflow-wrap: break-word;
-  word-break: break-word;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
 }
 
-/* Search wrap — filho do grid, largura = 1fr (= mesmo do H1 e subtítulo) */
+/* Search wrap ─ filho do grid → mesma largura exata do H1 e subtítulo */
 .hero-search-wrap {
   position: relative;
   width: 100%;
   min-width: 0;
-  box-sizing: border-box;
 }
 
-/* Tags populares — mesma largura dos demais (filho do grid 1fr) */
+/* Tags populares ─ filho do grid → mesma largura da search bar */
 .hero-tags {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 0.5rem;
-  margin-top: 0.75rem;
+  gap: 0.4rem;
+  margin-top: 0.85rem;
   overflow: hidden;
   min-width: 0;
-  width: 100%;
-  box-sizing: border-box;
 }
 .hero-tags-label {
   color: rgba(147,197,253,0.5);
