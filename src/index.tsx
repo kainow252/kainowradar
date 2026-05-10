@@ -54,16 +54,53 @@ app.get('/', async (c) => {
   const { DB, CACHE } = c.env
   const cache = new CacheManager(CACHE)
 
-  // Lojas parceiras fixas com dados visuais
-  const storePartners = [
-    { name: 'Amazon',          slug: 'amazon',         color: '#FF9900', bg: '#fff8ee', text: 'Até 40% OFF',  initial: 'A' },
-    { name: 'Magalu',          slug: 'magalu',         color: '#0086FF', bg: '#eef5ff', text: 'Frete Grátis', initial: 'M' },
-    { name: 'Mercado Livre',   slug: 'mercadolivre',   color: '#FFE600', bg: '#fffde6', text: 'Menor Preço',  initial: 'ML' },
-    { name: 'Americanas',      slug: 'americanas',     color: '#E60014', bg: '#fff0f1', text: 'Cupons',       initial: 'Am' },
-    { name: 'Casas Bahia',     slug: 'casasbahia',     color: '#0057A8', bg: '#eef3ff', text: '12x sem juros',initial: 'CB' },
-    { name: 'Kabum',           slug: 'kabum',          color: '#F47920', bg: '#fff5ee', text: 'Tech & Games', initial: 'K' },
-    { name: 'Fast Shop',       slug: 'fastshop',       color: '#00843D', bg: '#eefff5', text: 'Premium',      initial: 'FS' },
-    { name: 'Ponto Frio',      slug: 'pontofrio',      color: '#00AAFF', bg: '#eef8ff', text: 'Parcelas',     initial: 'PF' },
+  // Paleta de cores por slug — fallback visual para lojas sem cor cadastrada
+  const STORE_VISUAL: Record<string, { color: string; bg: string; text: string }> = {
+    'amazon':           { color: '#FF9900', bg: '#fff8ee', text: 'Até 40% OFF'   },
+    'magalu':           { color: '#0086FF', bg: '#eef5ff', text: 'Frete Grátis'  },
+    'mercadolivre':     { color: '#FFE600', bg: '#fffde6', text: 'Menor Preço'   },
+    'americanas':       { color: '#E60014', bg: '#fff0f1', text: 'Cupons'        },
+    'casasbahia':       { color: '#0057A8', bg: '#eef3ff', text: '12x sem juros' },
+    'kabum':            { color: '#F47920', bg: '#fff5ee', text: 'Tech & Games'  },
+    'fastshop':         { color: '#00843D', bg: '#eefff5', text: 'Premium'       },
+    'pontofrio':        { color: '#00AAFF', bg: '#eef8ff', text: 'Parcelas'      },
+    'shopee':           { color: '#EE4D2D', bg: '#fff3f0', text: 'Super Oferta'  },
+    'aliexpress':       { color: '#FF6600', bg: '#fff4ee', text: 'Importado'     },
+    'shein':            { color: '#000000', bg: '#f5f5f5', text: 'Moda'          },
+    'netshoes':         { color: '#003DA5', bg: '#eef3ff', text: 'Esportes'      },
+    'dafiti':           { color: '#5C068C', bg: '#f8f0ff', text: 'Moda'          },
+    'riachuelo':        { color: '#E30613', bg: '#fff0f1', text: 'Moda'          },
+    'renner':           { color: '#E30613', bg: '#fff0f1', text: 'Moda'          },
+    'centauro':         { color: '#FF6B00', bg: '#fff4ee', text: 'Esportes'      },
+    'submarino':        { color: '#0057A8', bg: '#eef3ff', text: 'Eletrônicos'   },
+    'leroy':            { color: '#00843D', bg: '#eefff5', text: 'Casa'          },
+    'madeiramadeira':   { color: '#00833E', bg: '#eefff5', text: 'Móveis'        },
+    'temu':             { color: '#FF6600', bg: '#fff4ee', text: 'Importado'     },
+    'carrefour':        { color: '#0066CC', bg: '#eef3ff', text: 'Supermercado'  },
+    'extra':            { color: '#E30613', bg: '#fff0f1', text: 'Eletro'        },
+    'walmart':          { color: '#0071CE', bg: '#eef5ff', text: 'Varejo'        },
+    'havan':            { color: '#0057A8', bg: '#eef3ff', text: 'Variedades'    },
+    'tok&stok':         { color: '#E63329', bg: '#fff0f1', text: 'Decoração'     },
+    'tokstok':          { color: '#E63329', bg: '#fff0f1', text: 'Decoração'     },
+    'whirlpool':        { color: '#003DA5', bg: '#eef3ff', text: 'Eletro'        },
+    'nike':             { color: '#000000', bg: '#f5f5f5', text: 'Esportes'      },
+    'adidas':           { color: '#000000', bg: '#f5f5f5', text: 'Esportes'      },
+    'samsung':          { color: '#1428A0', bg: '#eef3ff', text: 'Eletrônicos'   },
+    'apple':            { color: '#555555', bg: '#f5f5f5', text: 'Apple Store'   },
+  }
+
+  // Paleta de cores genérica por índice (para lojas sem mapeamento)
+  const COLOR_PALETTE = [
+    { color: '#6366F1', bg: '#eef0ff' },
+    { color: '#EC4899', bg: '#fef0f7' },
+    { color: '#14B8A6', bg: '#edfafa' },
+    { color: '#F59E0B', bg: '#fffbeb' },
+    { color: '#10B981', bg: '#ecfdf5' },
+    { color: '#3B82F6', bg: '#eff6ff' },
+    { color: '#8B5CF6', bg: '#f5f3ff' },
+    { color: '#EF4444', bg: '#fef2f2' },
+    { color: '#06B6D4', bg: '#ecfeff' },
+    { color: '#84CC16', bg: '#f7fee7' },
   ]
 
   // Busca dados em paralelo
@@ -83,18 +120,26 @@ app.get('/', async (c) => {
       ORDER BY o.discount_percent DESC LIMIT 8
     `).all(),
     DB.prepare(`SELECT * FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all(),
-    DB.prepare(`SELECT id, name, slug, logo_url FROM stores WHERE is_active = 1 LIMIT 8`).all(),
+    DB.prepare(`SELECT id, name, slug, logo_url FROM stores WHERE is_active = 1 ORDER BY name ASC LIMIT 100`).all(),
   ])
 
-  const featured  = featuredResult.results  as any[]
-  const deals     = dealsResult.results     as any[]
+  const featured   = featuredResult.results   as any[]
+  const deals      = dealsResult.results      as any[]
   const categories = categoriesResult.results as any[]
-  const dbStores  = storesResult.results    as any[]
+  const dbStores   = storesResult.results     as any[]
 
-  // Mescla lojas do banco com dados visuais fixos
-  const stores = storePartners.map(sp => {
-    const db = dbStores.find((s: any) => s.slug === sp.slug) || {}
-    return { ...sp, ...db, ...sp } // sp tem prioridade para visual
+  // Monta lista de lojas com dados visuais reais do banco + fallbacks
+  const stores = dbStores.map((s: any, idx: number) => {
+    const visual = STORE_VISUAL[s.slug] || COLOR_PALETTE[idx % COLOR_PALETTE.length]
+    const color  = visual.color
+    const bg     = visual.bg
+    const text   = (STORE_VISUAL[s.slug] as any)?.text || 'Confira'
+    // Abreviação: até 2 letras do nome
+    const words  = (s.name as string).split(/\s+/)
+    const initial = words.length >= 2
+      ? (words[0][0] + words[1][0]).toUpperCase()
+      : (s.name as string).substring(0, 2).toUpperCase()
+    return { ...s, color, bg, text, initial }
   })
 
   // ── HERO ─────────────────────────────────────────────────
@@ -155,27 +200,93 @@ app.get('/', async (c) => {
   `
 
   // ── FAIXA DE LOJAS PARCEIRAS ──────────────────────────────
+  // Duplica o array para criar loop contínuo no marquee
+  const storeCards = (arr: typeof stores) => arr.map(s => `
+    <a href="/busca?q=${encodeURIComponent(s.name)}"
+       class="store-pill-card flex-shrink-0 flex flex-col items-center gap-1.5 w-20 cursor-pointer group"
+       title="Comparar preços na ${s.name}">
+      <div class="store-logo-circle w-12 h-12 rounded-2xl flex items-center justify-center border-2 shadow-sm transition-all duration-200 group-hover:scale-110 group-hover:shadow-md"
+           style="background:${s.bg}; border-color:${s.color};">
+        ${s.logo_url
+          ? `<img src="${s.logo_url}" alt="${s.name}" class="w-8 h-8 object-contain rounded-lg">`
+          : `<span class="font-black text-sm leading-none" style="color:${s.color}">${s.initial}</span>`
+        }
+      </div>
+      <span class="text-xs text-gray-600 font-semibold text-center leading-tight w-full truncate group-hover:text-gray-900 transition-colors">${s.name}</span>
+      <span class="text-[10px] font-bold px-1.5 py-0.5 rounded-full" style="color:${s.color}; background:${s.bg}">${s.text}</span>
+    </a>
+  `).join('')
+
   const storesHTML = `
-    <section class="bg-white border-b border-gray-100">
-      <div class="max-w-7xl mx-auto px-4 py-6">
-        <div class="flex items-center gap-3 mb-5">
-          <h2 class="text-base font-bold text-gray-800">Compare preços em</h2>
-          <span class="text-xs text-gray-400 font-medium">${stores.length}+ lojas parceiras</span>
-        </div>
-        <div class="grid grid-cols-4 sm:grid-cols-8 gap-3">
-          ${stores.map(s => `
-            <a href="/categoria/smartphones?loja=${s.slug}"
-               class="store-pill group"
-               title="${s.name}">
-              <div class="store-pill-logo" style="background:${s.color}; border-color:${s.color};">
-                <span class="font-black text-sm text-white leading-none">${s.initial}</span>
-              </div>
-              <span class="store-pill-name">${s.name}</span>
-              <span class="store-pill-tag" style="color:${s.color}">${s.text}</span>
-            </a>
-          `).join('')}
+    <section class="bg-white border-b border-gray-100 overflow-hidden">
+      <div class="max-w-7xl mx-auto px-4 pt-5 pb-1">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2.5">
+            <div class="w-1 h-5 bg-gradient-to-b from-blue-500 to-blue-700 rounded-full"></div>
+            <h2 class="text-base font-black text-gray-800">Lojas Parceiras</h2>
+            <span class="inline-flex items-center gap-1 bg-blue-50 text-blue-600 text-xs font-bold px-2.5 py-1 rounded-full border border-blue-100">
+              <span class="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse"></span>
+              ${stores.length} lojas
+            </span>
+          </div>
+          <span class="text-xs text-gray-400 hidden sm:block">Compare preços em todas as lojas de uma vez</span>
         </div>
       </div>
+
+      <!-- Marquee linha 1 — esquerda para direita -->
+      <div class="stores-marquee-wrapper relative mb-2">
+        <div class="stores-marquee-fade-left"></div>
+        <div class="stores-marquee-fade-right"></div>
+        <div class="stores-marquee" style="animation-duration:${Math.max(30, stores.length * 1.8)}s">
+          <div class="stores-marquee-track flex gap-4 px-4 py-2">
+            ${storeCards(stores)}
+            ${storeCards(stores)}
+          </div>
+        </div>
+      </div>
+
+      <!-- Marquee linha 2 — direita para esquerda (só aparece se >10 lojas) -->
+      ${stores.length > 10 ? `
+      <div class="stores-marquee-wrapper relative mb-4">
+        <div class="stores-marquee-fade-left"></div>
+        <div class="stores-marquee-fade-right"></div>
+        <div class="stores-marquee stores-marquee-reverse" style="animation-duration:${Math.max(35, stores.length * 2)}s">
+          <div class="stores-marquee-track flex gap-4 px-4 py-2">
+            ${storeCards([...stores].reverse())}
+            ${storeCards([...stores].reverse())}
+          </div>
+        </div>
+      </div>
+      ` : '<div class="mb-4"></div>'}
+
+      <style>
+        .stores-marquee-wrapper { overflow: hidden; position: relative; }
+        .stores-marquee-fade-left,
+        .stores-marquee-fade-right {
+          position: absolute; top: 0; bottom: 0; width: 80px; z-index: 2; pointer-events: none;
+        }
+        .stores-marquee-fade-left  { left: 0;  background: linear-gradient(to right, white, transparent); }
+        .stores-marquee-fade-right { right: 0; background: linear-gradient(to left,  white, transparent); }
+        .stores-marquee {
+          display: flex;
+          animation: marquee-ltr linear infinite;
+          will-change: transform;
+        }
+        .stores-marquee:hover { animation-play-state: paused; }
+        .stores-marquee-reverse {
+          animation-name: marquee-rtl;
+        }
+        .stores-marquee-track { display: flex; gap: 1rem; }
+        @keyframes marquee-ltr {
+          from { transform: translateX(0); }
+          to   { transform: translateX(-50%); }
+        }
+        @keyframes marquee-rtl {
+          from { transform: translateX(-50%); }
+          to   { transform: translateX(0); }
+        }
+        .store-pill-card:hover .store-logo-circle { transform: scale(1.12); }
+      </style>
     </section>
   `
 
