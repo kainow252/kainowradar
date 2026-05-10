@@ -44,6 +44,104 @@ async function getUserFromRequest(c: any): Promise<any | null> {
   ).bind(token).first<any>()
 }
 
+// ── POST /auth/register — Cadastro por email/senha ───────
+auth.post('/register', async (c) => {
+  const { DB } = c.env
+  const { name, email, password, offers_email } = await c.req.json()
+
+  if (!name || !email || !password) {
+    return c.json({ error: 'Nome, email e senha são obrigatórios' }, 400)
+  }
+  if (password.length < 6) {
+    return c.json({ error: 'A senha deve ter pelo menos 6 caracteres' }, 400)
+  }
+
+  // Verifica se email já existe
+  const existing = await DB.prepare(
+    `SELECT id, auth_provider FROM oauth_users WHERE email = ?`
+  ).bind(email.toLowerCase().trim()).first<any>()
+
+  if (existing) {
+    const msg = existing.auth_provider === 'google'
+      ? 'Este email já está cadastrado com o Google. Use "Entrar com Google".'
+      : 'Este email já está cadastrado. Faça login.'
+    return c.json({ error: msg }, 409)
+  }
+
+  // Hash da senha com SHA-256 + salt (Web Crypto API disponível no Workers)
+  const salt         = generateToken()
+  const passwordHash = await hashValue(salt + password)
+  const storedHash   = `${salt}:${passwordHash}`
+
+  const userId         = generateId()
+  const sessionToken   = generateToken()
+  const sessionExpires = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString()
+
+  await DB.prepare(`
+    INSERT INTO oauth_users
+      (id, google_id, email, full_name, avatar_url, auth_provider, password_hash,
+       notify_email, offers_email, session_token, session_expires_at, email_verified)
+    VALUES (?, ?, ?, ?, '', 'email', ?, 1, ?, ?, ?, 0)
+  `).bind(
+    userId,
+    null,
+    email.toLowerCase().trim(),
+    name.trim(),
+    storedHash,
+    offers_email ? 1 : 0,
+    sessionToken,
+    sessionExpires,
+  ).run()
+
+  return c.json({ ok: true, redirect: '/onboarding' }, 200, {
+    'Set-Cookie': `sc_token=${sessionToken}; Path=/; Max-Age=${30 * 24 * 3600}; SameSite=Lax; HttpOnly`,
+  })
+})
+
+// ── POST /auth/login — Login por email/senha ──────────────
+auth.post('/login', async (c) => {
+  const { DB } = c.env
+  const { email, password } = await c.req.json()
+
+  if (!email || !password) {
+    return c.json({ error: 'Email e senha são obrigatórios' }, 400)
+  }
+
+  const user = await DB.prepare(
+    `SELECT * FROM oauth_users WHERE email = ?`
+  ).bind(email.toLowerCase().trim()).first<any>()
+
+  if (!user) {
+    return c.json({ error: 'Email ou senha incorretos' }, 401)
+  }
+
+  if (user.auth_provider === 'google' || !user.password_hash) {
+    return c.json({ error: 'Esta conta usa login com Google. Clique em "Entrar com Google".' }, 401)
+  }
+
+  // Verifica senha
+  const [salt, hash] = (user.password_hash as string).split(':')
+  const checkHash    = await hashValue(salt + password)
+  if (checkHash !== hash) {
+    return c.json({ error: 'Email ou senha incorretos' }, 401)
+  }
+
+  const sessionToken   = generateToken()
+  const sessionExpires = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString()
+
+  await DB.prepare(`
+    UPDATE oauth_users SET
+      session_token = ?, session_expires_at = ?,
+      last_login_at = CURRENT_TIMESTAMP,
+      login_count   = login_count + 1
+    WHERE id = ?
+  `).bind(sessionToken, sessionExpires, user.id).run()
+
+  return c.json({ ok: true, redirect: '/' }, 200, {
+    'Set-Cookie': `sc_token=${sessionToken}; Path=/; Max-Age=${30 * 24 * 3600}; SameSite=Lax; HttpOnly`,
+  })
+})
+
 // ── GET /auth/google — Redireciona para Google ────────────
 auth.get('/google', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID || ''

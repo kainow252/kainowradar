@@ -753,16 +753,20 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
     <!-- Rodapé do drawer: login -->
     <div class="shrink-0 border-t border-gray-100 p-4">
       <div id="mob-user-area">
-        <a href="/auth/google" onclick="closeHamburger()"
-           class="flex items-center justify-center gap-2 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-2xl transition-colors text-sm">
-          <svg class="w-4 h-4" viewBox="0 0 24 24">
-            <path fill="white" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-            <path fill="white" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" opacity=".7"/>
-            <path fill="white" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" opacity=".5"/>
-            <path fill="white" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" opacity=".3"/>
-          </svg>
-          Entrar com Google
-        </a>
+        <!-- Dois botões no mobile: Entrar e Criar Conta -->
+        <div class="flex gap-2">
+          <button onclick="closeHamburger();openAuthModal('login')"
+             class="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-2xl transition-colors text-sm">
+            <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/>
+            </svg>
+            Entrar
+          </button>
+          <button onclick="closeHamburger();openAuthModal('register')"
+             class="flex-1 flex items-center justify-center gap-2 bg-white border-2 border-blue-600 text-blue-600 hover:bg-blue-50 font-bold py-3 rounded-2xl transition-colors text-sm">
+            Criar Conta
+          </button>
+        </div>
       </div>
       <div id="mob-user-logged" class="hidden">
         <div class="flex items-center gap-3 mb-3">
@@ -838,7 +842,7 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
 
         <!-- Área do usuário: só desktop -->
         <div id="user-area" class="hidden md:block shrink-0">
-          <a href="/auth/google"
+          <button onclick="openAuthModal('login')"
              class="flex items-center gap-2 bg-white border border-gray-200 hover:border-blue-400 hover:bg-blue-50 text-gray-700 text-sm font-semibold px-3 py-2 rounded-xl transition-all whitespace-nowrap">
             <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24">
               <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -847,7 +851,7 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
               <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
             </svg>
             <span class="hidden sm:inline">Entrar</span>
-          </a>
+          </button>
         </div>
         <div id="user-menu" class="hidden shrink-0 relative">
           <button onclick="toggleUserMenu()" class="flex items-center gap-2 hover:bg-gray-100 rounded-xl px-2 py-1.5 transition-all">
@@ -867,8 +871,8 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
     </div>
 
     <!-- Sub-nav de categorias — carrossel com setas -->
-    <nav class="border-t border-gray-100 bg-white hidden md:block" id="cat-subnav">
-      <div class="relative flex items-center">
+    <nav class="border-t border-gray-100 bg-white hidden md:block overflow-hidden" id="cat-subnav">
+      <div class="relative flex items-center overflow-hidden">
 
         <!-- Seta esquerda -->
         <button id="subnav-prev"
@@ -985,7 +989,7 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
         Criar Alerta Gratuito
       </button>
       <p id="alert-login-msg" class="hidden text-center text-sm text-gray-500 mt-3">
-        <a href="/auth/google" class="text-blue-600 font-semibold hover:underline">Faça login com Google</a> para criar alertas gratuitos
+        <a href="#" onclick="openAuthModal();return false;" class="text-blue-600 font-semibold hover:underline">Faça login</a> para criar alertas gratuitos
       </p>
       <!-- Campos do modal de alerta -->
       <input type="hidden" id="alert-product-id" value="">
@@ -996,6 +1000,302 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
       </div>
     </div>
   </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       MODAL DE AUTENTICAÇÃO — Entrar / Criar Conta
+  ════════════════════════════════════════════════════════════ -->
+  <div id="auth-modal" class="hidden fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-4">
+    <!-- Backdrop -->
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick="closeAuthModal()"></div>
+
+    <!-- Card -->
+    <div class="relative bg-white rounded-3xl shadow-2xl w-full max-w-[400px] overflow-hidden">
+
+      <!-- Fechar -->
+      <button onclick="closeAuthModal()"
+        class="absolute top-4 right-4 z-10 w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+
+      <!-- Topo colorido -->
+      <div class="bg-gradient-to-br from-blue-600 to-blue-700 px-6 pt-7 pb-8 text-center">
+        <div class="text-3xl mb-2">🛒</div>
+        <h2 id="auth-modal-title" class="text-xl font-black text-white">Bem-vindo ao KainowRadar</h2>
+        <p id="auth-modal-subtitle" class="text-blue-100 text-sm mt-1">Rastreie preços e receba as melhores ofertas</p>
+      </div>
+
+      <!-- Abas -->
+      <div class="flex border-b border-gray-100">
+        <button id="tab-login" onclick="switchAuthTab('login')"
+          class="auth-tab flex-1 py-3.5 text-sm font-bold text-blue-600 border-b-2 border-blue-600 transition-all">
+          Entrar
+        </button>
+        <button id="tab-register" onclick="switchAuthTab('register')"
+          class="auth-tab flex-1 py-3.5 text-sm font-bold text-gray-400 border-b-2 border-transparent hover:text-gray-600 transition-all">
+          Criar Conta
+        </button>
+      </div>
+
+      <!-- Corpo -->
+      <div class="px-6 py-5">
+
+        <!-- Mensagem de erro -->
+        <div id="auth-error" class="hidden mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 flex items-start gap-2">
+          <span class="text-base leading-none mt-0.5">⚠️</span>
+          <span id="auth-error-msg"></span>
+        </div>
+
+        <!-- Mensagem de sucesso -->
+        <div id="auth-success" class="hidden mb-4 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-700 flex items-center gap-2">
+          <span class="text-base">✅</span>
+          <span id="auth-success-msg"></span>
+        </div>
+
+        <!-- Botão Google (sempre visível) -->
+        <a id="auth-google-btn" href="/auth/google"
+          class="flex items-center justify-center gap-3 w-full border-2 border-gray-200 hover:border-blue-400 hover:bg-blue-50 text-gray-700 font-bold py-3 rounded-2xl transition-all text-sm mb-4">
+          <svg class="w-5 h-5 shrink-0" viewBox="0 0 24 24">
+            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+          </svg>
+          <span id="auth-google-label">Entrar com Google</span>
+        </a>
+
+        <!-- Divisor -->
+        <div class="flex items-center gap-3 mb-4">
+          <div class="flex-1 h-px bg-gray-200"></div>
+          <span class="text-xs text-gray-400 font-medium">ou continue com email</span>
+          <div class="flex-1 h-px bg-gray-200"></div>
+        </div>
+
+        <!-- Formulário LOGIN -->
+        <form id="form-login" onsubmit="submitLogin(event)" class="flex flex-col gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Email</label>
+            <input type="email" id="login-email" placeholder="seu@email.com" required autocomplete="email"
+              class="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900 transition-all">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Senha</label>
+            <div class="relative">
+              <input type="password" id="login-password" placeholder="••••••••" required autocomplete="current-password"
+                class="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900 transition-all pr-11">
+              <button type="button" onclick="togglePwd('login-password',this)"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <button type="submit" id="btn-login"
+            class="w-full bg-blue-600 hover:bg-blue-700 active:scale-[.98] text-white font-bold py-3.5 rounded-2xl text-sm transition-all mt-1">
+            Entrar
+          </button>
+        </form>
+
+        <!-- Formulário CADASTRO -->
+        <form id="form-register" onsubmit="submitRegister(event)" class="hidden flex-col gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Seu nome</label>
+            <input type="text" id="reg-name" placeholder="Como podemos te chamar?" required autocomplete="name"
+              class="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900 transition-all">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Email</label>
+            <input type="email" id="reg-email" placeholder="seu@email.com" required autocomplete="email"
+              class="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900 transition-all">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Senha</label>
+            <div class="relative">
+              <input type="password" id="reg-password" placeholder="Mínimo 6 caracteres" required autocomplete="new-password"
+                class="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900 transition-all pr-11">
+              <button type="button" onclick="togglePwd('reg-password',this)"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Checkbox ofertas -->
+          <label class="flex items-start gap-3 cursor-pointer bg-blue-50 border border-blue-100 rounded-xl p-3.5 hover:bg-blue-100 transition-colors">
+            <div class="relative shrink-0 mt-0.5">
+              <input type="checkbox" id="reg-offers" checked class="peer sr-only">
+              <div class="w-5 h-5 rounded-md border-2 border-blue-300 bg-white peer-checked:bg-blue-600 peer-checked:border-blue-600 transition-all flex items-center justify-center">
+                <svg class="w-3 h-3 text-white opacity-0 peer-checked:opacity-100 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
+                </svg>
+              </div>
+            </div>
+            <div>
+              <span class="text-sm font-semibold text-blue-800 block">📧 Quero receber ofertas por email</span>
+              <span class="text-xs text-blue-600">Promoções exclusivas, alertas de preço e as melhores ofertas do dia</span>
+            </div>
+          </label>
+
+          <button type="submit" id="btn-register"
+            class="w-full bg-blue-600 hover:bg-blue-700 active:scale-[.98] text-white font-bold py-3.5 rounded-2xl text-sm transition-all mt-1">
+            Criar Conta Grátis
+          </button>
+
+          <p class="text-center text-xs text-gray-400">
+            Ao criar sua conta você concorda com nossos
+            <a href="/termos" class="text-blue-500 hover:underline">Termos de Uso</a>
+          </p>
+        </form>
+
+      </div><!-- /px-6 py-5 -->
+    </div><!-- /card -->
+  </div>
+
+  <script>
+  /* ── Modal de Autenticação ─────────────────────────────── */
+  function openAuthModal(tab) {
+    var modal = document.getElementById('auth-modal');
+    modal.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+    clearAuthMessages();
+    switchAuthTab(tab || 'login');
+  }
+  function closeAuthModal() {
+    document.getElementById('auth-modal').classList.add('hidden');
+    document.body.style.overflow = '';
+  }
+  function switchAuthTab(tab) {
+    var isLogin = tab === 'login';
+    // Abas
+    document.getElementById('tab-login').className    = 'auth-tab flex-1 py-3.5 text-sm font-bold transition-all ' + (isLogin ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-400 border-b-2 border-transparent hover:text-gray-600');
+    document.getElementById('tab-register').className = 'auth-tab flex-1 py-3.5 text-sm font-bold transition-all ' + (!isLogin ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-400 border-b-2 border-transparent hover:text-gray-600');
+    // Forms
+    document.getElementById('form-login').className    = isLogin  ? 'flex flex-col gap-3' : 'hidden flex-col gap-3';
+    document.getElementById('form-register').className = !isLogin ? 'flex flex-col gap-3' : 'hidden flex-col gap-3';
+    // Textos
+    document.getElementById('auth-modal-title').textContent    = isLogin ? 'Bem-vindo de volta!' : 'Crie sua conta grátis';
+    document.getElementById('auth-modal-subtitle').textContent = isLogin ? 'Entre para acessar seus alertas e ofertas' : 'Rastreie preços e nunca pague caro';
+    document.getElementById('auth-google-label').textContent   = isLogin ? 'Entrar com Google' : 'Cadastrar com Google';
+    clearAuthMessages();
+  }
+  function clearAuthMessages() {
+    document.getElementById('auth-error').classList.add('hidden');
+    document.getElementById('auth-success').classList.add('hidden');
+  }
+  function showAuthError(msg) {
+    var el = document.getElementById('auth-error');
+    document.getElementById('auth-error-msg').textContent = msg;
+    el.classList.remove('hidden');
+    document.getElementById('auth-success').classList.add('hidden');
+  }
+  function showAuthSuccess(msg) {
+    var el = document.getElementById('auth-success');
+    document.getElementById('auth-success-msg').textContent = msg;
+    el.classList.remove('hidden');
+    document.getElementById('auth-error').classList.add('hidden');
+  }
+  function setAuthLoading(btnId, loading) {
+    var btn = document.getElementById(btnId);
+    if (!btn) return;
+    btn.disabled = loading;
+    btn.style.opacity = loading ? '0.7' : '1';
+    if (loading) btn.innerHTML = '<span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2 align-middle"></span>Aguarde...';
+  }
+  function togglePwd(inputId, btn) {
+    var inp = document.getElementById(inputId);
+    inp.type = inp.type === 'password' ? 'text' : 'password';
+  }
+  function getCheckboxValue(id) {
+    var cb = document.getElementById(id);
+    return cb ? cb.checked : false;
+  }
+
+  /* Login por email */
+  async function submitLogin(e) {
+    e.preventDefault();
+    clearAuthMessages();
+    var email    = document.getElementById('login-email').value.trim();
+    var password = document.getElementById('login-password').value;
+    if (!email || !password) { showAuthError('Preencha email e senha.'); return; }
+    setAuthLoading('btn-login', true);
+    try {
+      var r = await fetch('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      var data = await r.json();
+      if (!r.ok) { showAuthError(data.error || 'Erro ao fazer login.'); return; }
+      showAuthSuccess('Login efetuado! Redirecionando…');
+      setTimeout(function() { window.location.href = data.redirect || '/'; }, 900);
+    } catch(err) {
+      showAuthError('Erro de conexão. Tente novamente.');
+    } finally {
+      setAuthLoading('btn-login', false);
+      document.getElementById('btn-login').textContent = 'Entrar';
+    }
+  }
+
+  /* Cadastro por email */
+  async function submitRegister(e) {
+    e.preventDefault();
+    clearAuthMessages();
+    var name        = document.getElementById('reg-name').value.trim();
+    var email       = document.getElementById('reg-email').value.trim();
+    var password    = document.getElementById('reg-password').value;
+    var offersEmail = getCheckboxValue('reg-offers');
+    if (!name)  { showAuthError('Digite seu nome.'); return; }
+    if (!email) { showAuthError('Digite seu email.'); return; }
+    if (password.length < 6) { showAuthError('A senha deve ter pelo menos 6 caracteres.'); return; }
+    setAuthLoading('btn-register', true);
+    try {
+      var r = await fetch('/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password, offers_email: offersEmail })
+      });
+      var data = await r.json();
+      if (!r.ok) { showAuthError(data.error || 'Erro ao criar conta.'); return; }
+      showAuthSuccess('Conta criada! Redirecionando…');
+      setTimeout(function() { window.location.href = data.redirect || '/'; }, 900);
+    } catch(err) {
+      showAuthError('Erro de conexão. Tente novamente.');
+    } finally {
+      setAuthLoading('btn-register', false);
+      document.getElementById('btn-register').textContent = 'Criar Conta Grátis';
+    }
+  }
+
+  /* Fechar com ESC */
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeAuthModal();
+  });
+
+  /* Renderiza checkbox visualmente (Tailwind peer não funciona sem build) */
+  document.addEventListener('change', function(e) {
+    if (e.target && e.target.id === 'reg-offers') {
+      var box = e.target.nextElementSibling;
+      var check = box ? box.querySelector('svg') : null;
+      if (box) box.style.background = e.target.checked ? '#2563eb' : '';
+      if (check) check.style.display = e.target.checked ? 'block' : 'none';
+    }
+  });
+  // Estado inicial do checkbox
+  (function() {
+    var cb = document.getElementById('reg-offers');
+    if (!cb) return;
+    var box = cb.nextElementSibling;
+    var check = box ? box.querySelector('svg') : null;
+    if (box) box.style.background = '#2563eb';
+    if (check) check.style.display = 'block';
+  })();
+  </script>
 
 </body>
 </html>`
