@@ -601,6 +601,9 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
   <meta name="twitter:title" content="${title}">
   <meta name="twitter:description" content="${opts.description || ''}">
   ${opts.ogImage ? `<meta name="twitter:image" content="${opts.ogImage}">` : ''}
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="shortcut icon" href="/favicon.svg">
   <!-- PWA -->
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#2563eb">
