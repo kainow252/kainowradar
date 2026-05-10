@@ -1296,23 +1296,6 @@ const NETWORK_COLORS = {
 // Variável global para os dados de lojas (busca local)
 let _storesData = []
 
-// Mapa de cores por rede de afiliados
-const NETWORK_COLORS = {
-  'amazon-pa-api':      { bg: '#fff8ee', border: '#FF9900', label: 'Amazon PA-API' },
-  'meli-api':           { bg: '#fffde6', border: '#FFE600', label: 'Mercado Livre' },
-  'magalu-api':         { bg: '#eef5ff', border: '#0086FF', label: 'Magalu API' },
-  'shopee-api':         { bg: '#fff3f0', border: '#EE4D2D', label: 'Shopee' },
-  'shein-api':          { bg: '#f5f5f5', border: '#444444', label: 'Shein' },
-  'aliexpress-portals': { bg: '#fff0f0', border: '#FF4747', label: 'AliExpress' },
-  'hotmart-api':        { bg: '#fff3f0', border: '#FF5722', label: 'Hotmart' },
-  'eduzz-api':          { bg: '#f5f3ff', border: '#7C3AED', label: 'Eduzz' },
-  'monetizze-api':      { bg: '#f0fdf4', border: '#00B359', label: 'Monetizze' },
-  'lomadee':            { bg: '#f0f0ff', border: '#6366F1', label: 'SocialSoul' },
-  'awin':               { bg: '#e8f4fd', border: '#007AC9', label: 'Awin' },
-  'rakuten':            { bg: '#fff0f0', border: '#BF0000', label: 'Rakuten' },
-  'dafiti-api':         { bg: '#f8f8f8', border: '#555555', label: 'Dafiti' },
-}
-
 function _buildStoreCard(s) {
   const nc = NETWORK_COLORS[s.affiliate_network] || { bg: '#f8fafc', border: '#94a3b8', label: s.affiliate_network || '—' }
   const logoHTML = s.logo_url
