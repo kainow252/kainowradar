@@ -769,10 +769,24 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
       </div>
     </div>
 
-    <!-- Sub-nav de categorias (só desktop) -->
+    <!-- Sub-nav de categorias — carrossel com setas -->
     <nav class="border-t border-gray-100 bg-white hidden md:block" id="cat-subnav">
-      <div class="max-w-7xl mx-auto px-4">
-        <div class="flex items-center gap-0.5 overflow-x-auto scrollbar-hide h-10">
+      <div class="relative flex items-center">
+
+        <!-- Seta esquerda -->
+        <button id="subnav-prev"
+          onclick="document.getElementById('subnav-track').scrollBy({left:-320,behavior:'smooth'})"
+          class="absolute left-0 z-10 h-full px-2 bg-gradient-to-r from-white via-white to-transparent
+                 flex items-center text-gray-400 hover:text-blue-600 transition-colors"
+          aria-label="Anterior">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7"/>
+          </svg>
+        </button>
+
+        <!-- Trilha rolável -->
+        <div id="subnav-track"
+          class="flex items-center gap-0.5 overflow-x-auto scrollbar-hide h-10 px-8 w-full scroll-smooth">
           ${(opts.navCategories && opts.navCategories.length > 0
             ? opts.navCategories
             : [
@@ -785,12 +799,40 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
                 { slug: 'cameras',          icon: '📷', name: 'Câmeras' },
                 { slug: 'moda',             icon: '👗', name: 'Moda' },
               ]
-          ).map(cat => `<a href="/categoria/${cat.slug}" class="subnav-link">${cat.icon || ''} ${cat.name}</a>`).join('')}
+          ).map(cat => `
+            <a href="/categoria/${cat.slug}" class="subnav-link shrink-0">${cat.icon || ''} ${cat.name}</a>
+          `).join('')}
           <div class="h-5 w-px bg-gray-200 mx-1 shrink-0"></div>
-          <a href="/ofertas" class="subnav-link subnav-hot">🔥 Ofertas do Dia</a>
+          <a href="/ofertas" class="subnav-link subnav-hot shrink-0">🔥 Ofertas do Dia</a>
         </div>
+
+        <!-- Seta direita -->
+        <button id="subnav-next"
+          onclick="document.getElementById('subnav-track').scrollBy({left:320,behavior:'smooth'})"
+          class="absolute right-0 z-10 h-full px-2 bg-gradient-to-l from-white via-white to-transparent
+                 flex items-center text-gray-400 hover:text-blue-600 transition-colors"
+          aria-label="Próximo">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
+          </svg>
+        </button>
+
       </div>
     </nav>
+    <script>
+      (function(){
+        var track = document.getElementById('subnav-track');
+        var prev  = document.getElementById('subnav-prev');
+        var next  = document.getElementById('subnav-next');
+        if (!track) return;
+        function update() {
+          if (prev) prev.style.opacity = track.scrollLeft > 10 ? '1' : '0.3';
+          if (next) next.style.opacity = track.scrollLeft < track.scrollWidth - track.clientWidth - 10 ? '1' : '0.3';
+        }
+        track.addEventListener('scroll', update);
+        update();
+      })();
+    </script>
 
   </header>
   `}
