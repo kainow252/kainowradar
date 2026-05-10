@@ -102,30 +102,28 @@ body {
   overflow: hidden;             /* corta qualquer filho que extrapole */
 }
 
-/* H1 — fica dentro da coluna grid (1fr = largura do container) */
+/* H1 */
 .hero-h1 {
-  font-size: clamp(1.5rem, 3vw, 2.6rem);
+  font-size: clamp(1.1rem, 4.2vw, 3rem);
   font-weight: 900;
   color: #fff;
   line-height: 1.15;
   letter-spacing: -0.02em;
-  margin: 0 0 0.4rem 0;
-  min-width: 0;                 /* permite que grid comprima o filho */
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  margin: 0 0 0.35rem 0;
+  min-width: 0;
+  word-break: break-word;
+  white-space: normal;
 }
 
 /* Subtítulo */
 .hero-sub {
-  font-size: clamp(0.8rem, 1.4vw, 1rem);
+  font-size: clamp(0.7rem, 1.7vw, 1rem);
   color: rgba(191,219,254,0.75);
   line-height: 1.5;
   margin: 0 0 0.85rem 0;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  word-break: break-word;
+  white-space: normal;
 }
 
 /* Search wrap — filho do grid, largura = 1fr */
