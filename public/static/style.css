@@ -23,7 +23,7 @@ body {
 .hero-section {
   position: relative;
   overflow: hidden;
-  background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 45%, #1d4ed8 100%);
+  background: linear-gradient(160deg, #0c1445 0%, #1a2f7a 40%, #1e40af 75%, #1d4ed8 100%);
 }
 
 /* Orbs animados */
@@ -67,24 +67,93 @@ body {
   background-clip: text;
 }
 
+/* Eyebrow badge do hero */
+.hero-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.14);
+  color: rgba(255,255,255,0.7);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  padding: 0.3rem 0.85rem;
+  border-radius: 9999px;
+}
+
+/* Search bar hero */
+.hero-search-wrap {
+  position: relative;
+  max-width: 600px;
+  margin: 0 auto;
+}
+.hero-search-icon {
+  position: absolute;
+  left: 1.1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1.1rem;
+  height: 1.1rem;
+  color: #94a3b8;
+  pointer-events: none;
+  flex-shrink: 0;
+}
+.hero-search-input {
+  width: 100%;
+  padding: 1rem 8rem 1rem 2.9rem;
+  border-radius: 0.875rem;
+  border: 2px solid transparent;
+  background: #fff;
+  color: #0f172a;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  outline: none;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.22), 0 2px 8px rgba(0,0,0,0.12);
+  transition: border-color 0.18s, box-shadow 0.18s;
+}
+.hero-search-input::placeholder { color: #94a3b8; font-weight: 400; }
+.hero-search-input:focus {
+  border-color: #fbbf24;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.22), 0 0 0 4px rgba(251,191,36,0.18);
+}
+.hero-search-btn {
+  position: absolute;
+  right: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: #2563eb;
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.875rem;
+  padding: 0.55rem 1.25rem;
+  border-radius: 0.625rem;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  white-space: nowrap;
+}
+.hero-search-btn:hover  { background: #1d4ed8; }
+.hero-search-btn:active { transform: translateY(-50%) scale(0.97); }
+
 /* Tags rápidas do hero */
 .quick-tag {
   display: inline-flex;
   align-items: center;
-  padding: 0.35rem 0.875rem;
-  background: rgba(255,255,255,0.12);
-  backdrop-filter: blur(12px);
-  color: rgba(255,255,255,0.9);
+  padding: 0.28rem 0.75rem;
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.75);
   border-radius: 9999px;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 500;
-  border: 1px solid rgba(255,255,255,0.2);
+  border: 1px solid rgba(255,255,255,0.15);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.18s;
 }
 .quick-tag:hover {
-  background: rgba(255,255,255,0.22);
-  border-color: rgba(255,255,255,0.4);
+  background: rgba(255,255,255,0.16);
+  color: #fff;
+  border-color: rgba(255,255,255,0.3);
   transform: translateY(-1px);
 }
 

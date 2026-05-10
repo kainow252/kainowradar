@@ -180,80 +180,53 @@ app.get('/', async (c) => {
       <div class="hero-orb hero-orb-2"></div>
       <div class="hero-orb hero-orb-3"></div>
 
-      <div class="max-w-5xl mx-auto px-4 pt-8 pb-7 md:pt-10 md:pb-8 relative z-10">
+      <div class="max-w-3xl mx-auto px-4 pt-10 pb-9 md:pt-12 md:pb-10 relative z-10 text-center">
 
-        <!-- Layout hero: texto à esquerda + busca à direita em desktop -->
-        <div class="flex flex-col lg:flex-row lg:items-center lg:gap-12">
-
-          <!-- Coluna esquerda: copy -->
-          <div class="flex-1 text-center lg:text-left mb-6 lg:mb-0">
-            <!-- Badge -->
-            <div class="flex justify-center lg:justify-start mb-3">
-              <span class="inline-flex items-center gap-1.5 bg-white/15 backdrop-blur-sm border border-white/20 text-white/90 text-xs font-semibold px-3 py-1 rounded-full">
-                <span class="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"></span>
-                Radar de preços em tempo real
-              </span>
-            </div>
-            <!-- H1 -->
-            <h1 class="text-3xl md:text-4xl lg:text-[2.6rem] font-black text-white leading-tight tracking-tight mb-3">
-              Compare preços e<br>
-              <span class="hero-gradient-text">economize de verdade</span>
-            </h1>
-            <!-- Subtítulo único e direto -->
-            <p class="text-blue-100/75 text-sm md:text-base max-w-sm mx-auto lg:mx-0 leading-relaxed">
-              Monitore milhares de produtos e encontre o menor preço nas maiores lojas do Brasil — tudo em um só lugar.
-            </p>
-            <!-- Estatísticas rápidas -->
-            <div class="flex items-center justify-center lg:justify-start gap-5 mt-4">
-              <div class="text-center lg:text-left">
-                <div class="text-white font-black text-lg leading-none">+33</div>
-                <div class="text-blue-200/60 text-xs mt-0.5">Lojas parceiras</div>
-              </div>
-              <div class="w-px h-8 bg-white/15"></div>
-              <div class="text-center lg:text-left">
-                <div class="text-white font-black text-lg leading-none">100%</div>
-                <div class="text-blue-200/60 text-xs mt-0.5">Gratuito</div>
-              </div>
-              <div class="w-px h-8 bg-white/15"></div>
-              <div class="text-center lg:text-left">
-                <div class="text-white font-black text-lg leading-none">24/7</div>
-                <div class="text-blue-200/60 text-xs mt-0.5">Atualizado</div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Coluna direita: busca -->
-          <div class="flex-shrink-0 w-full lg:w-[420px]">
-            <!-- Search card glassmorphism -->
-            <div class="bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-4 shadow-2xl">
-              <p class="text-white/80 text-xs font-semibold uppercase tracking-wider mb-3">Buscar produto</p>
-              <div class="relative">
-                <svg class="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-                </svg>
-                <input type="text" id="hero-search"
-                  placeholder="Marca, modelo, categoria…"
-                  class="w-full pl-10 pr-[5.5rem] py-3 rounded-xl text-gray-900 text-sm shadow-lg outline-none focus:ring-4 focus:ring-yellow-300/50 border-0 font-medium"
-                  autocomplete="off"
-                  onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; searchProducts(); }"
-                  oninput="document.getElementById('search-input').value=this.value; debounceSearch(this.value)">
-                <button
-                  onclick="document.getElementById('search-input').value=document.getElementById('hero-search').value; searchProducts();"
-                  class="absolute right-1.5 top-1/2 -translate-y-1/2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white px-4 py-1.5 rounded-lg font-bold text-sm transition-all">
-                  Buscar
-                </button>
-              </div>
-              <!-- Tags rápidas -->
-              <div class="flex flex-wrap gap-1.5 mt-3">
-                <span class="text-white/40 text-xs self-center">Popular:</span>
-                ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV'].map(t =>
-                  `<button onclick="quickSearch('${t}')" class="quick-tag">${t}</button>`
-                ).join('')}
-              </div>
-            </div>
-          </div>
-
+        <!-- Eyebrow label -->
+        <div class="flex justify-center mb-4">
+          <span class="hero-eyebrow">
+            <span class="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse inline-block mr-1.5"></span>
+            33 lojas &nbsp;·&nbsp; Atualizado 24/7 &nbsp;·&nbsp; 100% gratuito
+          </span>
         </div>
+
+        <!-- Título principal -->
+        <h1 class="text-4xl md:text-5xl lg:text-[3.25rem] font-black text-white leading-[1.1] tracking-tight mb-4">
+          O menor preço está<br>
+          <span class="hero-gradient-text">aqui. Sempre.</span>
+        </h1>
+
+        <!-- Subtítulo limpo -->
+        <p class="text-blue-200/70 text-base md:text-lg max-w-xl mx-auto leading-relaxed mb-8">
+          Compare preços em tempo real nas maiores lojas do Brasil e compre sempre na melhor oferta.
+        </p>
+
+        <!-- Barra de busca centralizada — o CTA principal -->
+        <div class="hero-search-wrap">
+          <svg class="hero-search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+          <input type="text" id="hero-search"
+            placeholder="iPhone 15, Galaxy S24, PlayStation 5…"
+            class="hero-search-input"
+            autocomplete="off"
+            onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; searchProducts(); }"
+            oninput="document.getElementById('search-input').value=this.value; debounceSearch(this.value)">
+          <button
+            onclick="document.getElementById('search-input').value=document.getElementById('hero-search').value; searchProducts();"
+            class="hero-search-btn">
+            Buscar
+          </button>
+        </div>
+
+        <!-- Sugestões populares -->
+        <div class="flex flex-wrap justify-center items-center gap-2 mt-4">
+          <span class="text-blue-300/50 text-xs font-medium">Populares:</span>
+          ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV'].map(t =>
+            `<button onclick="quickSearch('${t}')" class="quick-tag">${t}</button>`
+          ).join('')}
+        </div>
+
       </div>
     </section>
   `
