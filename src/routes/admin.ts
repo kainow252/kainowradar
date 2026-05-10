@@ -374,6 +374,12 @@ admin.post('/api/api-configs/seed', async (c) => {
     { id: 'shopify',     name: 'Shopify Partners',         network: 'shopify-partners',   commission_rate: 20.0 },
     { id: 'nuvemshop',   name: 'Nuvemshop / Tiendanube',  network: 'nuvemshop-api',      commission_rate: 25.0 },
     { id: 'nestle',      name: 'Nestlé',                   network: 'nestle-api',         commission_rate: 3.0  },
+    // ── Social Commerce ──────────────────────────────────
+    { id: 'tiktok-shop',    name: 'TikTok Shop Afiliados',    network: 'tiktok-shop',        commission_rate: 10.0 },
+    { id: 'kwai-shop',      name: 'Kwai Shop Afiliados',      network: 'kwai-shop',          commission_rate: 8.0  },
+    { id: 'instagram-shop', name: 'Instagram Shopping',       network: 'instagram-shop',     commission_rate: 5.0  },
+    { id: 'youtube-shop',   name: 'YouTube Shopping',         network: 'youtube-shop',       commission_rate: 5.0  },
+    { id: 'facebook-shop',  name: 'Facebook Shops / Meta',    network: 'facebook-shop',      commission_rate: 5.0  },
   ]
   let inserted = 0
   for (const n of networks) {
@@ -1279,6 +1285,12 @@ const NETWORK_COLORS = {
   'eduzz-api':          { bg: '#f5f3ff', border: '#7C3AED', label: 'Eduzz'         },
   'monetizze-api':      { bg: '#f0fdf4', border: '#00B359', label: 'Monetizze'     },
   'dafiti-api':         { bg: '#f8f8f8', border: '#555555', label: 'Dafiti'        },
+  // Social Commerce
+  'tiktok-shop':        { bg: '#f0f0f5', border: '#010101', label: 'TikTok Shop'    },
+  'kwai-shop':          { bg: '#fff4ee', border: '#FF6600', label: 'Kwai Shop'      },
+  'instagram-shop':     { bg: '#fff0f5', border: '#E1306C', label: 'Instagram'      },
+  'youtube-shop':       { bg: '#fff0f0', border: '#FF0000', label: 'YouTube'        },
+  'facebook-shop':      { bg: '#eff5ff', border: '#1877F2', label: 'Facebook'       },
 }
 
 // Variável global para os dados de lojas (busca local)
@@ -1388,6 +1400,11 @@ async function renderStores(area) {
           <option value="lomadee">SocialSoul/Lomadee</option>
           <option value="hotmart-api">Hotmart</option>
           <option value="eduzz-api">Eduzz</option>
+          <option value="tiktok-shop">TikTok Shop</option>
+          <option value="kwai-shop">Kwai Shop</option>
+          <option value="instagram-shop">Instagram</option>
+          <option value="youtube-shop">YouTube</option>
+          <option value="facebook-shop">Facebook</option>
         </select>
         <button onclick="renderStores(document.getElementById('content-area'))"
           class="btn-secondary flex items-center gap-2 whitespace-nowrap">↻ Atualizar</button>
@@ -1445,6 +1462,11 @@ function openStoreModal(id) {
               <option value="rakuten">Rakuten</option>
               <option value="shein-api">Shein</option>
               <option value="dafiti-api">Dafiti</option>
+              <option value="tiktok-shop">TikTok Shop</option>
+              <option value="kwai-shop">Kwai Shop</option>
+              <option value="instagram-shop">Instagram Shopping</option>
+              <option value="youtube-shop">YouTube Shopping</option>
+              <option value="facebook-shop">Facebook Shops</option>
             </select>
           </div>
           <div>
@@ -1740,9 +1762,130 @@ const AFFILIATE_NETWORKS = [
     commission: 'Sob consulta',
     network: 'nestle-api',
   },
+  // ── Social Commerce ──────────────────────────────────
+  {
+    id: 'tiktok-shop',
+    name: 'TikTok Shop Afiliados',
+    group: 'Social Commerce',
+    icon: '🎵',
+    color: '#000000',
+    bg: '#f0f0f5',
+    border: '#010101',
+    desc: 'TikTok Shop Open API — produtos, lives de vendas, links em vídeos curtos e rastreamento de afiliados',
+    fields: [
+      'client_id:App ID (TikTok Developers)',
+      'client_secret:App Secret',
+      'api_key:Access Token',
+      'partner_tag:Affiliate ID / Promo Code',
+    ],
+    docsUrl: 'https://partner.tiktokshop.com/doc/page/developer-guide',
+    commission: '5–20%',
+    network: 'tiktok-shop',
+    authType: 'OAuth2',
+    scopes: ['product.readonly', 'order.readonly', 'affiliate.readonly'],
+    baseUrl: 'https://open-api.tiktokglobalshop.com',
+    webhookSupport: true,
+    notes: 'Requer conta Business no TikTok for Developers. Sandbox disponível para testes.',
+  },
+  {
+    id: 'kwai-shop',
+    name: 'Kwai Shop Afiliados',
+    group: 'Social Commerce',
+    icon: '🎬',
+    color: '#FF6600',
+    bg: '#fff4ee',
+    border: '#FF6600',
+    desc: 'Kwai for Business — shoppertainment com lives e vídeos curtos. Maior concorrente do TikTok Shop no Brasil.',
+    fields: [
+      'client_id:App Key (Kwai for Business)',
+      'client_secret:App Secret',
+      'api_key:Access Token',
+      'partner_tag:Publisher ID / Sub ID',
+    ],
+    docsUrl: 'https://www.kwai-for-business.com/br',
+    commission: '5–15%',
+    network: 'kwai-shop',
+    authType: 'OAuth2',
+    scopes: ['shop.products', 'shop.orders', 'affiliate.links'],
+    baseUrl: 'https://open.kwai.com/api',
+    webhookSupport: true,
+    notes: 'Cadastro via Kwai for Business. Ideal para criadores com audiência em vídeos curtos.',
+  },
+  {
+    id: 'instagram-shop',
+    name: 'Instagram Shopping',
+    group: 'Social Commerce',
+    icon: '📸',
+    color: '#E1306C',
+    bg: '#fff0f5',
+    border: '#E1306C',
+    desc: 'Meta Graph API — marcar produtos em Reels, Stories e Feed. Figurinha de link para afiliados de marketplaces parceiros.',
+    fields: [
+      'api_key:Access Token (Meta for Developers)',
+      'client_id:App ID',
+      'client_secret:App Secret',
+      'partner_tag:Instagram Business Account ID',
+    ],
+    docsUrl: 'https://developers.facebook.com/docs/instagram-api',
+    commission: '2–10%',
+    network: 'instagram-shop',
+    authType: 'OAuth2 (Meta)',
+    scopes: ['instagram_basic', 'instagram_shopping_tag_products', 'catalog_management', 'pages_read_engagement'],
+    baseUrl: 'https://graph.facebook.com/v18.0',
+    webhookSupport: true,
+    notes: 'Requer Página do Facebook + conta Instagram Business/Creator. Cadastro em Meta for Developers.',
+  },
+  {
+    id: 'youtube-shop',
+    name: 'YouTube Shopping',
+    group: 'Social Commerce',
+    icon: '▶️',
+    color: '#FF0000',
+    bg: '#fff0f0',
+    border: '#FF0000',
+    desc: 'YouTube Data API v3 + Shopping — marcar produtos em Shorts, vídeos e ao vivo. Integração via Google Merchant Center.',
+    fields: [
+      'api_key:API Key (Google Cloud Console)',
+      'client_id:OAuth 2.0 Client ID',
+      'client_secret:OAuth 2.0 Client Secret',
+      'partner_tag:YouTube Channel ID',
+    ],
+    docsUrl: 'https://developers.google.com/youtube/v3',
+    commission: '3–8%',
+    network: 'youtube-shop',
+    authType: 'OAuth2 (Google)',
+    scopes: ['youtube.readonly', 'youtubepartner', 'yt-analytics.readonly'],
+    baseUrl: 'https://www.googleapis.com/youtube/v3',
+    webhookSupport: false,
+    notes: 'Requer Google Merchant Center vinculado + canal com +10k inscritos para Shopping em Shorts. Programa de afiliados via parceiros globais.',
+  },
+  {
+    id: 'facebook-shop',
+    name: 'Facebook Shops / Meta',
+    group: 'Social Commerce',
+    icon: '👥',
+    color: '#1877F2',
+    bg: '#eff5ff',
+    border: '#1877F2',
+    desc: 'Meta Graph API — catálogo de produtos no Facebook Shops, Marketplace e anúncios. Página em Modo Profissional obrigatório.',
+    fields: [
+      'api_key:Page Access Token (Meta for Developers)',
+      'client_id:App ID',
+      'client_secret:App Secret',
+      'partner_tag:Facebook Page ID',
+    ],
+    docsUrl: 'https://developers.facebook.com/docs/marketing-api',
+    commission: '2–8%',
+    network: 'facebook-shop',
+    authType: 'OAuth2 (Meta)',
+    scopes: ['pages_manage_metadata', 'catalog_management', 'business_management', 'ads_read'],
+    baseUrl: 'https://graph.facebook.com/v18.0',
+    webhookSupport: true,
+    notes: 'Requer Página ou Perfil no Modo Profissional. Conformidade com Políticas de Monetização de Conteúdo da Meta. Cadastro em Meta for Developers.',
+  },
 ]
 
-const AFFILIATE_GROUPS = ['Marketplaces', 'Infoprodutos', 'Redes Multimarcas', 'Tecnologia & SaaS', 'Outros']
+const AFFILIATE_GROUPS = ['Marketplaces', 'Infoprodutos', 'Redes Multimarcas', 'Tecnologia & SaaS', 'Social Commerce', 'Outros']
 
 async function renderApiConfigs(area) {
   // Garante que todos os 18 registros existam no banco (idempotente)
@@ -1760,6 +1903,7 @@ async function renderApiConfigs(area) {
     'Infoprodutos': '🎓',
     'Redes Multimarcas': '🌐',
     'Tecnologia & SaaS': '⚙️',
+    'Social Commerce': '📱',
     'Outros': '🏷️',
   }
 
