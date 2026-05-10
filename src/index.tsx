@@ -221,7 +221,7 @@ app.get('/', async (c) => {
         <!-- Populares — mesma largura, alinhado à esquerda -->
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem;margin-top:0.75rem;">
           <span style="color:rgba(147,197,253,0.5);font-size:0.75rem;font-weight:500;white-space:nowrap;">Populares:</span>
-          ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV'].map(t =>
+          ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV', 'iPad', 'Geladeira', 'Ar Condicionado', 'Tênis Nike', 'MacBook', 'Xbox Series', 'Monitor', 'Cafeteira', 'Headphone', 'Câmera', 'Kindle', 'Robô Aspirador'].map(t =>
             `<button onclick="quickSearch('${t}')" class="quick-tag">${t}</button>`
           ).join('')}
         </div>
