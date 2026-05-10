@@ -37,13 +37,13 @@ body {
 .hero-orb-1 {
   width: 280px; height: 280px;
   background: radial-gradient(circle, #3b82f6, transparent);
-  top: -80px; left: -80px;
+  top: 0; left: -60px;
   animation: floatOrb 8s ease-in-out infinite;
 }
 .hero-orb-2 {
   width: 220px; height: 220px;
   background: radial-gradient(circle, #6366f1, transparent);
-  bottom: -60px; right: 8%;
+  bottom: 0; right: 8%;
   animation: floatOrb 10s ease-in-out infinite reverse;
 }
 .hero-orb-3 {
@@ -87,6 +87,9 @@ body {
   position: relative;
   max-width: 600px;
   margin: 0 auto;
+}
+.hero-search-full {
+  max-width: 100%;
 }
 .hero-search-icon {
   position: absolute;

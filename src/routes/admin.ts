@@ -2393,10 +2393,11 @@ async function renderFooterAdmin(area) {
   const rows = data.rows || []
   const bySection = (s) => rows.filter(r => r.section === s).sort((a, b) => a.sort_order - b.sort_order)
 
-  const brand   = bySection('brand')
-  const stores  = bySection('stores')
-  const info    = bySection('info')
-  const bottom  = bySection('bottom')
+  const brand      = bySection('brand')
+  const stores     = bySection('stores')
+  const categories = bySection('categories')
+  const info       = bySection('info')
+  const bottom     = bySection('bottom')
 
   const bGet = (k) => brand.find(r => r.key === k)?.value || ''
 
@@ -2433,7 +2434,9 @@ async function renderFooterAdmin(area) {
             </div>
             <div>
               <div class="text-white font-semibold mb-2">Categorias</div>
-              <div class="opacity-70">Smartphones · Notebooks · TVs…</div>
+              <div class="space-y-1">
+                \${categories.filter(c => c.is_visible).slice(0, 4).map(c => '<div class="opacity-70">' + escHtml(c.key) + '</div>').join('') || '<div class="opacity-70">Smartphones · Notebooks…</div>'}
+              </div>
             </div>
             <div>
               <div class="text-white font-semibold mb-2">Lojas Parceiras</div>
@@ -2497,6 +2500,25 @@ async function renderFooterAdmin(area) {
         </div>
         <div class="divide-y divide-slate-50" id="footer-stores-list">
           \${stores.length > 0 ? stores.map((s, idx) => footerStoreRow(s, idx, stores.length)).join('') : '<div class="px-5 py-4 text-sm text-slate-400">Nenhuma loja configurada. Adicione abaixo.</div>'}
+        </div>
+      </div>
+
+      <!-- ═══ SEÇÃO: CATEGORIAS ═══ -->
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 bg-gradient-to-r from-orange-50 to-white flex items-center justify-between">
+          <div>
+            <h3 class="font-bold text-slate-800 flex items-center gap-2">
+              <span class="w-7 h-7 bg-orange-100 text-orange-600 rounded-lg flex items-center justify-center text-sm">📂</span>
+              Categorias
+            </h3>
+            <p class="text-xs text-slate-500 mt-0.5">Links de categorias exibidos na coluna do rodapé</p>
+          </div>
+          <button onclick="openAddFooterModal('categories','Nome da categoria','URL (ex: /categoria/smartphones)')" class="btn-primary text-xs">
+            + Adicionar categoria
+          </button>
+        </div>
+        <div class="divide-y divide-slate-50" id="footer-categories-list">
+          \${categories.length > 0 ? categories.map((c, idx) => footerCategoryRow(c, idx, categories.length)).join('') : '<div class="px-5 py-4 text-sm text-slate-400">Nenhuma categoria configurada. Adicione abaixo.</div>'}
         </div>
       </div>
 
@@ -2628,6 +2650,32 @@ function footerInfoRow(item, idx, total) {
   \`
 }
 
+function footerCategoryRow(item, idx, total) {
+  const visClass = item.is_visible ? 'text-green-600 bg-green-50' : 'text-slate-400 bg-slate-100'
+  const visLabel = item.is_visible ? 'Visível' : 'Oculto'
+  return \`
+    <div class="flex items-center gap-3 px-5 py-3 hover:bg-slate-50 transition-colors" id="frow-categories-\${encodeURIComponent(item.key)}">
+      <label class="toggle-switch flex-shrink-0">
+        <input type="checkbox" \${item.is_visible ? 'checked' : ''} onchange="toggleFooterVisible('categories',\${JSON.stringify(item.key)},this.checked,\${item.sort_order})">
+        <span class="toggle-slider"></span>
+      </label>
+      <div class="flex-1 min-w-0">
+        <div class="text-sm font-medium text-slate-800 truncate">\${escHtml(item.key)}</div>
+        <div class="text-xs text-slate-400 truncate">\${escHtml(item.value || '#')}</div>
+      </div>
+      <span class="text-xs px-2 py-0.5 rounded-full font-medium \${visClass}">\${visLabel}</span>
+      <button onclick="editFooterCategory(\${JSON.stringify(item.key)},\${JSON.stringify(item.value||'')},\${item.is_visible},\${item.sort_order})"
+        class="flex-shrink-0 p-1.5 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors" title="Editar">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+      </button>
+      <button onclick="deleteFooterItem('categories',\${JSON.stringify(item.key)})"
+        class="flex-shrink-0 p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Remover">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+      </button>
+    </div>
+  \`
+}
+
 // helpers JS para footer admin
 function escHtml(s) {
   if (!s) return ''
@@ -2658,7 +2706,8 @@ async function deleteFooterItem(section, key) {
 let _footerModalSection = ''
 function openAddFooterModal(section, label1, label2) {
   _footerModalSection = section
-  document.getElementById('footer-modal-title').textContent = section === 'stores' ? 'Adicionar Loja Parceira' : 'Adicionar Link'
+  const titles = { stores: 'Adicionar Loja Parceira', categories: 'Adicionar Categoria', info: 'Adicionar Link' }
+  document.getElementById('footer-modal-title').textContent = titles[section] || 'Adicionar Item'
   document.getElementById('footer-modal-label1').textContent = label1
   document.getElementById('footer-modal-label2').textContent = label2
   document.getElementById('footer-modal-key').value = ''
@@ -2685,6 +2734,20 @@ async function confirmAddFooterItem() {
     closeFooterModal()
     renderFooterAdmin(document.getElementById('content-area'))
   } else toast('Erro ao adicionar', 'error')
+}
+
+// Edição inline de categoria (reutiliza modal)
+function editFooterCategory(key, value, is_visible, sort_order) {
+  _footerModalSection = 'categories'
+  document.getElementById('footer-modal-title').textContent = 'Editar Categoria'
+  document.getElementById('footer-modal-label1').textContent = 'Nome da categoria'
+  document.getElementById('footer-modal-label2').textContent = 'URL (ex: /categoria/smartphones)'
+  document.getElementById('footer-modal-key').value = key
+  document.getElementById('footer-modal-key').readOnly = true
+  document.getElementById('footer-modal-value').value = value
+  document.getElementById('footer-modal-visible').checked = !!is_visible
+  document.getElementById('footer-add-modal').classList.remove('hidden')
+  setTimeout(() => document.getElementById('footer-modal-value').focus(), 100)
 }
 
 // Edição inline de loja (reutiliza modal)

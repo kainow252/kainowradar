@@ -180,7 +180,7 @@ app.get('/', async (c) => {
       <div class="hero-orb hero-orb-2"></div>
       <div class="hero-orb hero-orb-3"></div>
 
-      <div class="max-w-3xl mx-auto px-4 pt-10 pb-9 md:pt-12 md:pb-10 relative z-10 text-center">
+      <div class="w-full px-6 md:px-12 lg:px-20 py-8 relative z-10 text-center">
 
         <!-- Eyebrow label -->
         <div class="flex justify-center mb-4">
@@ -191,18 +191,17 @@ app.get('/', async (c) => {
         </div>
 
         <!-- Título principal -->
-        <h1 class="text-4xl md:text-5xl lg:text-[3.25rem] font-black text-white leading-[1.1] tracking-tight mb-4">
-          O menor preço está<br>
-          <span class="hero-gradient-text">aqui. Sempre.</span>
+        <h1 class="text-3xl md:text-4xl lg:text-5xl font-black text-white leading-tight tracking-tight mb-3 whitespace-nowrap">
+          O menor preço está <span class="hero-gradient-text">aqui. Sempre.</span>
         </h1>
 
         <!-- Subtítulo limpo -->
-        <p class="text-blue-200/70 text-base md:text-lg max-w-xl mx-auto leading-relaxed mb-8">
+        <p class="text-blue-200/70 text-sm md:text-base leading-relaxed mb-6 whitespace-nowrap">
           Compare preços em tempo real nas maiores lojas do Brasil e compre sempre na melhor oferta.
         </p>
 
         <!-- Barra de busca centralizada — o CTA principal -->
-        <div class="hero-search-wrap">
+        <div class="hero-search-wrap hero-search-full">
           <svg class="hero-search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
           </svg>
@@ -220,8 +219,8 @@ app.get('/', async (c) => {
         </div>
 
         <!-- Sugestões populares -->
-        <div class="flex flex-wrap justify-center items-center gap-2 mt-4">
-          <span class="text-blue-300/50 text-xs font-medium">Populares:</span>
+        <div class="flex flex-nowrap justify-center items-center gap-2 mt-4 overflow-x-auto scrollbar-hide">
+          <span class="text-blue-300/50 text-xs font-medium whitespace-nowrap flex-shrink-0">Populares:</span>
           ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV'].map(t =>
             `<button onclick="quickSearch('${t}')" class="quick-tag">${t}</button>`
           ).join('')}
