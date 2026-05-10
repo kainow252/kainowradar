@@ -106,19 +106,17 @@ body {
   z-index: 10;
 }
 
-/* H1 ─ 1 linha garantida em TODOS os viewports
-   Fórmula: fs = (100vw - 32px) / (32chars × 0.56fator)
-            fs = 5.58vw - 1.79px  →  escala exato com o container
-   max = 1280/(32×0.56) = 71.4px = 4.46rem  (satura em vp ≥ 1312px)
-   min = 0.95rem (mobile fallback) */
+/* H1 ─ mesma largura visual da search bar em todos os viewports
+   Fórmula: fs = (100vw - 32px) / (32chars × 0.575fator)
+            fs = 5.43vw - 1.74px
+   max = 1280/(32×0.575) = 69.6px = 4.35rem  (satura em vp ≥ 1312px, sem corte) */
 .hero-h1 {
-  font-size: clamp(0.95rem, 5.58vw - 1.79px, 4.46rem);
+  font-size: clamp(0.95rem, 5.43vw - 1.74px, 4.35rem);
   font-weight: 900;
   color: #fff;
   line-height: 1.15;
   letter-spacing: -0.03em;
   margin: 0 0 0.45rem;
-  padding-right: 0.15em;   /* folga pro ponto final "Sempre." não ser cortado */
   min-width: 0;
   text-align: left;
   white-space: nowrap;
