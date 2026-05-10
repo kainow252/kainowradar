@@ -342,11 +342,12 @@ admin.get('/api/api-configs', async (c) => {
     SELECT id, name, network, endpoint_url, feed_url, feed_type,
            rate_limit_per_min, commission_rate, is_active,
            last_sync_at, last_sync_status, last_sync_count,
-           logo_url,
+           logo_url, description, docs_url, color, icon, auth_type,
+           api_group, custom,
            -- Oculta segredos parcialmente
            CASE WHEN api_key IS NOT NULL THEN '••••' || substr(api_key, -4) ELSE NULL END as api_key_preview,
            CASE WHEN client_id IS NOT NULL THEN client_id ELSE NULL END as client_id
-    FROM api_configs ORDER BY name ASC
+    FROM api_configs ORDER BY custom DESC, name ASC
   `).all()
   return c.json(results)
 })
@@ -505,6 +506,55 @@ admin.patch('/api/api-configs/:id/toggle', async (c) => {
   const updated = await DB.prepare("SELECT id, name, is_active FROM api_configs WHERE id = ?")
     .bind(id).first()
   return c.json({ ok: true, config: updated })
+})
+
+// ── POST /admin/api/api-configs/new — Cria empresa customizada ───────────────
+admin.post('/api/api-configs/new', async (c) => {
+  const { DB } = c.env
+  const body = await c.req.json()
+  const { name, network, group, commission_rate, description, docs_url,
+          api_key, client_id, client_secret, partner_tag,
+          logo_url, color, icon, auth_type } = body
+
+  if (!name || !network) return c.json({ error: 'name e network são obrigatórios' }, 400)
+
+  // id = slug do network
+  const id = network.toLowerCase().replace(/[^a-z0-9-]/g, '-')
+
+  // Verifica duplicata
+  const exists = await DB.prepare('SELECT id FROM api_configs WHERE id = ? OR network = ?').bind(id, network).first()
+  if (exists) return c.json({ error: 'Empresa com esse network já existe' }, 409)
+
+  await DB.prepare(`
+    INSERT INTO api_configs
+      (id, name, network, commission_rate, is_active,
+       api_key, client_id, client_secret, partner_tag,
+       logo_url, description, docs_url, color, icon, auth_type, custom, api_group,
+       created_at, updated_at)
+    VALUES (?,?,?,?,0, ?,?,?,?, ?,?,?,?,?,?,1,?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `).bind(
+    id, name, network, commission_rate || 0,
+    api_key || null, client_id || null, client_secret || null, partner_tag || null,
+    logo_url || null, description || null, docs_url || null,
+    color || '#6366F1', icon || '🔌', auth_type || 'API Key',
+    group || 'Outros'
+  ).run()
+
+  return c.json({ ok: true, id })
+})
+
+// ── DELETE /admin/api/api-configs/:id — Remove empresa customizada ───────────
+admin.delete('/api/api-configs/:id', async (c) => {
+  const { DB } = c.env
+  const id = c.req.param('id')
+
+  // Só permite deletar registros customizados (custom = 1)
+  const row = await DB.prepare('SELECT id, custom FROM api_configs WHERE id = ?').bind(id).first<{ id: string; custom: number }>()
+  if (!row) return c.json({ error: 'Não encontrado' }, 404)
+  if (!row.custom) return c.json({ error: 'Redes padrão não podem ser removidas' }, 403)
+
+  await DB.prepare('DELETE FROM api_configs WHERE id = ?').bind(id).run()
+  return c.json({ ok: true })
 })
 
 // ── GET /admin/api/users — Lista usuários ─────────────────
@@ -2139,6 +2189,64 @@ async function renderApiConfigs(area) {
     )
   }
 
+  // ── Cards de empresas customizadas ──────────────────────────────────────────
+  function buildCustomCard(cfg) {
+    const isActive = cfg.is_active ?? 0
+    const hasKey   = !!cfg.api_key_preview
+    const color    = cfg.color || '#6366F1'
+    const icon     = cfg.icon  || '🔌'
+    const commission = cfg.commission_rate ? cfg.commission_rate + '%' : '—'
+    const avatarHTML = cfg.logo_url
+      ? '<div style="width:38px;height:38px;border-radius:9px;background:#fff;border:1px solid #e2e8f0;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;box-shadow:0 2px 6px rgba(0,0,0,0.08)">'
+        + '<img src="' + cfg.logo_url + '" alt="' + cfg.name + '" style="width:30px;height:30px;object-fit:contain">'
+        + '</div>'
+      : '<div style="width:38px;height:38px;border-radius:9px;background:' + color + '22;display:flex;align-items:center;justify-content:center;flex-shrink:0">'
+        + '<span style="font-size:1.3rem">' + icon + '</span>'
+        + '</div>'
+    const activeBadge = isActive
+      ? '<span class="flex items-center gap-1 text-xs font-medium text-green-700 bg-green-50 px-2 py-0.5 rounded-full"><span class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>Ativo</span>'
+      : '<span class="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">Inativo</span>'
+    const keyBadge = hasKey
+      ? '<span class="text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full">\uD83D\uDD11 Chave configurada</span>'
+      : '<span class="text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">\u26A0\uFE0F Sem credenciais</span>'
+    const checked = isActive ? 'checked' : ''
+    const btnClass = hasKey ? 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100' : 'bg-blue-600 border-blue-600 text-white hover:bg-blue-700'
+    const btnLabel = hasKey ? '\u270F\uFE0F Editar' : '\uD83D\uDD0C Configurar'
+    return (
+      '<div class="bg-white rounded-2xl border-2 border-indigo-100 shadow-sm overflow-hidden hover:shadow-md transition-shadow" id="aff-card-custom-' + cfg.id + '">'
+      + '<div class="px-4 py-3 flex items-center justify-between" style="background:' + color + '12; border-bottom: 2px solid ' + color + '30">'
+      +   '<div class="flex items-center gap-2.5">'
+      +     avatarHTML
+      +     '<div>'
+      +       '<div class="font-bold text-slate-800 text-sm leading-tight">' + cfg.name + '</div>'
+      +       '<div class="text-xs font-medium mt-0.5" style="color:' + color + '">' + commission + ' comiss\u00E3o</div>'
+      +     '</div>'
+      +   '</div>'
+      +   '<div class="flex items-center gap-2">'
+      +     '<span class="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full font-semibold">custom</span>'
+      +     '<label class="toggle-switch flex-shrink-0">'
+      +       '<input type="checkbox" ' + checked + ' data-network="' + cfg.network + '" data-config-id="' + cfg.id + '" onchange="toggleAffNetwork(this.dataset.network, this.dataset.configId, this.checked)">'
+      +       '<span class="toggle-slider"></span>'
+      +     '</label>'
+      +   '</div>'
+      + '</div>'
+      + '<div class="px-4 py-3">'
+      +   '<p class="text-xs text-slate-500 mb-3 leading-relaxed">' + (cfg.description || cfg.network) + '</p>'
+      +   '<div class="flex items-center gap-2 flex-wrap mb-3">' + activeBadge + keyBadge + '</div>'
+      +   '<div class="flex items-center gap-2 mt-2">'
+      +     '<button data-net-id="' + cfg.id + '" onclick="openCustomConfigModal(this.dataset.netId)" class="flex-1 text-xs font-semibold py-2 px-3 rounded-xl border transition-all ' + btnClass + '">' + btnLabel + '</button>'
+      +     '<button data-custom-id="' + cfg.id + '" data-custom-name="' + cfg.name + '" onclick="deleteCustomIntegration(this.dataset.customId, this.dataset.customName)" class="flex-shrink-0 w-8 h-8 flex items-center justify-center text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl border border-slate-200 transition-colors" title="Remover empresa">'
+      +       '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>'
+      +     '</button>'
+      +   '</div>'
+      + '</div>'
+      + '</div>'
+    )
+  }
+
+  // Separa customizadas
+  const customEntries = (dbData || []).filter(cfg => cfg.custom)
+
   let groupsHTML = ''
   AFFILIATE_GROUPS.forEach(group => {
     const nets = AFFILIATE_NETWORKS.filter(n => n.group === group)
@@ -2160,6 +2268,23 @@ async function renderApiConfigs(area) {
     \`
   })
 
+  // Bloco empresas customizadas
+  const totalCustom = customEntries.length
+  const customHTML = totalCustom > 0 ? \`
+    <div class="mb-8">
+      <div class="flex items-center gap-3 mb-4">
+        <span class="text-xl">✨</span>
+        <h3 class="text-base font-bold text-slate-800">Minhas Empresas</h3>
+        <span class="text-xs font-medium px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+          \${totalCustom} cadastradas
+        </span>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        \${customEntries.map(buildCustomCard).join('')}
+      </div>
+    </div>
+  \` : ''
+
   // Sumário geral
   const totalActive = AFFILIATE_NETWORKS.filter(n => dbMap[n.network]?.is_active).length
   const totalConfigured = AFFILIATE_NETWORKS.filter(n => dbMap[n.network]?.api_key_preview).length
@@ -2177,23 +2302,39 @@ async function renderApiConfigs(area) {
         </div>
       </div>
 
-      <!-- Sumário -->
-      <div class="grid grid-cols-3 gap-4">
-        <div class="stat-card text-center border-t-4 border-blue-400">
-          <div class="text-3xl font-black text-slate-800">\${AFFILIATE_NETWORKS.length}</div>
-          <div class="text-sm text-slate-500 mt-1">Redes disponíveis</div>
+      <!-- Cabeçalho + botão Cadastrar -->
+      <div class="flex items-end justify-between gap-4">
+        <div class="grid grid-cols-4 gap-4 flex-1">
+          <div class="stat-card text-center border-t-4 border-blue-400">
+            <div class="text-3xl font-black text-slate-800">\${AFFILIATE_NETWORKS.length + totalCustom}</div>
+            <div class="text-sm text-slate-500 mt-1">Redes disponíveis</div>
+          </div>
+          <div class="stat-card text-center border-t-4 border-green-400">
+            <div class="text-3xl font-black text-green-700">\${totalActive}</div>
+            <div class="text-sm text-slate-500 mt-1">Redes ativas</div>
+          </div>
+          <div class="stat-card text-center border-t-4 border-amber-400">
+            <div class="text-3xl font-black text-amber-700">\${totalConfigured}</div>
+            <div class="text-sm text-slate-500 mt-1">Com credenciais</div>
+          </div>
+          <div class="stat-card text-center border-t-4 border-indigo-400">
+            <div class="text-3xl font-black text-indigo-700">\${totalCustom}</div>
+            <div class="text-sm text-slate-500 mt-1">Customizadas</div>
+          </div>
         </div>
-        <div class="stat-card text-center border-t-4 border-green-400">
-          <div class="text-3xl font-black text-green-700">\${totalActive}</div>
-          <div class="text-sm text-slate-500 mt-1">Redes ativas</div>
-        </div>
-        <div class="stat-card text-center border-t-4 border-amber-400">
-          <div class="text-3xl font-black text-amber-700">\${totalConfigured}</div>
-          <div class="text-sm text-slate-500 mt-1">Com credenciais</div>
-        </div>
+        <button onclick="openNewIntegrationModal()"
+          class="flex-shrink-0 flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-bold px-5 py-3 rounded-xl shadow-md hover:shadow-lg transition-all text-sm whitespace-nowrap">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/>
+          </svg>
+          Cadastrar nova empresa
+        </button>
       </div>
 
-      <!-- Cards por grupo -->
+      <!-- Empresas customizadas (topo, destaque) -->
+      \${customHTML}
+
+      <!-- Cards por grupo (redes padrão) -->
       \${groupsHTML}
     </div>
   \`
@@ -2401,6 +2542,287 @@ async function toggleApiConfig(id, active) {
   await api('PATCH', \`/admin/api/api-configs/\${id}/toggle\`, { active })
   toast(active ? 'API ativada ✓' : 'API desativada', active ? 'success' : 'info')
 }
+
+// ── Modal: Cadastrar nova empresa ────────────────────────────────────────────
+function openNewIntegrationModal() {
+  const groups = ['Marketplaces','Infoprodutos','Redes Multimarcas','Plataformas de Parceria','Live Commerce','Discovery Commerce','E-commerce Builder','Tecnologia & SaaS','Social Commerce','Outros']
+  const modal = document.getElementById('modal-container')
+  modal.innerHTML = \`
+    <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+      <div class="modal" style="max-width:520px;max-height:90vh;overflow-y:auto;">
+
+        <!-- Header -->
+        <div class="flex items-center gap-3 mb-5 pb-4 border-b border-slate-100">
+          <div id="new-int-logo-preview"
+            style="width:52px;height:52px;border-radius:12px;background:#6366F1;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1.8rem;box-shadow:0 4px 12px rgba(0,0,0,0.15)">
+            🔌
+          </div>
+          <div>
+            <h3 class="font-bold text-slate-800 text-lg leading-tight">Cadastrar nova empresa</h3>
+            <p class="text-xs text-slate-500 mt-0.5">Adicione uma nova integração de API ou rede afiliada</p>
+          </div>
+        </div>
+
+        <!-- Campos principais -->
+        <div class="space-y-3">
+
+          <!-- Nome + Ícone -->
+          <div class="grid grid-cols-3 gap-3">
+            <div class="col-span-2">
+              <label class="block text-sm font-semibold text-slate-700 mb-1">Nome da empresa <span class="text-red-500">*</span></label>
+              <input type="text" id="new-int-name" class="input" placeholder="ex: Casas Bahia Afiliados"
+                oninput="document.getElementById('new-int-logo-preview').title=this.value">
+            </div>
+            <div>
+              <label class="block text-sm font-semibold text-slate-700 mb-1">Ícone (emoji)</label>
+              <input type="text" id="new-int-icon" class="input text-center text-xl" placeholder="🏪" maxlength="4"
+                oninput="var p=document.getElementById('new-int-logo-preview'); if(!document.getElementById('new-int-logo-url').value){p.innerHTML=this.value||'🔌'}">
+            </div>
+          </div>
+
+          <!-- Network ID -->
+          <div>
+            <label class="block text-sm font-semibold text-slate-700 mb-1">
+              ID da rede (network) <span class="text-red-500">*</span>
+              <span class="text-xs font-normal text-slate-400 ml-1">— identificador único, ex: casasbahia-api</span>
+            </label>
+            <input type="text" id="new-int-network" class="input font-mono text-sm" placeholder="ex: minha-loja-api"
+              oninput="this.value=this.value.toLowerCase().replace(/[^a-z0-9-]/g,'-')">
+          </div>
+
+          <!-- Descrição -->
+          <div>
+            <label class="block text-sm font-semibold text-slate-700 mb-1">Descrição</label>
+            <input type="text" id="new-int-desc" class="input" placeholder="ex: API de afiliados da Casas Bahia — produtos, links e comissões">
+          </div>
+
+          <!-- Grupo + Comissão -->
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-sm font-semibold text-slate-700 mb-1">Grupo</label>
+              <select id="new-int-group" class="input">
+                \${groups.map(g => \`<option value="\${g}">\${g}</option>\`).join('')}
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-semibold text-slate-700 mb-1">Comissão base (%)</label>
+              <input type="number" id="new-int-commission" class="input" placeholder="ex: 8.5" step="0.1" min="0" max="100">
+            </div>
+          </div>
+
+          <!-- Cor + Tipo de auth -->
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-sm font-semibold text-slate-700 mb-1">Cor da marca</label>
+              <div class="flex gap-2 items-center">
+                <input type="color" id="new-int-color" value="#6366F1" class="h-10 w-14 rounded-lg border border-slate-200 cursor-pointer p-1"
+                  oninput="document.getElementById('new-int-logo-preview').style.background=this.value">
+                <input type="text" id="new-int-color-text" class="input flex-1 font-mono text-sm" value="#6366F1" placeholder="#6366F1"
+                  oninput="document.getElementById('new-int-color').value=this.value; document.getElementById('new-int-logo-preview').style.background=this.value">
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm font-semibold text-slate-700 mb-1">Tipo de autenticação</label>
+              <select id="new-int-auth" class="input">
+                <option>API Key</option>
+                <option>OAuth2</option>
+                <option>Bearer Token</option>
+                <option>Basic Auth</option>
+                <option>Webhook</option>
+                <option>Feed XML/CSV</option>
+                <option>Outro</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Logo URL -->
+          <div class="bg-slate-50 rounded-xl p-3 border border-slate-200">
+            <label class="block text-sm font-bold text-slate-700 mb-2">🖼️ Logo da empresa</label>
+            <div class="flex gap-2">
+              <input type="url" id="new-int-logo-url" class="input flex-1 text-xs"
+                placeholder="https://logo.clearbit.com/empresa.com.br"
+                oninput="newIntPreviewLogo(this.value)">
+              <button type="button" onclick="newIntAutoLogo()"
+                class="flex-shrink-0 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold px-3 py-2 rounded-lg whitespace-nowrap">
+                ✨ Auto
+              </button>
+            </div>
+            <p class="text-xs text-slate-400 mt-1.5">Cole a URL ou clique em <strong>Auto</strong> para buscar pela Clearbit</p>
+          </div>
+
+          <!-- Divisor: Credenciais (opcionais) -->
+          <div class="border-t border-slate-100 pt-3">
+            <p class="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">Credenciais (opcional — pode configurar depois)</p>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium text-slate-600 mb-1">API Key / Token</label>
+                <input type="password" id="new-int-api-key" class="input" placeholder="••••••••••••">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-600 mb-1">Client ID</label>
+                <input type="text" id="new-int-client-id" class="input" placeholder="ex: app-12345">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-600 mb-1">Client Secret</label>
+                <input type="password" id="new-int-client-secret" class="input" placeholder="••••••••••••">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-600 mb-1">Partner Tag / ID afiliado</label>
+                <input type="text" id="new-int-partner-tag" class="input" placeholder="ex: seusite-20">
+              </div>
+            </div>
+          </div>
+
+          <!-- URL Docs -->
+          <div>
+            <label class="block text-sm font-medium text-slate-600 mb-1">URL da documentação</label>
+            <input type="url" id="new-int-docs" class="input text-xs" placeholder="https://dev.empresa.com/docs">
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="flex items-center gap-3 mt-5 pt-4 border-t border-slate-100">
+          <button onclick="saveNewIntegration()"
+            class="btn-primary flex-1 flex items-center justify-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/>
+            </svg>
+            Cadastrar empresa
+          </button>
+          <button onclick="closeModal()" class="btn-secondary">Cancelar</button>
+        </div>
+
+      </div>
+    </div>
+  \`
+}
+
+function newIntPreviewLogo(url) {
+  const preview = document.getElementById('new-int-logo-preview')
+  if (!preview) return
+  if (!url) { preview.innerHTML = document.getElementById('new-int-icon')?.value || '🔌'; return }
+  preview.innerHTML = '<div style="width:20px;height:20px;border:2px solid white;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite"></div>'
+  const img = new Image()
+  img.onload = () => { preview.style.background = '#fff'; preview.innerHTML = '<img src="'+url+'" style="width:42px;height:42px;object-fit:contain;border-radius:6px;">' }
+  img.onerror = () => { preview.style.background = document.getElementById('new-int-color')?.value || '#6366F1'; preview.innerHTML = document.getElementById('new-int-icon')?.value || '🔌'; toast('Logo não carregou', 'error') }
+  img.src = url
+}
+
+function newIntAutoLogo() {
+  const network = document.getElementById('new-int-network')?.value || ''
+  const domain = network.replace(/-api$|-shop$|-afiliados$/, '') + '.com.br'
+  const url = 'https://logo.clearbit.com/' + domain
+  const input = document.getElementById('new-int-logo-url')
+  if (input) input.value = url
+  newIntPreviewLogo(url)
+  toast('Buscando logo...', 'info')
+}
+
+async function saveNewIntegration() {
+  const name    = document.getElementById('new-int-name')?.value.trim()
+  const network = document.getElementById('new-int-network')?.value.trim()
+  if (!name || !network) { toast('Nome e ID da rede são obrigatórios', 'error'); return }
+
+  const body = {
+    name,
+    network,
+    group:           document.getElementById('new-int-group')?.value || 'Outros',
+    description:     document.getElementById('new-int-desc')?.value.trim() || null,
+    commission_rate: parseFloat(document.getElementById('new-int-commission')?.value) || 0,
+    color:           document.getElementById('new-int-color')?.value || '#6366F1',
+    icon:            document.getElementById('new-int-icon')?.value.trim() || '🔌',
+    auth_type:       document.getElementById('new-int-auth')?.value || 'API Key',
+    logo_url:        document.getElementById('new-int-logo-url')?.value.trim() || null,
+    docs_url:        document.getElementById('new-int-docs')?.value.trim() || null,
+    api_key:         document.getElementById('new-int-api-key')?.value.trim() || null,
+    client_id:       document.getElementById('new-int-client-id')?.value.trim() || null,
+    client_secret:   document.getElementById('new-int-client-secret')?.value.trim() || null,
+    partner_tag:     document.getElementById('new-int-partner-tag')?.value.trim() || null,
+  }
+
+  const btn = document.querySelector('#modal-container .btn-primary')
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvando...' }
+
+  const res = await api('POST', '/admin/api/api-configs/new', body)
+  if (res?.ok) {
+    toast('Empresa cadastrada com sucesso! ✓', 'success')
+    closeModal()
+    renderApiConfigs(document.getElementById('content-area'))
+  } else {
+    toast(res?.error || 'Erro ao cadastrar empresa', 'error')
+    if (btn) { btn.disabled = false; btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg> Cadastrar empresa' }
+  }
+}
+
+// ── Modal: Configurar empresa customizada ────────────────────────────────────
+async function openCustomConfigModal(cfgId) {
+  const dbData = await api('GET', '/admin/api/api-configs')
+  const cfg = (dbData || []).find(c => c.id === cfgId)
+  if (!cfg) { toast('Empresa não encontrada', 'error'); return }
+
+  const modal = document.getElementById('modal-container')
+  modal.innerHTML = \`
+    <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+      <div class="modal" style="max-width:480px;max-height:90vh;overflow-y:auto;">
+        <div class="flex items-center gap-3 mb-5 pb-4 border-b border-slate-100">
+          <div style="width:52px;height:52px;border-radius:12px;background:\${cfg.color||'#6366F1'};flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1.8rem;box-shadow:0 4px 12px rgba(0,0,0,0.15)">
+            \${cfg.icon||'🔌'}
+          </div>
+          <div>
+            <h3 class="font-bold text-slate-800 text-lg">\${cfg.name}</h3>
+            <p class="text-xs text-slate-500 font-mono">\${cfg.network}</p>
+          </div>
+        </div>
+        <div class="space-y-3">
+          <div><label class="block text-sm font-medium text-slate-600 mb-1">API Key / Token</label>
+            <input type="password" id="ccfg-api-key" class="input" placeholder="••••••••••••"></div>
+          <div><label class="block text-sm font-medium text-slate-600 mb-1">Client ID</label>
+            <input type="text" id="ccfg-client-id" class="input" placeholder="ex: app-12345"></div>
+          <div><label class="block text-sm font-medium text-slate-600 mb-1">Client Secret</label>
+            <input type="password" id="ccfg-client-secret" class="input" placeholder="••••••••••••"></div>
+          <div><label class="block text-sm font-medium text-slate-600 mb-1">Partner Tag / ID afiliado</label>
+            <input type="text" id="ccfg-partner-tag" class="input" placeholder="ex: seusite-20"></div>
+          <div class="grid grid-cols-2 gap-3">
+            <div><label class="block text-sm font-medium text-slate-600 mb-1">Rate limit (req/min)</label>
+              <input type="number" id="ccfg-rate" class="input" placeholder="10"></div>
+            <div><label class="block text-sm font-medium text-slate-600 mb-1">Comissão (%)</label>
+              <input type="number" id="ccfg-commission" class="input" placeholder="\${cfg.commission_rate||5}" step="0.1"></div>
+          </div>
+          <div><label class="block text-sm font-medium text-slate-600 mb-1">Logo URL</label>
+            <input type="url" id="ccfg-logo" class="input text-xs" placeholder="https://logo.clearbit.com/empresa.com.br"></div>
+        </div>
+        <div class="flex gap-3 mt-5 pt-4 border-t border-slate-100">
+          <button onclick="saveCustomConfig('\${cfgId}')" class="btn-primary flex-1">💾 Salvar</button>
+          <button onclick="closeModal()" class="btn-secondary">Cancelar</button>
+        </div>
+      </div>
+    </div>
+  \`
+}
+
+async function saveCustomConfig(cfgId) {
+  const body = {
+    api_key:         document.getElementById('ccfg-api-key')?.value.trim() || undefined,
+    client_id:       document.getElementById('ccfg-client-id')?.value.trim() || undefined,
+    client_secret:   document.getElementById('ccfg-client-secret')?.value.trim() || undefined,
+    partner_tag:     document.getElementById('ccfg-partner-tag')?.value.trim() || undefined,
+    rate_limit_per_min: parseInt(document.getElementById('ccfg-rate')?.value) || undefined,
+    commission_rate: parseFloat(document.getElementById('ccfg-commission')?.value) || undefined,
+    logo_url:        document.getElementById('ccfg-logo')?.value.trim() || undefined,
+  }
+  const res = await api('PATCH', \`/admin/api/api-configs/\${cfgId}\`, body)
+  if (res?.ok) { toast('Configuração salva ✓', 'success'); closeModal(); renderApiConfigs(document.getElementById('content-area')) }
+  else toast('Erro ao salvar', 'error')
+}
+
+// ── Deletar empresa customizada ──────────────────────────────────────────────
+async function deleteCustomIntegration(cfgId, name) {
+  if (!confirm('Remover a empresa "' + name + '"? Esta ação não pode ser desfeita.')) return
+  const res = await api('DELETE', \`/admin/api/api-configs/\${cfgId}\`)
+  if (res?.ok) { toast('Empresa removida ✓', 'success'); renderApiConfigs(document.getElementById('content-area')) }
+  else toast(res?.error || 'Erro ao remover', 'error')
+}
+
 
 function editApiConfig(id, name) {
   const modal = document.getElementById('modal-container')
