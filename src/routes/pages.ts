@@ -275,7 +275,7 @@ pages.get('/produto/:slug', async (c) => {
         ${related.map(r => `
           <a href="/produto/${r.slug}" class="group flex flex-col rounded-xl border border-gray-100 hover:border-blue-300 hover:shadow-md transition-all overflow-hidden bg-gray-50">
             <div class="h-28 flex items-center justify-center p-3 bg-white">
-              <img src="${r.image_url || ''}" alt="${r.name}" class="max-h-full object-contain group-hover:scale-105 transition-transform" onerror="this.style.display='none'">
+              <img src="${r.image_url || ''}" alt="${r.name}" class="max-h-full object-contain group-hover:scale-105 transition-transform">
             </div>
             <div class="p-2.5">
               <div class="text-xs text-gray-700 font-medium leading-tight line-clamp-2">${r.name}</div>
@@ -326,7 +326,7 @@ pages.get('/produto/:slug', async (c) => {
             <div class="bg-white rounded-2xl shadow-sm border p-6 flex items-center justify-center min-h-[320px]">
               <img src="${product.image_url || ''}" alt="${product.name}"
                    class="max-h-72 max-w-full object-contain mx-auto"
-                   onerror="this.src='https://via.placeholder.com/300x300?text=Produto'">
+>
             </div>
             <!-- Info rápida -->
             <div class="bg-white rounded-2xl shadow-sm border p-4 space-y-2 text-sm">
@@ -958,7 +958,7 @@ pages.get('/meus-alertas', async (c) => {
           const triggered = a.current_price && a.current_price <= a.target_price;
           return \`<div class="bg-white rounded-2xl shadow-sm border \${triggered ? 'border-green-300 ring-2 ring-green-100' : 'border-gray-100'} p-5 mb-4 flex items-center gap-4">
             <div class="relative flex-shrink-0">
-              <img src="\${a.product_image || '/static/placeholder.svg'}" class="w-16 h-16 object-contain rounded-xl bg-gray-50" onerror="this.src='/static/placeholder.svg'">
+              <img src="\${a.product_image || '/static/placeholder.svg'}" class="w-16 h-16 object-contain rounded-xl bg-gray-50">
               \${triggered ? '<div class="absolute -top-1 -right-1 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center"><i class=\'fas fa-check text-white text-xs\'></i></div>' : ''}
             </div>
             <div class="flex-1 min-w-0">

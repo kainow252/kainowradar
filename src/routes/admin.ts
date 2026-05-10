@@ -1063,7 +1063,7 @@ async function renderTopDeals(area) {
       <td class="table-td w-8 font-bold text-slate-400">\${i+1}</td>
       <td class="table-td">
         <div class="flex items-center gap-3">
-          <img src="\${item.image_url || 'https://via.placeholder.com/48?text=P'}" class="w-10 h-10 object-contain bg-slate-50 rounded-lg" onerror="this.src='https://via.placeholder.com/48?text=P'">
+          <img src="\${item.image_url || 'https://via.placeholder.com/48?text=P'}" class="w-10 h-10 object-contain bg-slate-50 rounded-lg">
           <div>
             <div class="font-semibold text-slate-800 text-sm max-w-xs truncate">\${item.name}</div>
             <div class="text-xs text-slate-400">\${item.brand || ''} · EAN: \${item.ean || '—'}</div>
@@ -1159,7 +1159,7 @@ async function renderProducts(area, page = 1) {
   const rows = data.products.map(p => \`
     <tr class="hover:bg-slate-50">
       <td class="table-td w-12">
-        <img src="\${p.image_url || 'https://via.placeholder.com/40?text=P'}" class="w-10 h-10 object-contain bg-slate-50 rounded-lg" onerror="this.src='https://via.placeholder.com/40?text=P'">
+        <img src="\${p.image_url || 'https://via.placeholder.com/40?text=P'}" class="w-10 h-10 object-contain bg-slate-50 rounded-lg">
       </td>
       <td class="table-td max-w-xs">
         <div class="font-semibold text-slate-800 text-sm truncate">\${p.name}</div>
@@ -1319,8 +1319,7 @@ let _storesData = []
 function _buildStoreCard(s) {
   const nc = NETWORK_COLORS[s.affiliate_network] || { bg: '#f8fafc', border: '#94a3b8', label: s.affiliate_network || '—' }
   const logoHTML = s.logo_url
-    ? '<img src="' + s.logo_url + '" class="h-7 max-w-[72px] object-contain" onerror="this.style.display=\'none\'" style="display:block">'
-    + '<div class="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-white text-sm" style="background:' + nc.border + ';display:none">' + s.name[0] + '</div>'
+    ? '<img src="' + s.logo_url + '" class="h-7 max-w-[72px] object-contain">'
     : '<div class="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-white text-sm" style="background:' + nc.border + '">' + s.name[0] + '</div>'
   const statusBadge = s.is_active
     ? '<span class="flex items-center gap-1 text-xs font-medium text-green-700 bg-green-50 px-2 py-0.5 rounded-full"><span class="w-1.5 h-1.5 bg-green-500 rounded-full inline-block"></span>Ativa</span>'

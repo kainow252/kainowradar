@@ -44,7 +44,7 @@ onboarding.get('/', async (c) => {
                    hover:border-blue-400 hover:bg-blue-50 transition-all cursor-pointer relative"
           >
             <img src="${s.logo_url || ''}" alt="${s.name}"
-                 class="h-8 object-contain" onerror="this.style.display='none'">
+                 class="h-8 object-contain">
             <span class="text-xs font-semibold text-gray-700">${s.name}</span>
             <span class="check-icon hidden absolute top-1 right-1 w-5 h-5 bg-blue-600 rounded-full
                          flex items-center justify-center text-white text-xs">✓</span>
