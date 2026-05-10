@@ -106,10 +106,10 @@ body {
   z-index: 10;
 }
 
-/* H1 — font-size controlado pelo JS fitHero (busca binária = largura exata da search bar)
-   O CSS define apenas o fallback inicial; JS sobrescreve via style.fontSize */
+/* H1 — font-size controlado pelo JS fitHero no desktop;
+   No mobile (< 640px) usa clamp responsivo com wrap para não vazar */
 .hero-h1 {
-  font-size: clamp(0.95rem, 5.58vw - 1.79px, 4.46rem); /* fallback se JS falhar */
+  font-size: clamp(1.35rem, 7.5vw, 4.46rem);
   font-weight: 900;
   color: #fff;
   line-height: 1.15;
@@ -117,15 +117,23 @@ body {
   margin: 0 0 0.45rem;
   min-width: 0;
   text-align: left;
+  /* Desktop: nowrap para o JS fitHero funcionar corretamente */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: clip;
 }
+@media (max-width: 639px) {
+  .hero-h1 {
+    white-space: normal;          /* quebra linha normalmente no mobile */
+    overflow: visible;
+    font-size: clamp(1.35rem, 7.5vw, 2.2rem);
+    letter-spacing: -0.02em;
+  }
+}
 
-/* Subtítulo — font-size controlado pelo JS fitHero (busca binária = largura exata da search bar)
-   O CSS define apenas o fallback inicial; JS sobrescreve via style.fontSize */
+/* Subtítulo — responsivo com wrap no mobile */
 .hero-sub {
-  font-size: clamp(0.62rem, 2.08vw - 0.67px, 1.5rem); /* fallback se JS falhar */
+  font-size: clamp(0.78rem, 3.5vw, 1.5rem);
   color: rgba(191,219,254,0.85);
   line-height: 1.5;
   margin: 0 0 1rem;
@@ -134,6 +142,14 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: clip;
+}
+@media (max-width: 639px) {
+  .hero-sub {
+    white-space: normal;
+    overflow: visible;
+    font-size: clamp(0.78rem, 3.5vw, 1rem);
+    line-height: 1.45;
+  }
 }
 
 /* Search wrap ─ filho do grid → mesma largura exata do H1 e subtítulo */
@@ -200,6 +216,13 @@ body {
   border-color: #fbbf24;
   box-shadow: 0 8px 32px rgba(0,0,0,0.22), 0 0 0 4px rgba(251,191,36,0.18);
 }
+/* Mobile: reduz padding-right para o placeholder não ficar comprimido */
+@media (max-width: 639px) {
+  .hero-search-input {
+    padding: 0.85rem 5.5rem 0.85rem 2.5rem;
+    font-size: 0.875rem;
+  }
+}
 .hero-search-btn {
   position: absolute;
   right: 0.4rem;
@@ -215,6 +238,13 @@ body {
   cursor: pointer;
   transition: background 0.15s, transform 0.1s;
   white-space: nowrap;
+}
+/* Mobile: botão mais compacto */
+@media (max-width: 639px) {
+  .hero-search-btn {
+    padding: 0.5rem 0.85rem;
+    font-size: 0.8125rem;
+  }
 }
 .hero-search-btn:hover  { background: #1d4ed8; }
 .hero-search-btn:active { transform: translateY(-50%) scale(0.97); }
@@ -801,6 +831,28 @@ body {
   .promo-banner { min-height: 130px; padding: 1.25rem; }
   .store-pill-logo { width: 44px; height: 44px; }
   .hero-cats-panel { padding: 1rem; }
+
+  /* Hero inner: menos padding vertical no mobile */
+  .hero-inner { padding: 1.75rem 1rem 1.5rem; }
+
+  /* Títulos de seção menores em telas < 768 */
+  .section-title { font-size: 1.05rem !important; }
+}
+
+/* Telas muito pequenas (< 400px) — ajustes finos */
+@media (max-width: 399px) {
+  .hero-h1 { font-size: 1.25rem !important; }
+  .hero-sub { font-size: 0.75rem !important; }
+  .section-title { font-size: 1rem !important; }
+  .hero-search-input {
+    padding: 0.75rem 5rem 0.75rem 2.25rem;
+    font-size: 0.8125rem;
+  }
+  .hero-search-btn {
+    padding: 0.45rem 0.7rem;
+    font-size: 0.75rem;
+  }
+  .hero-search-icon { left: 0.75rem; width: 0.95rem; height: 0.95rem; }
 }
 
 /* ── HEADER SHADOW ON SCROLL ──────────────────────────────── */
