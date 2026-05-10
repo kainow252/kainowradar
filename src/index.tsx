@@ -182,7 +182,7 @@ app.get('/', async (c) => {
 
       <div style="width:100%;padding:2rem 5% 1.5rem;box-sizing:border-box;position:relative;z-index:10;">
 
-        <!-- Eyebrow label -->
+        <!-- Eyebrow label — centralizado -->
         <div class="flex justify-center mb-4">
           <span class="hero-eyebrow">
             <span class="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse inline-block mr-1.5"></span>
@@ -190,40 +190,45 @@ app.get('/', async (c) => {
           </span>
         </div>
 
-        <!-- Título principal —centralizado -->
-        <h1 style="text-align:center;font-size:clamp(1.8rem,4vw,3rem);font-weight:900;color:#fff;line-height:1.15;letter-spacing:-0.02em;margin-bottom:0.75rem;white-space:nowrap;">
-          O menor preço está <span class="hero-gradient-text">aqui. Sempre.</span>
-        </h1>
+        <!-- Container único: H1 + subtítulo + search + populares — todos mesma largura -->
+        <div style="width:100%;max-width:100%;box-sizing:border-box;">
 
-        <!-- Subtítulo — mesma largura que a search bar -->
-        <p style="color:rgba(191,219,254,0.75);font-size:0.95rem;line-height:1.6;margin-bottom:1rem;">
-          Compare preços em tempo real nas maiores lojas do Brasil e compre sempre na melhor oferta.
-        </p>
+          <!-- Título principal -->
+          <h1 style="text-align:left;font-size:clamp(1.6rem,3.5vw,2.6rem);font-weight:900;color:#fff;line-height:1.15;letter-spacing:-0.02em;margin-bottom:0.5rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            O menor preço está <span class="hero-gradient-text">aqui. Sempre.</span>
+          </h1>
 
-        <!-- Barra de busca — largura total do bloco -->
-        <div class="hero-search-wrap">
-          <svg class="hero-search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-          </svg>
-          <input type="text" id="hero-search"
-            placeholder="iPhone 15, Galaxy S24, PlayStation 5…"
-            class="hero-search-input"
-            autocomplete="off"
-            onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; searchProducts(); }"
-            oninput="document.getElementById('search-input').value=this.value; debounceSearch(this.value)">
-          <button
-            onclick="document.getElementById('search-input').value=document.getElementById('hero-search').value; searchProducts();"
-            class="hero-search-btn">
-            Buscar
-          </button>
-        </div>
+          <!-- Subtítulo -->
+          <p style="color:rgba(191,219,254,0.75);font-size:0.9rem;line-height:1.5;margin-bottom:0.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            Compare preços em tempo real nas maiores lojas do Brasil e compre sempre na melhor oferta.
+          </p>
 
-        <!-- Populares — uma linha só, mesma largura da search bar -->
-        <div style="display:flex;flex-wrap:nowrap;align-items:center;gap:0.5rem;margin-top:0.75rem;overflow:hidden;">
-          <span style="color:rgba(147,197,253,0.5);font-size:0.75rem;font-weight:500;white-space:nowrap;flex-shrink:0;">Populares:</span>
-          ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV', 'iPad', 'Geladeira', 'Ar Condicionado', 'Tênis Nike', 'MacBook', 'Xbox Series', 'Monitor', 'Cafeteira', 'Headphone', 'Câmera', 'Kindle', 'Robô Aspirador'].map(t =>
-            `<button onclick="quickSearch('${t}')" class="quick-tag" style="flex-shrink:0;">${t}</button>`
-          ).join('')}
+          <!-- Barra de busca -->
+          <div class="hero-search-wrap">
+            <svg class="hero-search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+            <input type="text" id="hero-search"
+              placeholder="iPhone 15, Galaxy S24, PlayStation 5…"
+              class="hero-search-input"
+              autocomplete="off"
+              onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; searchProducts(); }"
+              oninput="document.getElementById('search-input').value=this.value; debounceSearch(this.value)">
+            <button
+              onclick="document.getElementById('search-input').value=document.getElementById('hero-search').value; searchProducts();"
+              class="hero-search-btn">
+              Buscar
+            </button>
+          </div>
+
+          <!-- Populares — uma linha, overflow hidden limpo (sem corte parcial) -->
+          <div style="display:flex;flex-wrap:nowrap;align-items:center;gap:0.5rem;margin-top:0.75rem;overflow:hidden;max-width:100%;">
+            <span style="color:rgba(147,197,253,0.5);font-size:0.75rem;font-weight:500;white-space:nowrap;flex-shrink:0;">Populares:</span>
+            ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV', 'iPad', 'Geladeira', 'MacBook', 'Xbox Series', 'Monitor', 'Headphone', 'Kindle'].map(t =>
+              `<button onclick="quickSearch('${t}')" class="quick-tag" style="flex-shrink:0;">${t}</button>`
+            ).join('')}
+          </div>
+
         </div>
 
       </div>
