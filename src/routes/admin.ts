@@ -808,6 +808,9 @@ function renderAdminSPA(): string {
       <div onclick="showSection('queue')" class="sidebar-link" data-section="queue">
         <span class="text-lg">⚡</span> Fila de Preços
       </div>
+      <div onclick="showSection('editorial')" class="sidebar-link" data-section="editorial">
+        <span class="text-lg">🤖</span> IA Editorial
+      </div>
       <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Análise</div>
       <div onclick="showSection('analytics')" class="sidebar-link" data-section="analytics">
         <span class="text-lg">📈</span> Analytics
@@ -957,6 +960,7 @@ async function loadSection(name) {
     stores: ['Lojas Parceiras', 'Ativar/desativar lojas e ver métricas'],
     'api-configs': ['APIs & Feeds', 'Configurar integrações e chaves de API'],
     queue: ['Fila de Preços', 'Jobs pendentes de atualização cirúrgica'],
+    editorial: ['🤖 IA Editorial', 'Motor de destaques automáticos — analisa D1 e gera banners'],
     analytics: ['Analytics', 'Cliques, conversões e performance'],
     users: ['Usuários', 'Gerenciar clientes e membros'],
   }
@@ -971,6 +975,7 @@ async function loadSection(name) {
     offers: renderOffers,
     stores: renderStores,
     'api-configs': renderApiConfigs,
+    editorial: renderEditorial,
     queue: renderQueue,
     analytics: renderAnalytics,
     users: renderUsers,
@@ -2102,6 +2107,204 @@ const AFFILIATE_NETWORKS = [
 ]
 
 const AFFILIATE_GROUPS = ['Marketplaces', 'Infoprodutos', 'Redes Multimarcas', 'Plataformas de Parceria', 'Live Commerce', 'Discovery Commerce', 'E-commerce Builder', 'Tecnologia & SaaS', 'Social Commerce', 'Outros']
+
+// ── IA EDITORIAL PANEL ────────────────────────────────────────────────────────
+async function renderEditorial(area) {
+  area.innerHTML = spin
+
+  // Busca estado atual dos destaques gerados
+  const data = await api('GET', '/api/editorial')
+  const banners  = data?.banners  || []
+  const insights = data?.insights || []
+  const lastGen  = data?.last_generated
+
+  const bMain = banners.find(b => b.slot === 'banner_main')
+  const bSec1 = banners.find(b => b.slot === 'banner_sec1')
+  const bSec2 = banners.find(b => b.slot === 'banner_sec2')
+
+  function fAge(iso) {
+    if (!iso) return 'nunca'
+    const diff = Date.now() - new Date(iso).getTime()
+    const min  = Math.floor(diff / 60000)
+    if (min < 1)  return 'agora mesmo'
+    if (min < 60) return min + ' min atrás'
+    const h = Math.floor(min / 60)
+    if (h < 24)   return h + 'h atrás'
+    return Math.floor(h / 24) + 'd atrás'
+  }
+
+  function bannerPreview(b, size) {
+    if (!b) return \`<div class="flex-1 rounded-xl border-2 border-dashed border-slate-200 flex items-center justify-center p-4 text-slate-400 text-sm">Sem dados</div>\`
+    const from  = b.color_from || '#2563EB'
+    const to    = b.color_to   || '#7C3AED'
+    const lines = (b.title || '').split('\\n')
+    return \`
+      <div class="flex-1 rounded-xl overflow-hidden shadow-md" style="background:linear-gradient(135deg,\${from},\${to});min-height:\${size}px;padding:16px;position:relative;">
+        <div style="position:absolute;right:8px;bottom:0;font-size:3rem;opacity:0.2;">\${b.emoji||'🛍️'}</div>
+        <div style="position:relative;z-index:1;">
+          <span style="background:rgba(255,255,255,0.2);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px;display:inline-block;margin-bottom:6px;">\${b.label||''}</span>
+          <div style="color:white;font-weight:900;font-size:14px;line-height:1.3;">\${lines.join('<br>')}</div>
+          \${b.subtitle ? \`<div style="color:rgba(255,255,255,0.65);font-size:11px;margin-top:4px;">\${b.subtitle}</div>\` : ''}
+          \${b.stat_value ? \`<div style="color:rgba(255,255,255,0.5);font-size:10px;margin-top:6px;font-weight:600;">\${b.stat_value}</div>\` : ''}
+        </div>
+      </div>
+    \`
+  }
+
+  const statusColor = lastGen
+    ? (Date.now() - new Date(lastGen).getTime() < 7 * 3600000 ? 'text-green-600 bg-green-50' : 'text-amber-600 bg-amber-50')
+    : 'text-slate-500 bg-slate-100'
+  const statusLabel = lastGen ? 'Ativo' : 'Sem dados'
+
+  area.innerHTML = \`
+    <div class="p-6 space-y-6">
+
+      <!-- Header com status e botão gerar -->
+      <div class="bg-gradient-to-r from-slate-900 to-slate-800 rounded-2xl p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div>
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-2xl">🤖</span>
+            <h2 class="text-white font-black text-xl">IA Editorial</h2>
+            <span class="text-xs font-bold px-2 py-0.5 rounded-full \${statusColor}">\${statusLabel}</span>
+          </div>
+          <p class="text-slate-400 text-sm">Motor interno que analisa produtos, ofertas e categorias do D1 e gera os banners da homepage automaticamente.</p>
+          <p class="text-slate-500 text-xs mt-1">Última geração: <strong class="text-slate-300">\${fAge(lastGen)}</strong> · Próxima: automática em até 6h</p>
+        </div>
+        <div class="flex gap-3 flex-shrink-0">
+          <button onclick="forceGenerateEditorial()"
+            class="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-5 py-2.5 rounded-xl transition-all shadow-lg shadow-indigo-900/30">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            Gerar agora
+          </button>
+          <button onclick="renderEditorial(document.getElementById('content-area'))"
+            class="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-white font-bold px-4 py-2.5 rounded-xl transition-all">
+            🔄 Atualizar
+          </button>
+        </div>
+      </div>
+
+      <!-- Preview dos banners atuais -->
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+        <div class="flex items-center gap-2 mb-4">
+          <div class="w-1 h-6 bg-gradient-to-b from-indigo-500 to-purple-600 rounded-full"></div>
+          <h3 class="font-bold text-slate-800">Preview — Banners da homepage agora</h3>
+          \${lastGen ? \`<span class="text-xs text-slate-400 ml-2">gerado \${fAge(lastGen)}</span>\` : ''}
+        </div>
+        <div class="flex gap-3 flex-col md:flex-row">
+          \${bannerPreview(bMain, 160)}
+          <div class="flex md:flex-col gap-3 flex-1" style="max-width:38%">
+            \${bannerPreview(bSec1, 72)}
+            \${bannerPreview(bSec2, 72)}
+          </div>
+        </div>
+        \${!lastGen ? \`
+          <div class="mt-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700">
+            ⚠️ Nenhum destaque foi gerado ainda. Clique em <strong>Gerar agora</strong> para criar os banners com base nos dados do banco.
+          </div>
+        \` : ''}
+      </div>
+
+      <!-- Insights textuais do ticker -->
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2">
+            <div class="w-1 h-6 bg-gradient-to-b from-green-500 to-emerald-600 rounded-full"></div>
+            <h3 class="font-bold text-slate-800">Insights do Ticker</h3>
+            <span class="text-xs text-slate-400">(faixa animada abaixo dos banners)</span>
+          </div>
+        </div>
+        \${insights.length > 0
+          ? \`<div class="space-y-2">\${insights.map(ins => \`
+              <div class="flex items-center gap-3 bg-slate-50 rounded-xl px-4 py-2.5">
+                <span class="w-2 h-2 rounded-full bg-green-400 flex-shrink-0"></span>
+                <span class="text-sm text-slate-700">\${ins.insight_text}</span>
+                <span class="ml-auto text-xs text-slate-400">\${fAge(ins.generated_at)}</span>
+              </div>
+            \`).join('')}</div>\`
+          : \`<p class="text-slate-400 text-sm">Nenhum insight gerado ainda. Clique em <strong>Gerar agora</strong>.</p>\`
+        }
+      </div>
+
+      <!-- Histórico / dados raw dos slots -->
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+        <div class="flex items-center gap-2 mb-4">
+          <div class="w-1 h-6 bg-gradient-to-b from-slate-400 to-slate-600 rounded-full"></div>
+          <h3 class="font-bold text-slate-800">Dados gerados por slot</h3>
+        </div>
+        \${banners.length > 0
+          ? \`<div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-slate-100">
+                    <th class="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase">Slot</th>
+                    <th class="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase">Label</th>
+                    <th class="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase">Categoria</th>
+                    <th class="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase">Stat</th>
+                    <th class="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase">Cor</th>
+                    <th class="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase">Gerado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  \${banners.map(b => \`
+                    <tr class="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                      <td class="py-2.5 px-3 font-mono text-xs text-slate-600 font-bold">\${b.slot}</td>
+                      <td class="py-2.5 px-3 text-slate-700">\${b.emoji||''} \${b.label||''}</td>
+                      <td class="py-2.5 px-3"><span class="font-mono text-xs bg-slate-100 px-2 py-0.5 rounded">\${b.category_slug||'—'}</span></td>
+                      <td class="py-2.5 px-3 text-slate-600 text-xs">\${b.stat_value||'—'}</td>
+                      <td class="py-2.5 px-3">
+                        <span class="inline-flex items-center gap-1">
+                          <span style="width:14px;height:14px;border-radius:4px;background:linear-gradient(135deg,\${b.color_from},\${b.color_to});display:inline-block;"></span>
+                          <span class="font-mono text-xs text-slate-400">\${b.color_from}</span>
+                        </span>
+                      </td>
+                      <td class="py-2.5 px-3 text-xs text-slate-400">\${fAge(b.generated_at)}</td>
+                    </tr>
+                  \`).join('')}
+                </tbody>
+              </table>
+            </div>\`
+          : \`<p class="text-slate-400 text-sm">Sem dados. Clique em <strong>Gerar agora</strong>.</p>\`
+        }
+      </div>
+
+      <!-- Como funciona -->
+      <div class="bg-slate-50 rounded-2xl border border-slate-200 p-5">
+        <h4 class="font-bold text-slate-700 mb-3">🧠 Como o motor funciona</h4>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-slate-600">
+          <div class="bg-white rounded-xl p-4 border border-slate-100">
+            <div class="text-xl mb-2">📊</div>
+            <strong class="text-slate-800">1. Analisa o D1</strong>
+            <p class="text-xs mt-1 text-slate-500">Consulta produtos, ofertas e categorias. Calcula scores por volume de ofertas e desconto médio.</p>
+          </div>
+          <div class="bg-white rounded-xl p-4 border border-slate-100">
+            <div class="text-xl mb-2">✍️</div>
+            <strong class="text-slate-800">2. Gera conteúdo</strong>
+            <p class="text-xs mt-1 text-slate-500">Escolhe a categoria mais quente, monta títulos, subtítulos e insights baseados nos dados reais.</p>
+          </div>
+          <div class="bg-white rounded-xl p-4 border border-slate-100">
+            <div class="text-xl mb-2">🔄</div>
+            <strong class="text-slate-800">3. Persiste e serve</strong>
+            <p class="text-xs mt-1 text-slate-500">Salva em <code class="bg-slate-100 px-1 rounded">ai_editorial</code> no D1. Homepage lê direto — sem API externa, sem custo extra.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  \`
+}
+
+async function forceGenerateEditorial() {
+  const btn = document.querySelector('[onclick="forceGenerateEditorial()"]')
+  if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Gerando...' }
+  const res = await api('POST', '/api/editorial/generate')
+  if (res?.ok) {
+    toast('✓ Destaques gerados! Categorias: ' + (res.data_summary?.categories_analyzed || 0) + ' | Produtos: ' + (res.data_summary?.products_total || 0), 'success')
+    await renderEditorial(document.getElementById('content-area'))
+  } else {
+    toast(res?.message || 'Erro ao gerar destaques', 'error')
+    if (btn) { btn.disabled = false; btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Gerar agora' }
+  }
+}
 
 async function renderApiConfigs(area) {
   // Garante que todos os 18 registros existam no banco (idempotente)

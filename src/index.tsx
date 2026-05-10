@@ -11,6 +11,7 @@ import admin from './routes/admin'
 import auth from './routes/auth'
 import onboarding from './routes/onboarding'
 import pages, { renderLayout, renderProductCard, formatCurrency } from './routes/pages'
+import editorial from './routes/editorial'
 import { CacheManager } from './lib/cache'
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -45,6 +46,9 @@ app.route('/onboarding', onboarding)
 
 // ── Admin Routes (protegido por Bearer token / ADMIN_SECRET) ─
 app.route('/admin', admin)
+
+// ── Editorial AI Routes ───────────────────────────────────
+app.route('/api/editorial', editorial)
 
 // ── Page Routes ───────────────────────────────────────────
 app.route('/', pages)
@@ -103,8 +107,8 @@ app.get('/', async (c) => {
     { color: '#84CC16', bg: '#f7fee7' },
   ]
 
-  // Busca dados em paralelo
-  const [featuredResult, dealsResult, categoriesResult, storesResult] = await Promise.all([
+  // Busca dados em paralelo (inclui editorial da IA)
+  const [featuredResult, dealsResult, categoriesResult, storesResult, editorialResult] = await Promise.all([
     DB.prepare(`
       SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
       FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
@@ -121,12 +125,21 @@ app.get('/', async (c) => {
     `).all(),
     DB.prepare(`SELECT * FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all(),
     DB.prepare(`SELECT id, name, slug, logo_url FROM stores WHERE is_active = 1 ORDER BY name ASC LIMIT 100`).all(),
+    // Destaques gerados pela IA editorial (tabela ai_editorial)
+    DB.prepare(`SELECT * FROM ai_editorial ORDER BY priority DESC LIMIT 10`).all().catch(() => ({ results: [] })),
   ])
 
-  const featured   = featuredResult.results   as any[]
-  const deals      = dealsResult.results      as any[]
-  const categories = categoriesResult.results as any[]
-  const dbStores   = storesResult.results     as any[]
+  const featured    = featuredResult.results   as any[]
+  const deals       = dealsResult.results      as any[]
+  const categories  = categoriesResult.results as any[]
+  const dbStores    = storesResult.results     as any[]
+  const editorials  = editorialResult.results  as any[]
+
+  // Extrai slots editoriais por nome
+  const eBannerMain = editorials.find((e: any) => e.slot === 'banner_main')
+  const eBannerSec1 = editorials.find((e: any) => e.slot === 'banner_sec1')
+  const eBannerSec2 = editorials.find((e: any) => e.slot === 'banner_sec2')
+  const eInsights   = editorials.filter((e: any) => e.type === 'insight')
 
   // Monta lista de lojas com dados visuais reais do banco + fallbacks
   const stores = dbStores.map((s: any, idx: number) => {
@@ -293,47 +306,106 @@ app.get('/', async (c) => {
     </section>
   `
 
-  // ── BANNER DESTAQUE (sem imagem externa — todo CSS) ────────
+  // ── BANNER DESTAQUE — dinâmico via IA editorial ────────────
+  // Usa destaques gerados pelo motor /api/editorial/generate
+  // Fallback para conteúdo estático se IA ainda não gerou nada
+
+  // Fallbacks padrão (usados enquanto IA não gerou dados)
+  const FB_MAIN = {
+    label: '🔥 Destaque do dia', emoji: '📱',
+    title: 'Smartphones\ncom o menor\npreço garantido',
+    subtitle: 'Compare em todas as lojas e economize',
+    search_term: 'Smartphone', category_slug: 'smartphones',
+    color_from: '#1D4ED8', color_to: '#7C3AED',
+  }
+  const FB_SEC1 = {
+    label: 'Notebooks', emoji: '💻',
+    title: 'Melhores\npreços em\nnotebooks',
+    search_term: 'Notebook', category_slug: 'notebooks',
+    color_from: '#0F172A', color_to: '#334155',
+  }
+  const FB_SEC2 = {
+    label: 'Smart TVs', emoji: '📺',
+    title: 'Compare 4K\ne OLED\nnas melhores lojas',
+    search_term: 'Smart TV', category_slug: 'tv',
+    color_from: '#0F766E', color_to: '#0D9488',
+  }
+
+  const bMain = eBannerMain || FB_MAIN
+  const bSec1 = eBannerSec1 || FB_SEC1
+  const bSec2 = eBannerSec2 || FB_SEC2
+
+  // Gera ação de clique: se tiver category_slug usa link, senão quickSearch
+  const mainAction  = bMain.category_slug
+    ? `window.location.href='/categoria/${bMain.category_slug}'`
+    : `quickSearch('${(bMain.search_term || 'Ofertas').replace(/'/g, '')}')`
+  const sec1Action  = bSec1.category_slug
+    ? `window.location.href='/categoria/${bSec1.category_slug}'`
+    : `quickSearch('${(bSec1.search_term || 'Produtos').replace(/'/g, '')}')`
+  const sec2Action  = bSec2.category_slug
+    ? `window.location.href='/categoria/${bSec2.category_slug}'`
+    : `quickSearch('${(bSec2.search_term || 'Produtos').replace(/'/g, '')}')`
+
+  // Título com quebras de linha → <br>
+  const mainTitleHTML = (bMain.title as string).replace(/\n/g, '<br>')
+  const sec1TitleHTML = (bSec1.title as string).replace(/\n/g, '<br>')
+  const sec2TitleHTML = (bSec2.title as string).replace(/\n/g, '<br>')
+
+  // Badge "IA" aparece apenas quando o editorial foi gerado automaticamente
+  const iaBadge = eBannerMain
+    ? `<span class="inline-flex items-center gap-1 bg-white/15 border border-white/20 text-white/70 text-[10px] font-semibold px-2 py-0.5 rounded-full ml-2">
+        <span class="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"></span>ao vivo
+       </span>`
+    : ''
+
   const bannerHTML = `
-    <section class="max-w-7xl mx-auto px-4 py-6">
+    <section class="max-w-7xl mx-auto px-4 py-6" id="editorial-banners">
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
 
-        <!-- Banner principal -->
-        <div class="md:col-span-2 promo-banner promo-banner-main group cursor-pointer"
-             onclick="quickSearch('Smartphone')">
+        <!-- Banner principal — gerado pela IA editorial -->
+        <div class="md:col-span-2 promo-banner group cursor-pointer relative overflow-hidden rounded-2xl p-6 md:p-8"
+             style="background: linear-gradient(135deg, ${bMain.color_from} 0%, ${bMain.color_to} 100%); min-height:200px;"
+             onclick="${mainAction}">
           <div class="promo-banner-orb"></div>
           <div class="relative z-10">
-            <span class="inline-block bg-yellow-400 text-yellow-900 text-xs font-black px-3 py-1 rounded-full mb-3 uppercase tracking-wide">
-              🔥 Destaque do dia
-            </span>
+            <div class="flex items-center gap-1 mb-3">
+              <span class="inline-block bg-yellow-400 text-yellow-900 text-xs font-black px-3 py-1 rounded-full uppercase tracking-wide">
+                ${bMain.label || '🔥 Destaque do dia'}
+              </span>
+              ${iaBadge}
+            </div>
             <h3 class="text-2xl md:text-3xl font-black text-white mb-2 leading-tight">
-              Smartphones<br>com o menor<br>preço garantido
+              ${mainTitleHTML}
             </h3>
-            <p class="text-blue-100/80 text-sm mb-4">Compare em todas as lojas e economize até R$ 800</p>
-            <span class="inline-flex items-center gap-2 bg-white text-blue-700 font-bold text-sm px-4 py-2 rounded-xl group-hover:bg-yellow-400 group-hover:text-yellow-900 transition-colors">
-              Ver comparativos →
+            <p class="text-white/70 text-sm mb-4">${bMain.subtitle || 'Compare nas melhores lojas'}</p>
+            <span class="inline-flex items-center gap-2 bg-white/90 text-blue-700 font-bold text-sm px-4 py-2 rounded-xl group-hover:bg-yellow-400 group-hover:text-yellow-900 transition-colors">
+              Ver ${bMain.stat_value ? bMain.stat_value + ' →' : 'comparativos →'}
             </span>
           </div>
-          <div class="absolute right-4 bottom-0 text-8xl opacity-20 select-none pointer-events-none">📱</div>
+          <div class="absolute right-4 bottom-0 text-8xl opacity-20 select-none pointer-events-none">${bMain.emoji || '🛍️'}</div>
         </div>
 
-        <!-- Banners secundários -->
+        <!-- Banners secundários — também gerados pela IA -->
         <div class="flex flex-col gap-4">
-          <div class="promo-banner promo-banner-secondary group cursor-pointer flex-1"
-               onclick="quickSearch('Notebook')">
+          <div class="promo-banner group cursor-pointer flex-1 relative overflow-hidden rounded-2xl p-5"
+               style="background: linear-gradient(135deg, ${bSec1.color_from} 0%, ${bSec1.color_to} 100%); min-height:90px;"
+               onclick="${sec1Action}">
             <div class="relative z-10">
-              <span class="text-xs font-bold text-indigo-300 uppercase tracking-wide">Notebooks</span>
-              <h4 class="text-lg font-black text-white mt-1 leading-tight">Até 30% OFF<br>nos melhores modelos</h4>
+              <span class="text-xs font-bold text-white/60 uppercase tracking-wide">${bSec1.label || 'Categoria'}</span>
+              <h4 class="text-lg font-black text-white mt-1 leading-tight">${sec1TitleHTML}</h4>
+              ${bSec1.stat_value ? `<p class="text-white/50 text-xs mt-1">${bSec1.stat_value}</p>` : ''}
             </div>
-            <div class="absolute right-3 bottom-2 text-5xl opacity-20 select-none pointer-events-none">💻</div>
+            <div class="absolute right-3 bottom-2 text-5xl opacity-20 select-none pointer-events-none">${bSec1.emoji || '💡'}</div>
           </div>
-          <div class="promo-banner promo-banner-green group cursor-pointer flex-1"
-               onclick="quickSearch('Smart TV')">
+          <div class="promo-banner group cursor-pointer flex-1 relative overflow-hidden rounded-2xl p-5"
+               style="background: linear-gradient(135deg, ${bSec2.color_from} 0%, ${bSec2.color_to} 100%); min-height:90px;"
+               onclick="${sec2Action}">
             <div class="relative z-10">
-              <span class="text-xs font-bold text-emerald-300 uppercase tracking-wide">Smart TVs</span>
-              <h4 class="text-lg font-black text-white mt-1 leading-tight">Compare 4K e OLED<br>nas melhores lojas</h4>
+              <span class="text-xs font-bold text-white/60 uppercase tracking-wide">${bSec2.label || 'Categoria'}</span>
+              <h4 class="text-lg font-black text-white mt-1 leading-tight">${sec2TitleHTML}</h4>
+              ${bSec2.stat_value ? `<p class="text-white/50 text-xs mt-1">${bSec2.stat_value}</p>` : ''}
             </div>
-            <div class="absolute right-3 bottom-2 text-5xl opacity-20 select-none pointer-events-none">📺</div>
+            <div class="absolute right-3 bottom-2 text-5xl opacity-20 select-none pointer-events-none">${bSec2.emoji || '⚡'}</div>
           </div>
         </div>
 
@@ -470,7 +542,33 @@ app.get('/', async (c) => {
     </section>
   `
 
-  const content = heroHTML + storesHTML + bannerHTML + searchResultsHTML + dealsHTML + featuredHTML + howHTML
+  // ── INSIGHTS DA IA (ticker/rodapé da seção de banners) ────
+  // Busca também da tabela ai_insights
+  let insightRows: any[] = []
+  try {
+    const ir = await DB.prepare(`SELECT * FROM ai_insights ORDER BY generated_at DESC LIMIT 4`).all()
+    insightRows = ir.results as any[]
+  } catch { /* tabela ainda não existe — ignora */ }
+
+  const insightsHTML = insightRows.length > 0 ? `
+    <div class="max-w-7xl mx-auto px-4 pb-2">
+      <div class="bg-slate-900 rounded-2xl px-5 py-3 flex items-center gap-3 overflow-hidden">
+        <span class="flex-shrink-0 inline-flex items-center gap-1.5 bg-green-500/20 text-green-400 text-xs font-bold px-2.5 py-1 rounded-full border border-green-500/30">
+          <span class="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"></span>
+          Radar IA
+        </span>
+        <div class="overflow-hidden flex-1 min-w-0">
+          <div class="flex gap-8 animate-[marquee_28s_linear_infinite] whitespace-nowrap w-max">
+            ${[...insightRows, ...insightRows].map((ins: any) => `
+              <span class="text-slate-300 text-sm">${ins.insight_text}</span>
+            `).join('<span class="text-slate-600 px-3">·</span>')}
+          </div>
+        </div>
+      </div>
+    </div>
+  ` : ''
+
+  const content = heroHTML + storesHTML + bannerHTML + insightsHTML + searchResultsHTML + dealsHTML + catBlocksHTML + featuredHTML + howHTML
 
   return c.html(renderLayout('KainowRadar — Seu radar inteligente de ofertas', content, { navCategories: categories }))
 })
