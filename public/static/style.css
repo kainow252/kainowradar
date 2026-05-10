@@ -82,14 +82,17 @@ body {
   border-radius: 9999px;
 }
 
+/* Bloco central do hero — subtítulo + search + populares na mesma largura */
+.hero-content-block {
+  width: 90%;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
 /* Search bar hero */
 .hero-search-wrap {
   position: relative;
-  max-width: 600px;
-  margin: 0 auto;
-}
-.hero-search-full {
-  max-width: 100%;
+  width: 100%;
 }
 .hero-search-icon {
   position: absolute;

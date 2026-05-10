@@ -180,7 +180,7 @@ app.get('/', async (c) => {
       <div class="hero-orb hero-orb-2"></div>
       <div class="hero-orb hero-orb-3"></div>
 
-      <div class="w-full px-6 md:px-12 lg:px-20 py-8 relative z-10 text-center">
+      <div class="w-full py-8 relative z-10 text-center">
 
         <!-- Eyebrow label -->
         <div class="flex justify-center mb-4">
@@ -195,36 +195,41 @@ app.get('/', async (c) => {
           O menor preço está <span class="hero-gradient-text">aqui. Sempre.</span>
         </h1>
 
-        <!-- Subtítulo limpo -->
-        <p class="text-blue-200/70 text-sm md:text-base leading-relaxed mb-6 whitespace-nowrap">
-          Compare preços em tempo real nas maiores lojas do Brasil e compre sempre na melhor oferta.
-        </p>
+        <!-- Bloco alinhado à largura da search bar -->
+        <div class="hero-content-block">
 
-        <!-- Barra de busca centralizada — o CTA principal -->
-        <div class="hero-search-wrap hero-search-full">
-          <svg class="hero-search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-          </svg>
-          <input type="text" id="hero-search"
-            placeholder="iPhone 15, Galaxy S24, PlayStation 5…"
-            class="hero-search-input"
-            autocomplete="off"
-            onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; searchProducts(); }"
-            oninput="document.getElementById('search-input').value=this.value; debounceSearch(this.value)">
-          <button
-            onclick="document.getElementById('search-input').value=document.getElementById('hero-search').value; searchProducts();"
-            class="hero-search-btn">
-            Buscar
-          </button>
-        </div>
+          <!-- Subtítulo -->
+          <p class="text-blue-200/70 text-sm md:text-base leading-relaxed mb-4 text-left">
+            Compare preços em tempo real nas maiores lojas do Brasil e compre sempre na melhor oferta.
+          </p>
 
-        <!-- Sugestões populares -->
-        <div class="flex flex-nowrap justify-center items-center gap-2 mt-4 overflow-x-auto scrollbar-hide">
-          <span class="text-blue-300/50 text-xs font-medium whitespace-nowrap flex-shrink-0">Populares:</span>
-          ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV'].map(t =>
-            `<button onclick="quickSearch('${t}')" class="quick-tag">${t}</button>`
-          ).join('')}
-        </div>
+          <!-- Barra de busca — CTA principal -->
+          <div class="hero-search-wrap">
+            <svg class="hero-search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+            <input type="text" id="hero-search"
+              placeholder="iPhone 15, Galaxy S24, PlayStation 5…"
+              class="hero-search-input"
+              autocomplete="off"
+              onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; searchProducts(); }"
+              oninput="document.getElementById('search-input').value=this.value; debounceSearch(this.value)">
+            <button
+              onclick="document.getElementById('search-input').value=document.getElementById('hero-search').value; searchProducts();"
+              class="hero-search-btn">
+              Buscar
+            </button>
+          </div>
+
+          <!-- Sugestões populares — mesma largura da search bar -->
+          <div class="flex flex-wrap items-center gap-2 mt-3">
+            <span class="text-blue-300/50 text-xs font-medium whitespace-nowrap">Populares:</span>
+            ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV'].map(t =>
+              `<button onclick="quickSearch('${t}')" class="quick-tag">${t}</button>`
+            ).join('')}
+          </div>
+
+        </div><!-- /hero-content-block -->
 
       </div>
     </section>
