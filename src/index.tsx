@@ -185,7 +185,7 @@ app.get('/', async (c) => {
 
         <!-- H1 — mesma largura do search wrap -->
         <h1 class="hero-h1">
-          O menor preço está <span class="hero-gradient-text">aqui. Sempre.</span>
+          O menor preço está <span class="hero-gradient-text">aqui Sempre</span>
         </h1>
 
         <!-- Subtítulo -->
@@ -209,20 +209,53 @@ app.get('/', async (c) => {
             class="hero-search-btn">Buscar</button>
         </div>
 
-        <!-- Populares -->
-        <div class="hero-tags">
-          <span class="hero-tags-label">Populares:</span>
-          ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV', 'iPad', 'Geladeira', 'MacBook', 'Xbox Series', 'Monitor', 'Headphone', 'Kindle'].map(t =>
-            `<button onclick="quickSearch('${t}')" class="quick-tag">${t}</button>`
-          ).join('')}
+        <!-- Populares — marquee animado -->
+        <div class="hero-tags-marquee-wrapper">
+          <div class="hero-tags-marquee">
+            <div class="hero-tags-marquee-track">
+              ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV', 'iPad', 'Geladeira', 'MacBook', 'Xbox Series', 'Monitor', 'Headphone', 'Kindle', 'iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV', 'iPad', 'Geladeira', 'MacBook', 'Xbox Series', 'Monitor', 'Headphone', 'Kindle'].map(t =>
+                `<button onclick="quickSearch('${t}')" class="quick-tag">${t}</button>`
+              ).join('')}
+            </div>
+          </div>
         </div>
 
       </div>
     </section>
 
     <script>
-    /* ── FitHero: ajusta H1 e subtítulo para terem EXATAMENTE a largura da search bar ── */
+    /* ── FitHero: ajusta H1 e sub para ficarem com EXATAMENTE a largura da search bar ──
+       Técnica: clona o elemento em position:fixed fora da tela (sem overflow:hidden)
+       para medir o scrollWidth real do texto a cada font-size testado (busca binária) */
     (function fitHero() {
+
+      function measureText(el, fs) {
+        /* cria um clone invisível e sem overflow para medir o texto real */
+        var clone = el.cloneNode(true);
+        clone.style.cssText = [
+          'position:fixed', 'top:-9999px', 'left:-9999px',
+          'white-space:nowrap', 'overflow:visible', 'visibility:hidden',
+          'font-size:' + fs + 'px', 'width:auto', 'max-width:none',
+          'display:inline-block', 'pointer-events:none'
+        ].join(';');
+        document.body.appendChild(clone);
+        var w = clone.getBoundingClientRect().width;
+        document.body.removeChild(clone);
+        return w;
+      }
+
+      function fitEl(el, targetW, loFs, hiFs) {
+        var fs = hiFs, lo = loFs, hi = hiFs;
+        for (var i = 0; i < 30; i++) {
+          fs = (lo + hi) / 2;
+          var w = measureText(el, fs);
+          if (Math.abs(w - targetW) < 0.3) break;
+          if (w < targetW) lo = fs; else hi = fs;
+        }
+        /* aplica fs final com 0.5px de margem de segurança */
+        el.style.fontSize = (fs - 0.5) + 'px';
+      }
+
       function adjust() {
         var wrap = document.querySelector('.hero-search-wrap');
         var h1   = document.querySelector('.hero-h1');
@@ -230,41 +263,25 @@ app.get('/', async (c) => {
         if (!wrap || !h1 || !sub) return;
 
         var targetW = wrap.getBoundingClientRect().width;
-        if (targetW < 100) return;
+        if (targetW < 80) return;
 
-        /* ── H1: busca binária do font-size que faz scrollWidth == targetW ── */
+        /* remove qualquer font-size inline anterior para partir do CSS */
         h1.style.fontSize  = '';
-        h1.style.whiteSpace = 'nowrap';
-        var lo = 8, hi = 120, fsH1 = 16;
-        for (var i = 0; i < 24; i++) {
-          fsH1 = (lo + hi) / 2;
-          h1.style.fontSize = fsH1 + 'px';
-          var w = h1.scrollWidth;
-          if (Math.abs(w - targetW) < 0.5) break;
-          if (w < targetW) lo = fsH1; else hi = fsH1;
-        }
-        /* aplica com 1px de folga para o ponto final não ser cortado */
-        h1.style.fontSize = (fsH1 - 1) + 'px';
+        sub.style.fontSize = '';
 
-        /* ── Subtítulo: mesmo raciocínio ── */
-        sub.style.fontSize  = '';
-        sub.style.whiteSpace = 'nowrap';
-        lo = 6; hi = 60; var fsSub = 14;
-        for (var j = 0; j < 24; j++) {
-          fsSub = (lo + hi) / 2;
-          sub.style.fontSize = fsSub + 'px';
-          var ws = sub.scrollWidth;
-          if (Math.abs(ws - targetW) < 0.5) break;
-          if (ws < targetW) lo = fsSub; else hi = fsSub;
-        }
-        sub.style.fontSize = (fsSub - 0.5) + 'px';
+        fitEl(h1,  targetW, 8,  120);
+        fitEl(sub, targetW, 6,  60);
       }
 
-      /* roda no load e em todo resize */
       if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function() { adjust(); setTimeout(adjust, 100); });
+        document.addEventListener('DOMContentLoaded', function() {
+          adjust();
+          /* segunda passagem após fontes carregarem */
+          setTimeout(adjust, 300);
+        });
       } else {
-        adjust(); setTimeout(adjust, 100);
+        adjust();
+        setTimeout(adjust, 300);
       }
       window.addEventListener('resize', adjust);
     })();
