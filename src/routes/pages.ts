@@ -773,14 +773,19 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
     <nav class="border-t border-gray-100 bg-white hidden md:block" id="cat-subnav">
       <div class="max-w-7xl mx-auto px-4">
         <div class="flex items-center gap-0.5 overflow-x-auto scrollbar-hide h-10">
-          <a href="/categoria/smartphones"   class="subnav-link">📱 Celulares</a>
-          <a href="/categoria/notebooks"     class="subnav-link">💻 Notebooks</a>
-          <a href="/categoria/tv"            class="subnav-link">📺 TVs</a>
-          <a href="/categoria/games"         class="subnav-link">🎮 Games</a>
-          <a href="/categoria/eletrodomesticos" class="subnav-link">🏠 Eletrodomésticos</a>
-          <a href="/categoria/audio"         class="subnav-link">🎧 Áudio</a>
-          <a href="/categoria/cameras"       class="subnav-link">📷 Câmeras</a>
-          <a href="/categoria/moda"          class="subnav-link">👗 Moda</a>
+          ${(opts.navCategories && opts.navCategories.length > 0
+            ? opts.navCategories
+            : [
+                { slug: 'smartphones',      icon: '📱', name: 'Celulares' },
+                { slug: 'notebooks',        icon: '💻', name: 'Notebooks' },
+                { slug: 'tv',               icon: '📺', name: 'TVs' },
+                { slug: 'games',            icon: '🎮', name: 'Games' },
+                { slug: 'eletrodomesticos', icon: '🏠', name: 'Eletrodomésticos' },
+                { slug: 'audio',            icon: '🎧', name: 'Áudio' },
+                { slug: 'cameras',          icon: '📷', name: 'Câmeras' },
+                { slug: 'moda',             icon: '👗', name: 'Moda' },
+              ]
+          ).map(cat => `<a href="/categoria/${cat.slug}" class="subnav-link">${cat.icon || ''} ${cat.name}</a>`).join('')}
           <div class="h-5 w-px bg-gray-200 mx-1 shrink-0"></div>
           <a href="/ofertas" class="subnav-link subnav-hot">🔥 Ofertas do Dia</a>
         </div>
@@ -804,10 +809,19 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
         <div>
           <div class="text-white font-semibold mb-3">Categorias</div>
           <ul class="space-y-2 text-sm">
-            <li><a href="/categoria/smartphones" class="hover:text-white">Smartphones</a></li>
-            <li><a href="/categoria/notebooks" class="hover:text-white">Notebooks</a></li>
-            <li><a href="/categoria/tv" class="hover:text-white">TVs</a></li>
-            <li><a href="/categoria/games" class="hover:text-white">Games</a></li>
+            ${(opts.navCategories && opts.navCategories.length > 0
+              ? opts.navCategories.slice(0, 8)
+              : [
+                  { slug: 'smartphones',      name: 'Smartphones' },
+                  { slug: 'notebooks',        name: 'Notebooks' },
+                  { slug: 'tv',               name: 'TVs' },
+                  { slug: 'games',            name: 'Games' },
+                  { slug: 'eletrodomesticos', name: 'Eletrodomésticos' },
+                  { slug: 'audio',            name: 'Áudio' },
+                  { slug: 'cameras',          name: 'Câmeras' },
+                  { slug: 'moda',             name: 'Moda' },
+                ]
+            ).map(cat => `<li><a href="/categoria/${cat.slug}" class="hover:text-white">${cat.name}</a></li>`).join('')}
           </ul>
         </div>
         <div>
