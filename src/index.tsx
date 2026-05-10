@@ -135,6 +135,22 @@ app.get('/', async (c) => {
   const dbStores    = storesResult.results     as any[]
   const editorials  = editorialResult.results  as any[]
 
+  // Auto-refresh: se editorial expirou ou não existe, regenera em background (waitUntil)
+  // Isso faz o sistema ser autônomo — sem cron externo, sem API externa
+  const editorialExpired = editorials.length === 0 ||
+    (editorials[0]?.valid_until && new Date(editorials[0].valid_until) < new Date())
+  if (editorialExpired) {
+    // Dispara regeneração em background via fetch interno (não bloqueia a resposta ao usuário)
+    const host = c.req.header('host') || 'localhost:3000'
+    const proto = host.includes('localhost') ? 'http' : 'https'
+    c.executionCtx.waitUntil(
+      fetch(`${proto}://${host}/api/editorial/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      }).catch(() => {/* silencioso */})
+    )
+  }
+
   // Extrai slots editoriais por nome
   const eBannerMain = editorials.find((e: any) => e.slot === 'banner_main')
   const eBannerSec1 = editorials.find((e: any) => e.slot === 'banner_sec1')
