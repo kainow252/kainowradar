@@ -76,6 +76,7 @@ pages.get('/produto/:slug', async (c) => {
   }
 
   if (!product) {
+    const { results: navCatsNotFound } = await DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>()
     return c.html(renderLayout('Produto não encontrado', `
       <div class="max-w-4xl mx-auto px-4 py-16 text-center">
         <div class="text-6xl mb-4">😕</div>
@@ -83,7 +84,7 @@ pages.get('/produto/:slug', async (c) => {
         <p class="text-gray-500 mb-6">O produto que você procura pode ter sido removido.</p>
         <a href="/" class="btn-primary">Voltar ao início</a>
       </div>
-    `), 404)
+    `, { navCategories: navCatsNotFound }), 404)
   }
 
   // Busca histórico + relacionados em paralelo
@@ -395,11 +396,13 @@ pages.get('/produto/:slug', async (c) => {
   `
 
   // SEO extra: injeta meta tags OG + JSON-LD via opts
+  const { results: navCatsProduto } = await DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>()
   return c.html(renderLayout(seoTitle, content, {
     description: seoDesc,
     ogImage: seoImg,
     canonical: seoUrl,
     jsonLd,
+    navCategories: navCatsProduto,
   }))
 })
 
@@ -416,15 +419,15 @@ pages.get('/categoria/:slug', async (c) => {
   const offset = (page - 1) * 24
   const orderBy = sort === 'price_asc' ? 'p.best_price ASC' : sort === 'price_desc' ? 'p.best_price DESC' : 'p.offer_count DESC'
 
-  const { results: products } = await DB
-    .prepare(`
+  const [{ results: products }, { results: navCatsCategoria }] = await Promise.all([
+    DB.prepare(`
       SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
       FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
       WHERE p.category = ? AND p.is_active = 1 AND p.best_price IS NOT NULL
       ORDER BY ${orderBy} LIMIT 24 OFFSET ?
-    `)
-    .bind(slug, offset)
-    .all<Product>()
+    `).bind(slug, offset).all<Product>(),
+    DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>(),
+  ])
 
   const content = `
     <div class="max-w-7xl mx-auto px-4 py-8">
@@ -442,7 +445,7 @@ pages.get('/categoria/:slug', async (c) => {
       <div class="product-grid">${products.map(renderProductCard).join('')}</div>
     </div>
   `
-  return c.html(renderLayout(`${catName} — Melhores Preços | Shopping`, content))
+  return c.html(renderLayout(`${catName} — Melhores Preços | Shopping`, content, { navCategories: navCatsCategoria }))
 })
 
 // ── Helpers ───────────────────────────────────────────────
@@ -480,7 +483,7 @@ function renderProductCard(p: Product): string {
   `
 }
 
-export function renderLayout(title: string, content: string, opts: { hideHeader?: boolean; description?: string; ogImage?: string; canonical?: string; jsonLd?: string } = {}): string {
+export function renderLayout(title: string, content: string, opts: { hideHeader?: boolean; description?: string; ogImage?: string; canonical?: string; jsonLd?: string; navCategories?: { name: string; slug: string; icon?: string }[] } = {}): string {
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -584,30 +587,23 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
       <div class="px-3 pt-2 pb-1">
         <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-3 mb-2">Categorias</p>
         <nav class="space-y-0.5">
-          <a href="/categoria/smartphones" onclick="closeHamburger()" class="mob-menu-link">
-            <span class="mob-menu-icon">📱</span> Celulares
-          </a>
-          <a href="/categoria/notebooks" onclick="closeHamburger()" class="mob-menu-link">
-            <span class="mob-menu-icon">💻</span> Notebooks
-          </a>
-          <a href="/categoria/tv" onclick="closeHamburger()" class="mob-menu-link">
-            <span class="mob-menu-icon">📺</span> TVs
-          </a>
-          <a href="/categoria/games" onclick="closeHamburger()" class="mob-menu-link">
-            <span class="mob-menu-icon">🎮</span> Games
-          </a>
-          <a href="/categoria/eletrodomesticos" onclick="closeHamburger()" class="mob-menu-link">
-            <span class="mob-menu-icon">🏠</span> Eletrodomésticos
-          </a>
-          <a href="/categoria/audio" onclick="closeHamburger()" class="mob-menu-link">
-            <span class="mob-menu-icon">🎧</span> Áudio
-          </a>
-          <a href="/categoria/cameras" onclick="closeHamburger()" class="mob-menu-link">
-            <span class="mob-menu-icon">📷</span> Câmeras
-          </a>
-          <a href="/categoria/moda" onclick="closeHamburger()" class="mob-menu-link">
-            <span class="mob-menu-icon">👗</span> Moda
-          </a>
+          ${(opts.navCategories && opts.navCategories.length > 0
+            ? opts.navCategories
+            : [
+                { slug: 'smartphones',     icon: '📱', name: 'Celulares' },
+                { slug: 'notebooks',       icon: '💻', name: 'Notebooks' },
+                { slug: 'tv',              icon: '📺', name: 'TVs' },
+                { slug: 'games',           icon: '🎮', name: 'Games' },
+                { slug: 'eletrodomesticos',icon: '🏠', name: 'Eletrodomésticos' },
+                { slug: 'audio',           icon: '🎧', name: 'Áudio' },
+                { slug: 'cameras',         icon: '📷', name: 'Câmeras' },
+                { slug: 'moda',            icon: '👗', name: 'Moda' },
+              ]
+          ).map(cat => `
+            <a href="/categoria/${cat.slug}" onclick="closeHamburger()" class="mob-menu-link">
+              <span class="mob-menu-icon">${cat.icon || '🛍️'}</span> ${cat.name}
+            </a>
+          `).join('')}
         </nav>
       </div>
 
@@ -900,6 +896,7 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
 
 // ── Página: Meus Alertas ──────────────────────────────────
 pages.get('/meus-alertas', async (c) => {
+  const { DB } = c.env
   const email = c.req.query('email') || ''
 
   const content = `
@@ -987,8 +984,10 @@ pages.get('/meus-alertas', async (c) => {
     }
   </script>`
 
+  const { results: navCatsAlertas } = await DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>()
   return c.html(renderLayout('Meus Alertas de Preço', content, {
     description: 'Gerencie seus alertas de preço. Receba emails quando o produto baixar de preço.',
+    navCategories: navCatsAlertas,
   }))
 })
 

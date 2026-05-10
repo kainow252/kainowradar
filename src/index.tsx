@@ -469,7 +469,7 @@ app.get('/', async (c) => {
 
   const content = heroHTML + storesHTML + bannerHTML + searchResultsHTML + dealsHTML + featuredHTML + howHTML
 
-  return c.html(renderLayout('ShoppingCompare — Compare preços e economize', content))
+  return c.html(renderLayout('ShoppingCompare — Compare preços e economize', content, { navCategories: categories }))
 })
 
 // ── 404 ───────────────────────────────────────────────────
