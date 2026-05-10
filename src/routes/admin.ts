@@ -322,6 +322,99 @@ admin.get('/api/api-configs', async (c) => {
   return c.json(results)
 })
 
+// ── POST /admin/api/api-configs/seed — Garante todas as redes no banco ─────
+// Insere todas as redes do AFFILIATE_NETWORKS com INSERT OR IGNORE (idempotente)
+admin.post('/api/api-configs/seed', async (c) => {
+  const { DB } = c.env
+  const networks = [
+    { id: 'amazon',      name: 'Amazon Associados',        network: 'amazon-pa-api',      commission_rate: 5.0  },
+    { id: 'mercadolivre',name: 'Mercado Livre Afiliados',  network: 'meli-api',           commission_rate: 8.0  },
+    { id: 'magalu',      name: 'Magalu Parceiro',          network: 'magalu-api',         commission_rate: 7.0  },
+    { id: 'shopee',      name: 'Shopee Afiliados',         network: 'shopee-api',         commission_rate: 6.0  },
+    { id: 'shein',       name: 'Shein Afiliados',          network: 'shein-api',          commission_rate: 15.0 },
+    { id: 'aliexpress',  name: 'AliExpress Portals',       network: 'aliexpress-portals', commission_rate: 6.0  },
+    { id: 'dafiti',      name: 'Dafiti Afiliados',         network: 'dafiti-api',         commission_rate: 7.0  },
+    { id: 'hotmart',     name: 'Hotmart',                  network: 'hotmart-api',        commission_rate: 40.0 },
+    { id: 'eduzz',       name: 'Eduzz',                    network: 'eduzz-api',          commission_rate: 40.0 },
+    { id: 'monetizze',   name: 'Monetizze',                network: 'monetizze-api',      commission_rate: 35.0 },
+    { id: 'braip',       name: 'Braip',                    network: 'braip-api',          commission_rate: 30.0 },
+    { id: 'socialsoul',  name: 'SocialSoul / Lomadee',     network: 'lomadee',            commission_rate: 8.0  },
+    { id: 'awin',        name: 'Awin',                     network: 'awin',               commission_rate: 5.0  },
+    { id: 'rakuten',     name: 'Rakuten Advertising',      network: 'rakuten',            commission_rate: 5.0  },
+    { id: 'hostinger',   name: 'Hostinger',                network: 'hostinger-api',      commission_rate: 50.0 },
+    { id: 'shopify',     name: 'Shopify Partners',         network: 'shopify-partners',   commission_rate: 20.0 },
+    { id: 'nuvemshop',   name: 'Nuvemshop / Tiendanube',  network: 'nuvemshop-api',      commission_rate: 25.0 },
+    { id: 'nestle',      name: 'Nestlé',                   network: 'nestle-api',         commission_rate: 3.0  },
+  ]
+  let inserted = 0
+  for (const n of networks) {
+    const r = await DB.prepare(`
+      INSERT OR IGNORE INTO api_configs (id, name, network, commission_rate, is_active, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).bind(n.id, n.name, n.network, n.commission_rate).run()
+    if (r.meta?.changes > 0) inserted++
+  }
+  return c.json({ ok: true, inserted, total: networks.length })
+})
+
+// ── PUT /admin/api/api-configs/by-network/:network — Upsert por network ─────
+// Permite salvar config mesmo quando o id não está disponível no frontend
+admin.put('/api/api-configs/by-network/:network', async (c) => {
+  const { DB } = c.env
+  const network = c.req.param('network')
+  const body = await c.req.json()
+  const { api_key, client_id, client_secret, partner_tag, is_active, rate_limit_per_min, commission_rate, logo_url } = body
+
+  // Verifica se existe
+  const existing = await DB.prepare('SELECT id FROM api_configs WHERE network = ?').bind(network).first<{ id: string }>()
+  if (!existing) {
+    return c.json({ error: 'Rede não encontrada — execute o seed primeiro' }, 404)
+  }
+
+  await DB.prepare(`
+    UPDATE api_configs SET
+      api_key        = CASE WHEN ? IS NOT NULL THEN ? ELSE api_key END,
+      client_id      = CASE WHEN ? IS NOT NULL THEN ? ELSE client_id END,
+      client_secret  = CASE WHEN ? IS NOT NULL THEN ? ELSE client_secret END,
+      partner_tag    = CASE WHEN ? IS NOT NULL THEN ? ELSE partner_tag END,
+      is_active      = CASE WHEN ? IS NOT NULL THEN ? ELSE is_active END,
+      rate_limit_per_min = CASE WHEN ? IS NOT NULL THEN ? ELSE rate_limit_per_min END,
+      commission_rate    = CASE WHEN ? IS NOT NULL THEN ? ELSE commission_rate END,
+      logo_url       = CASE WHEN ? IS NOT NULL THEN ? ELSE logo_url END,
+      updated_at     = CURRENT_TIMESTAMP
+    WHERE network = ?
+  `).bind(
+    api_key ?? null, api_key ?? null,
+    client_id ?? null, client_id ?? null,
+    client_secret ?? null, client_secret ?? null,
+    partner_tag ?? null, partner_tag ?? null,
+    is_active ?? null, is_active ?? null,
+    rate_limit_per_min ?? null, rate_limit_per_min ?? null,
+    commission_rate ?? null, commission_rate ?? null,
+    logo_url ?? null, logo_url ?? null,
+    network
+  ).run()
+
+  return c.json({ ok: true })
+})
+
+// ── PUT /admin/api/api-configs/by-network/:network/toggle — Toggle por network ─
+admin.put('/api/api-configs/by-network/:network/toggle', async (c) => {
+  const { DB } = c.env
+  const network = c.req.param('network')
+  const body = await c.req.json().catch(() => ({}))
+
+  const current = await DB.prepare('SELECT id, is_active FROM api_configs WHERE network = ?')
+    .bind(network).first<{ id: string; is_active: number }>()
+  if (!current) return c.json({ error: 'Rede não encontrada' }, 404)
+
+  const newActive = typeof body.active !== 'undefined' ? (body.active ? 1 : 0) : (current.is_active === 1 ? 0 : 1)
+  await DB.prepare('UPDATE api_configs SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE network = ?')
+    .bind(newActive, network).run()
+
+  return c.json({ ok: true, is_active: newActive })
+})
+
 // ── PATCH /admin/api/api-configs/:id — Atualiza config ───
 admin.patch('/api/api-configs/:id', async (c) => {
   const { DB } = c.env
@@ -1457,6 +1550,9 @@ const AFFILIATE_NETWORKS = [
 const AFFILIATE_GROUPS = ['Marketplaces', 'Infoprodutos', 'Redes Multimarcas', 'Tecnologia & SaaS', 'Outros']
 
 async function renderApiConfigs(area) {
+  // Garante que todos os 18 registros existam no banco (idempotente)
+  await api('POST', '/admin/api/api-configs/seed').catch(() => {})
+
   const dbData = await api('GET', '/admin/api/api-configs')
   if (!dbData) return
 
@@ -1795,28 +1891,20 @@ async function saveAffConfig(network, fields) {
   if (commEl && commEl.value) body.commission_rate = parseFloat(commEl.value)
   if (logoEl && logoEl.value.trim()) body.logo_url = logoEl.value.trim()
 
-  // Busca o id da config no banco pelo network
-  const all = await api('GET', '/admin/api/api-configs')
-  const existing = (all || []).find(c => c.network === network)
-  if (existing) {
-    await api('PATCH', \`/admin/api/api-configs/\${existing.id}\`, body)
+  // Usa rota por network — funciona para todas as 18 redes independente do id
+  const res = await api('PUT', \`/admin/api/api-configs/by-network/\${network}\`, body)
+  if (res && res.ok) {
+    toast('Configuração salva ✓', 'success')
+  } else {
+    toast('Erro ao salvar — tente novamente', 'error')
   }
-  toast('Configuração salva ✓', 'success')
   closeModal()
   renderApiConfigs(document.getElementById('content-area'))
 }
 
 async function toggleAffNetwork(network, configId, active) {
-  if (configId && configId !== 'null') {
-    await api('PATCH', \`/admin/api/api-configs/\${configId}/toggle\`, { active })
-  } else {
-    // Busca o id pelo network
-    const all = await api('GET', '/admin/api/api-configs')
-    const existing = (all || []).find(c => c.network === network)
-    if (existing) {
-      await api('PATCH', \`/admin/api/api-configs/\${existing.id}/toggle\`, { active })
-    }
-  }
+  // Usa rota por network — não depende do configId estar no banco
+  await api('PUT', \`/admin/api/api-configs/by-network/\${network}/toggle\`, { active })
   toast(active ? '✓ Integração ativada' : 'Integração desativada', active ? 'success' : 'info')
   renderApiConfigs(document.getElementById('content-area'))
 }
