@@ -665,6 +665,78 @@ admin.get('/api/clicks', async (c) => {
   return c.json({ byDay: byDay.results, byStore: byStore.results, byProduct: byProduct.results })
 })
 
+// ── GET /admin/api/footer-config ─────────────────────────
+admin.get('/api/footer-config', async (c) => {
+  const { DB } = c.env
+  try {
+    const { results } = await DB.prepare(
+      `SELECT section, key, value, is_visible, sort_order FROM footer_config ORDER BY section, sort_order ASC`
+    ).all<any>()
+    return c.json({ ok: true, rows: results || [] })
+  } catch {
+    return c.json({ ok: false, rows: [], error: 'Tabela footer_config não encontrada. Execute a migration 0016.' }, 200)
+  }
+})
+
+// ── PUT /admin/api/footer-config/:section/:key ────────────
+admin.put('/api/footer-config/:section/:key', async (c) => {
+  const { DB } = c.env
+  const section = c.req.param('section')
+  const key     = decodeURIComponent(c.req.param('key'))
+  const body    = await c.req.json().catch(() => ({})) as any
+
+  const value      = body.value      !== undefined ? String(body.value) : null
+  const is_visible = body.is_visible !== undefined ? (body.is_visible ? 1 : 0) : 1
+  const sort_order = body.sort_order !== undefined ? Number(body.sort_order) : 0
+
+  await DB.prepare(`
+    INSERT INTO footer_config (section, key, value, is_visible, sort_order, updated_at)
+    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(section, key) DO UPDATE SET
+      value      = excluded.value,
+      is_visible = excluded.is_visible,
+      sort_order = excluded.sort_order,
+      updated_at = CURRENT_TIMESTAMP
+  `).bind(section, key, value, is_visible, sort_order).run()
+
+  return c.json({ ok: true, section, key })
+})
+
+// ── DELETE /admin/api/footer-config/:section/:key ─────────
+admin.delete('/api/footer-config/:section/:key', async (c) => {
+  const { DB } = c.env
+  const section = c.req.param('section')
+  const key     = decodeURIComponent(c.req.param('key'))
+  await DB.prepare(`DELETE FROM footer_config WHERE section = ? AND key = ?`).bind(section, key).run()
+  return c.json({ ok: true })
+})
+
+// ── POST /admin/api/footer-config/:section — adiciona item ─
+admin.post('/api/footer-config/:section', async (c) => {
+  const { DB } = c.env
+  const section = c.req.param('section')
+  const body    = await c.req.json().catch(() => ({})) as any
+
+  const key        = String(body.key || '').trim()
+  const value      = body.value !== undefined ? String(body.value) : null
+  const is_visible = body.is_visible !== undefined ? (body.is_visible ? 1 : 0) : 1
+  const sort_order = body.sort_order !== undefined ? Number(body.sort_order) : 99
+
+  if (!key) return c.json({ error: 'key é obrigatório' }, 400)
+
+  await DB.prepare(`
+    INSERT INTO footer_config (section, key, value, is_visible, sort_order, updated_at)
+    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(section, key) DO UPDATE SET
+      value      = excluded.value,
+      is_visible = excluded.is_visible,
+      sort_order = excluded.sort_order,
+      updated_at = CURRENT_TIMESTAMP
+  `).bind(section, key, value, is_visible, sort_order).run()
+
+  return c.json({ ok: true, section, key })
+})
+
 // ── Página HTML do Admin (SPA) ────────────────────────────
 admin.get('*', async (c) => {
   const path = new URL(c.req.url).pathname
@@ -810,6 +882,9 @@ function renderAdminSPA(): string {
       </div>
       <div onclick="showSection('editorial')" class="sidebar-link" data-section="editorial">
         <span class="text-lg">🤖</span> IA Editorial
+      </div>
+      <div onclick="showSection('footer')" class="sidebar-link" data-section="footer">
+        <span class="text-lg">🦶</span> Rodapé do Site
       </div>
       <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Análise</div>
       <div onclick="showSection('analytics')" class="sidebar-link" data-section="analytics">
@@ -961,6 +1036,7 @@ async function loadSection(name) {
     'api-configs': ['APIs & Feeds', 'Configurar integrações e chaves de API'],
     queue: ['Fila de Preços', 'Jobs pendentes de atualização cirúrgica'],
     editorial: ['🤖 IA Editorial', 'Motor de destaques automáticos — analisa D1 e gera banners'],
+    footer:    ['🦶 Rodapé do Site', 'Editar textos, lojas parceiras e links de informações'],
     analytics: ['Analytics', 'Cliques, conversões e performance'],
     users: ['Usuários', 'Gerenciar clientes e membros'],
   }
@@ -976,6 +1052,7 @@ async function loadSection(name) {
     stores: renderStores,
     'api-configs': renderApiConfigs,
     editorial: renderEditorial,
+    footer: renderFooterAdmin,
     queue: renderQueue,
     analytics: renderAnalytics,
     users: renderUsers,
@@ -2303,6 +2380,362 @@ async function forceGenerateEditorial() {
   } else {
     toast(res?.message || 'Erro ao gerar destaques', 'error')
     if (btn) { btn.disabled = false; btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Gerar agora' }
+  }
+}
+
+// ── FOOTER ADMIN PANEL ────────────────────────────────────
+async function renderFooterAdmin(area) {
+  area.innerHTML = spin
+
+  const data = await api('GET', '/admin/api/footer-config')
+  if (!data) return
+
+  const rows = data.rows || []
+  const bySection = (s) => rows.filter(r => r.section === s).sort((a, b) => a.sort_order - b.sort_order)
+
+  const brand   = bySection('brand')
+  const stores  = bySection('stores')
+  const info    = bySection('info')
+  const bottom  = bySection('bottom')
+
+  const bGet = (k) => brand.find(r => r.key === k)?.value || ''
+
+  const noDataWarning = rows.length === 0 ? \`
+    <div class="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800 flex items-center gap-2 mb-6">
+      <span class="text-lg">⚠️</span>
+      <span>Tabela <code class="bg-amber-100 px-1 rounded font-mono">footer_config</code> não encontrada ou vazia.
+      Execute a migration 0016: <code class="bg-amber-100 px-1 rounded font-mono">npx wrangler d1 migrations apply webapp-production</code></span>
+    </div>
+  \` : ''
+
+  area.innerHTML = \`
+    <div class="section">
+      \${noDataWarning}
+
+      <!-- Prévia -->
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h3 class="font-bold text-slate-800">🦶 Rodapé do Site</h3>
+            <p class="text-xs text-slate-500 mt-0.5">Edite cada seção abaixo. As alterações ficam ativas imediatamente no site.</p>
+          </div>
+          <a href="/" target="_blank" class="text-xs text-blue-600 hover:underline flex items-center gap-1">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            Ver site
+          </a>
+        </div>
+        <!-- Prévia visual do footer -->
+        <div class="bg-gray-900 text-gray-400 px-5 py-6 text-xs">
+          <div class="grid grid-cols-4 gap-6 mb-4">
+            <div>
+              <div class="text-white font-bold mb-2 text-sm">\${bGet('site_name') || 'KainowRadar'}</div>
+              <p class="leading-relaxed opacity-70">\${(bGet('tagline') || '').slice(0, 60)}\${(bGet('tagline') || '').length > 60 ? '…' : ''}</p>
+            </div>
+            <div>
+              <div class="text-white font-semibold mb-2">Categorias</div>
+              <div class="opacity-70">Smartphones · Notebooks · TVs…</div>
+            </div>
+            <div>
+              <div class="text-white font-semibold mb-2">Lojas Parceiras</div>
+              <div class="space-y-1">
+                \${stores.filter(s => s.is_visible).slice(0, 4).map(s => \`<div class="opacity-70">\${s.key}</div>\`).join('') || '<div class="opacity-70">Amazon · Magalu…</div>'}
+              </div>
+            </div>
+            <div>
+              <div class="text-white font-semibold mb-2">Informações</div>
+              <div class="space-y-1">
+                \${info.filter(i => i.is_visible).slice(0, 4).map(i => \`<div class="opacity-70">\${i.key}</div>\`).join('') || '<div class="opacity-70">Sobre · Privacidade…</div>'}
+              </div>
+            </div>
+          </div>
+          <div class="border-t border-gray-700 pt-3 text-gray-600 text-center text-xs truncate">
+            \${(bottom.find(b => b.key === 'disclaimer')?.value || '').slice(0, 80)}…
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ SEÇÃO: MARCA ═══ -->
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 bg-gradient-to-r from-blue-50 to-white">
+          <h3 class="font-bold text-slate-800 flex items-center gap-2">
+            <span class="w-7 h-7 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center text-sm">🏷️</span>
+            Marca
+          </h3>
+          <p class="text-xs text-slate-500 mt-0.5">Nome do site e tagline exibidos no rodapé</p>
+        </div>
+        <div class="p-5 space-y-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">Nome do site</label>
+            <div class="flex gap-2">
+              <input id="brand-site_name" class="input flex-1" value="\${escHtml(bGet('site_name') || 'KainowRadar')}" placeholder="KainowRadar">
+              <button onclick="saveFooterField('brand','site_name',document.getElementById('brand-site_name').value)" class="btn-primary flex-shrink-0">Salvar</button>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">Tagline</label>
+            <div class="flex gap-2">
+              <textarea id="brand-tagline" class="input flex-1 resize-none" rows="2" placeholder="Seu radar inteligente de ofertas…">\${escHtml(bGet('tagline') || '')}</textarea>
+              <button onclick="saveFooterField('brand','tagline',document.getElementById('brand-tagline').value)" class="btn-primary flex-shrink-0 self-start">Salvar</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ SEÇÃO: LOJAS PARCEIRAS ═══ -->
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 bg-gradient-to-r from-green-50 to-white flex items-center justify-between">
+          <div>
+            <h3 class="font-bold text-slate-800 flex items-center gap-2">
+              <span class="w-7 h-7 bg-green-100 text-green-600 rounded-lg flex items-center justify-center text-sm">🏪</span>
+              Lojas Parceiras
+            </h3>
+            <p class="text-xs text-slate-500 mt-0.5">Controle visibilidade individual e adicione novas lojas</p>
+          </div>
+          <button onclick="openAddFooterModal('stores','Loja','URL da categoria')" class="btn-primary text-xs">
+            + Adicionar loja
+          </button>
+        </div>
+        <div class="divide-y divide-slate-50" id="footer-stores-list">
+          \${stores.length > 0 ? stores.map((s, idx) => footerStoreRow(s, idx, stores.length)).join('') : '<div class="px-5 py-4 text-sm text-slate-400">Nenhuma loja configurada. Adicione abaixo.</div>'}
+        </div>
+      </div>
+
+      <!-- ═══ SEÇÃO: INFORMAÇÕES ═══ -->
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 bg-gradient-to-r from-purple-50 to-white flex items-center justify-between">
+          <div>
+            <h3 class="font-bold text-slate-800 flex items-center gap-2">
+              <span class="w-7 h-7 bg-purple-100 text-purple-600 rounded-lg flex items-center justify-center text-sm">🔗</span>
+              Informações
+            </h3>
+            <p class="text-xs text-slate-500 mt-0.5">Links da coluna de informações do rodapé</p>
+          </div>
+          <button onclick="openAddFooterModal('info','Label do link','URL (ex: /sobre)')" class="btn-primary text-xs">
+            + Adicionar link
+          </button>
+        </div>
+        <div class="divide-y divide-slate-50" id="footer-info-list">
+          \${info.length > 0 ? info.map((i, idx) => footerInfoRow(i, idx, info.length)).join('') : '<div class="px-5 py-4 text-sm text-slate-400">Nenhum link configurado.</div>'}
+        </div>
+      </div>
+
+      <!-- ═══ SEÇÃO: RODAPÉ INFERIOR ═══ -->
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
+          <h3 class="font-bold text-slate-800 flex items-center gap-2">
+            <span class="w-7 h-7 bg-slate-100 text-slate-600 rounded-lg flex items-center justify-center text-sm">📜</span>
+            Rodapé Inferior
+          </h3>
+          <p class="text-xs text-slate-500 mt-0.5">Texto de disclaimer e copyright</p>
+        </div>
+        <div class="p-5 space-y-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">Disclaimer (links de afiliados)</label>
+            <div class="flex gap-2">
+              <textarea id="bottom-disclaimer" class="input flex-1 resize-none" rows="3" placeholder="Este site usa links de afiliados…">\${escHtml(bottom.find(b => b.key === 'disclaimer')?.value || '')}</textarea>
+              <button onclick="saveFooterField('bottom','disclaimer',document.getElementById('bottom-disclaimer').value)" class="btn-primary flex-shrink-0 self-start">Salvar</button>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">Copyright</label>
+            <div class="flex gap-2">
+              <input id="bottom-copyright" class="input flex-1" value="\${escHtml(bottom.find(b => b.key === 'copyright')?.value || '')}" placeholder="© 2025 KainowRadar…">
+              <button onclick="saveFooterField('bottom','copyright',document.getElementById('bottom-copyright').value)" class="btn-primary flex-shrink-0">Salvar</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Modal para adicionar item -->
+    <div id="footer-add-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeFooterModal()"></div>
+      <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 z-10">
+        <h3 id="footer-modal-title" class="text-lg font-bold text-slate-800 mb-5">Adicionar item</h3>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5" id="footer-modal-label1">Nome / Label</label>
+            <input id="footer-modal-key" class="input" placeholder="">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5" id="footer-modal-label2">URL / Link</label>
+            <input id="footer-modal-value" class="input" placeholder="/categoria/exemplo">
+          </div>
+          <div class="flex items-center gap-2">
+            <input type="checkbox" id="footer-modal-visible" checked class="w-4 h-4 accent-blue-600">
+            <label for="footer-modal-visible" class="text-sm text-slate-600">Visível no rodapé</label>
+          </div>
+        </div>
+        <div class="flex gap-3 mt-6">
+          <button onclick="closeFooterModal()" class="btn-secondary flex-1">Cancelar</button>
+          <button onclick="confirmAddFooterItem()" class="btn-primary flex-1">Adicionar</button>
+        </div>
+      </div>
+    </div>
+  \`
+}
+
+function footerStoreRow(s, idx, total) {
+  const visClass = s.is_visible ? 'text-green-600 bg-green-50' : 'text-slate-400 bg-slate-100'
+  const visLabel = s.is_visible ? 'Visível' : 'Oculto'
+  return \`
+    <div class="flex items-center gap-3 px-5 py-3 hover:bg-slate-50 transition-colors" id="frow-stores-\${encodeURIComponent(s.key)}">
+      <label class="toggle-switch flex-shrink-0">
+        <input type="checkbox" \${s.is_visible ? 'checked' : ''} onchange="toggleFooterVisible('stores',\${JSON.stringify(s.key)},this.checked,\${s.sort_order})">
+        <span class="toggle-slider"></span>
+      </label>
+      <div class="flex-1 min-w-0">
+        <div class="text-sm font-medium text-slate-800 truncate">\${escHtml(s.key)}</div>
+        <div class="text-xs text-slate-400 truncate">\${escHtml(s.value || '#')}</div>
+      </div>
+      <span class="text-xs px-2 py-0.5 rounded-full font-medium \${visClass}">\${visLabel}</span>
+      <button onclick="editFooterStore(\${JSON.stringify(s.key)},\${JSON.stringify(s.value||'')},\${s.is_visible},\${s.sort_order})"
+        class="flex-shrink-0 p-1.5 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors" title="Editar">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+      </button>
+      <button onclick="deleteFooterItem('stores',\${JSON.stringify(s.key)})"
+        class="flex-shrink-0 p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Remover">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+      </button>
+    </div>
+  \`
+}
+
+function footerInfoRow(item, idx, total) {
+  const visClass = item.is_visible ? 'text-green-600 bg-green-50' : 'text-slate-400 bg-slate-100'
+  const visLabel = item.is_visible ? 'Visível' : 'Oculto'
+  return \`
+    <div class="flex items-center gap-3 px-5 py-3 hover:bg-slate-50 transition-colors">
+      <label class="toggle-switch flex-shrink-0">
+        <input type="checkbox" \${item.is_visible ? 'checked' : ''} onchange="toggleFooterVisible('info',\${JSON.stringify(item.key)},this.checked,\${item.sort_order})">
+        <span class="toggle-slider"></span>
+      </label>
+      <div class="flex-1 min-w-0">
+        <div class="text-sm font-medium text-slate-800 truncate">\${escHtml(item.key)}</div>
+        <div class="text-xs text-slate-400 truncate">\${escHtml(item.value || '#')}</div>
+      </div>
+      <span class="text-xs px-2 py-0.5 rounded-full font-medium \${visClass}">\${visLabel}</span>
+      <button onclick="editFooterInfo(\${JSON.stringify(item.key)},\${JSON.stringify(item.value||'')},\${item.is_visible},\${item.sort_order})"
+        class="flex-shrink-0 p-1.5 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors" title="Editar">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+      </button>
+      <button onclick="deleteFooterItem('info',\${JSON.stringify(item.key)})"
+        class="flex-shrink-0 p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Remover">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+      </button>
+    </div>
+  \`
+}
+
+// helpers JS para footer admin
+function escHtml(s) {
+  if (!s) return ''
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+}
+
+async function saveFooterField(section, key, value) {
+  const res = await api('PUT', \`/admin/api/footer-config/\${section}/\${encodeURIComponent(key)}\`, { value })
+  if (res?.ok) toast('✓ Salvo com sucesso', 'success')
+  else toast('Erro ao salvar', 'error')
+}
+
+async function toggleFooterVisible(section, key, visible, sort_order) {
+  await api('PUT', \`/admin/api/footer-config/\${section}/\${encodeURIComponent(key)}\`, { is_visible: visible, sort_order })
+  toast(visible ? '✓ Item visível' : 'Item ocultado', visible ? 'success' : 'info')
+}
+
+async function deleteFooterItem(section, key) {
+  if (!confirm(\`Remover "\${key}" do rodapé?\`)) return
+  const res = await api('DELETE', \`/admin/api/footer-config/\${section}/\${encodeURIComponent(key)}\`)
+  if (res?.ok) {
+    toast('✓ Item removido', 'info')
+    renderFooterAdmin(document.getElementById('content-area'))
+  } else toast('Erro ao remover', 'error')
+}
+
+// Estado do modal de adição
+let _footerModalSection = ''
+function openAddFooterModal(section, label1, label2) {
+  _footerModalSection = section
+  document.getElementById('footer-modal-title').textContent = section === 'stores' ? 'Adicionar Loja Parceira' : 'Adicionar Link'
+  document.getElementById('footer-modal-label1').textContent = label1
+  document.getElementById('footer-modal-label2').textContent = label2
+  document.getElementById('footer-modal-key').value = ''
+  document.getElementById('footer-modal-value').value = ''
+  document.getElementById('footer-modal-visible').checked = true
+  document.getElementById('footer-add-modal').classList.remove('hidden')
+  setTimeout(() => document.getElementById('footer-modal-key').focus(), 100)
+}
+
+function closeFooterModal() {
+  document.getElementById('footer-add-modal').classList.add('hidden')
+}
+
+async function confirmAddFooterItem() {
+  const key   = document.getElementById('footer-modal-key').value.trim()
+  const value = document.getElementById('footer-modal-value').value.trim()
+  const vis   = document.getElementById('footer-modal-visible').checked
+  if (!key) { toast('Preencha o nome / label', 'error'); return }
+  const res = await api('POST', \`/admin/api/footer-config/\${_footerModalSection}\`, {
+    key, value, is_visible: vis, sort_order: 99
+  })
+  if (res?.ok) {
+    toast('✓ Item adicionado', 'success')
+    closeFooterModal()
+    renderFooterAdmin(document.getElementById('content-area'))
+  } else toast('Erro ao adicionar', 'error')
+}
+
+// Edição inline de loja (reutiliza modal)
+function editFooterStore(key, value, is_visible, sort_order) {
+  _footerModalSection = 'stores'
+  document.getElementById('footer-modal-title').textContent = 'Editar Loja Parceira'
+  document.getElementById('footer-modal-label1').textContent = 'Nome da loja'
+  document.getElementById('footer-modal-label2').textContent = 'URL da categoria'
+  document.getElementById('footer-modal-key').value = key
+  document.getElementById('footer-modal-key').readOnly = true
+  document.getElementById('footer-modal-value').value = value
+  document.getElementById('footer-modal-visible').checked = !!is_visible
+  document.getElementById('footer-add-modal').classList.remove('hidden')
+  // troca botão para salvar edição
+  const btn = document.querySelector('#footer-add-modal [onclick="confirmAddFooterItem()"]')
+  if (btn) {
+    btn.onclick = async () => {
+      const newVal = document.getElementById('footer-modal-value').value.trim()
+      const newVis = document.getElementById('footer-modal-visible').checked
+      await api('PUT', \`/admin/api/footer-config/stores/\${encodeURIComponent(key)}\`, { value: newVal, is_visible: newVis, sort_order })
+      toast('✓ Loja atualizada', 'success')
+      closeFooterModal()
+      document.getElementById('footer-modal-key').readOnly = false
+      btn.onclick = confirmAddFooterItem
+      renderFooterAdmin(document.getElementById('content-area'))
+    }
+  }
+}
+
+function editFooterInfo(key, value, is_visible, sort_order) {
+  _footerModalSection = 'info'
+  document.getElementById('footer-modal-title').textContent = 'Editar Link'
+  document.getElementById('footer-modal-label1').textContent = 'Label do link'
+  document.getElementById('footer-modal-label2').textContent = 'URL'
+  document.getElementById('footer-modal-key').value = key
+  document.getElementById('footer-modal-key').readOnly = true
+  document.getElementById('footer-modal-value').value = value
+  document.getElementById('footer-modal-visible').checked = !!is_visible
+  document.getElementById('footer-add-modal').classList.remove('hidden')
+  const btn = document.querySelector('#footer-add-modal [onclick="confirmAddFooterItem()"]')
+  if (btn) {
+    btn.onclick = async () => {
+      const newVal = document.getElementById('footer-modal-value').value.trim()
+      const newVis = document.getElementById('footer-modal-visible').checked
+      await api('PUT', \`/admin/api/footer-config/info/\${encodeURIComponent(key)}\`, { value: newVal, is_visible: newVis, sort_order })
+      toast('✓ Link atualizado', 'success')
+      closeFooterModal()
+      document.getElementById('footer-modal-key').readOnly = false
+      btn.onclick = confirmAddFooterItem
+      renderFooterAdmin(document.getElementById('content-area'))
+    }
   }
 }
 

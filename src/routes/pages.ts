@@ -7,6 +7,95 @@ import type { Bindings, Product, Offer, Category } from '../types'
 import { CacheManager } from '../lib/cache'
 import { DeeplinkEngine } from '../lib/deeplink'
 
+// ── Tipos para Footer Dinâmico ────────────────────────────
+export type FooterConfigRow = {
+  section: string
+  key: string
+  value: string | null
+  is_visible: number
+  sort_order: number
+}
+
+export type FooterConfigData = {
+  brand: { site_name: string; tagline: string; show_logo: boolean }
+  stores: Array<{ name: string; url: string; visible: boolean }>
+  info: Array<{ label: string; url: string; visible: boolean }>
+  bottom: { disclaimer: string; copyright: string }
+}
+
+// ── Helper: carrega footer_config do D1 ──────────────────
+export async function loadFooterConfig(DB: D1Database): Promise<FooterConfigData> {
+  const FB: FooterConfigData = {
+    brand: {
+      site_name: 'KainowRadar',
+      tagline: 'Seu radar inteligente de ofertas. Encontre o menor preço nas maiores lojas do Brasil.',
+      show_logo: true,
+    },
+    stores: [
+      { name: 'Amazon',          url: '/categoria/smartphones', visible: true },
+      { name: 'Magazine Luiza',  url: '/categoria/notebooks',   visible: true },
+      { name: 'Mercado Livre',   url: '/categoria/tv',          visible: true },
+      { name: 'Americanas',      url: '/categoria/games',       visible: true },
+    ],
+    info: [
+      { label: 'Sobre',                   url: '#', visible: true },
+      { label: 'Política de Privacidade', url: '#', visible: true },
+      { label: 'Como funciona',           url: '#', visible: true },
+    ],
+    bottom: {
+      disclaimer: 'Este site usa links de afiliados. Podemos receber comissão nas compras realizadas através dos nossos links, sem custo adicional para você.',
+      copyright:  '© 2025 KainowRadar. Todos os direitos reservados.',
+    },
+  }
+
+  try {
+    const { results } = await DB.prepare(
+      `SELECT section, key, value, is_visible, sort_order FROM footer_config ORDER BY section, sort_order ASC`
+    ).all<FooterConfigRow>()
+
+    if (!results || results.length === 0) return FB
+
+    const bySection = (s: string) => results.filter(r => r.section === s)
+
+    // brand
+    const brandRows = bySection('brand')
+    const bGet = (k: string) => brandRows.find(r => r.key === k)
+    if (bGet('site_name')?.value) FB.brand.site_name = bGet('site_name')!.value!
+    if (bGet('tagline')?.value)   FB.brand.tagline   = bGet('tagline')!.value!
+    FB.brand.show_logo = (bGet('show_logo')?.value ?? '1') !== '0'
+
+    // stores
+    const storeRows = bySection('stores')
+    if (storeRows.length > 0) {
+      FB.stores = storeRows.map(r => ({
+        name:    r.key,
+        url:     r.value || '#',
+        visible: r.is_visible === 1,
+      }))
+    }
+
+    // info
+    const infoRows = bySection('info')
+    if (infoRows.length > 0) {
+      FB.info = infoRows.map(r => ({
+        label:   r.key,
+        url:     r.value || '#',
+        visible: r.is_visible === 1,
+      }))
+    }
+
+    // bottom
+    const bottomRows = bySection('bottom')
+    const btGet = (k: string) => bottomRows.find(r => r.key === k)
+    if (btGet('disclaimer')?.value) FB.bottom.disclaimer = btGet('disclaimer')!.value!
+    if (btGet('copyright')?.value)  FB.bottom.copyright  = btGet('copyright')!.value!
+
+    return FB
+  } catch {
+    return FB
+  }
+}
+
 const pages = new Hono<{ Bindings: Bindings }>()
 
 // ── Redirect de clique com rastreamento ───────────────────
@@ -76,7 +165,10 @@ pages.get('/produto/:slug', async (c) => {
   }
 
   if (!product) {
-    const { results: navCatsNotFound } = await DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>()
+    const [{ results: navCatsNotFound }, footerCfgNotFound] = await Promise.all([
+      DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>(),
+      loadFooterConfig(DB),
+    ])
     return c.html(renderLayout('Produto não encontrado', `
       <div class="max-w-4xl mx-auto px-4 py-16 text-center">
         <div class="text-6xl mb-4">😕</div>
@@ -84,7 +176,7 @@ pages.get('/produto/:slug', async (c) => {
         <p class="text-gray-500 mb-6">O produto que você procura pode ter sido removido.</p>
         <a href="/" class="btn-primary">Voltar ao início</a>
       </div>
-    `, { navCategories: navCatsNotFound }), 404)
+    `, { navCategories: navCatsNotFound, footerConfig: footerCfgNotFound }), 404)
   }
 
   // Busca histórico + relacionados em paralelo
@@ -396,13 +488,17 @@ pages.get('/produto/:slug', async (c) => {
   `
 
   // SEO extra: injeta meta tags OG + JSON-LD via opts
-  const { results: navCatsProduto } = await DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>()
+  const [{ results: navCatsProduto }, footerCfgProduto] = await Promise.all([
+    DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>(),
+    loadFooterConfig(DB),
+  ])
   return c.html(renderLayout(seoTitle, content, {
     description: seoDesc,
     ogImage: seoImg,
     canonical: seoUrl,
     jsonLd,
     navCategories: navCatsProduto,
+    footerConfig: footerCfgProduto,
   }))
 })
 
@@ -445,7 +541,8 @@ pages.get('/categoria/:slug', async (c) => {
       <div class="product-grid">${products.map(renderProductCard).join('')}</div>
     </div>
   `
-  return c.html(renderLayout(`${catName} — Melhores Preços | KainowRadar`, content, { navCategories: navCatsCategoria }))
+  const footerCfgCategoria = await loadFooterConfig(DB)
+  return c.html(renderLayout(`${catName} — Melhores Preços | KainowRadar`, content, { navCategories: navCatsCategoria, footerConfig: footerCfgCategoria }))
 })
 
 // ── Helpers ───────────────────────────────────────────────
@@ -483,7 +580,7 @@ function renderProductCard(p: Product): string {
   `
 }
 
-export function renderLayout(title: string, content: string, opts: { hideHeader?: boolean; description?: string; ogImage?: string; canonical?: string; jsonLd?: string; navCategories?: { name: string; slug: string; icon?: string }[] } = {}): string {
+export function renderLayout(title: string, content: string, opts: { hideHeader?: boolean; description?: string; ogImage?: string; canonical?: string; jsonLd?: string; navCategories?: { name: string; slug: string; icon?: string }[]; footerConfig?: FooterConfigData } = {}): string {
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -841,53 +938,7 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
   <main>${content}</main>
 
   <!-- FOOTER -->
-  <footer class="bg-gray-900 text-gray-400 mt-16 py-12">
-    <div class="max-w-7xl mx-auto px-4">
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-8 mb-8">
-        <div>
-          <div class="text-white font-bold mb-3">KainowRadar</div>
-          <p class="text-sm">Seu radar inteligente de ofertas. Encontre o menor preço nas maiores lojas do Brasil.</p>
-        </div>
-        <div>
-          <div class="text-white font-semibold mb-3">Categorias</div>
-          <ul class="space-y-2 text-sm">
-            ${(opts.navCategories && opts.navCategories.length > 0
-              ? opts.navCategories.slice(0, 8)
-              : [
-                  { slug: 'smartphones',      name: 'Smartphones' },
-                  { slug: 'notebooks',        name: 'Notebooks' },
-                  { slug: 'tv',               name: 'TVs' },
-                  { slug: 'games',            name: 'Games' },
-                  { slug: 'eletrodomesticos', name: 'Eletrodomésticos' },
-                  { slug: 'audio',            name: 'Áudio' },
-                  { slug: 'cameras',          name: 'Câmeras' },
-                  { slug: 'moda',             name: 'Moda' },
-                ]
-            ).map(cat => `<li><a href="/categoria/${cat.slug}" class="hover:text-white">${cat.name}</a></li>`).join('')}
-          </ul>
-        </div>
-        <div>
-          <div class="text-white font-semibold mb-3">Lojas Parceiras</div>
-          <ul class="space-y-2 text-sm">
-            <li>Amazon</li><li>Magazine Luiza</li>
-            <li>Mercado Livre</li><li>Americanas</li>
-          </ul>
-        </div>
-        <div>
-          <div class="text-white font-semibold mb-3">Informações</div>
-          <ul class="space-y-2 text-sm">
-            <li><a href="#" class="hover:text-white">Sobre</a></li>
-            <li><a href="#" class="hover:text-white">Política de Privacidade</a></li>
-            <li><a href="#" class="hover:text-white">Como funciona</a></li>
-          </ul>
-        </div>
-      </div>
-      <div class="border-t border-gray-800 pt-6 text-xs text-gray-600 text-center">
-        <p>Este site usa links de afiliados. Podemos receber comissão nas compras realizadas através dos nossos links, sem custo adicional para você.</p>
-        <p class="mt-2">© 2025 KainowRadar. Todos os direitos reservados.</p>
-      </div>
-    </div>
-  </footer>
+  ${renderFooterSection(opts)}
 
   <script src="/static/app.js"></script>
 
@@ -1040,12 +1091,100 @@ pages.get('/meus-alertas', async (c) => {
     }
   </script>`
 
-  const { results: navCatsAlertas } = await DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>()
+  const [{ results: navCatsAlertas }, footerCfgAlertas] = await Promise.all([
+    DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>(),
+    loadFooterConfig(DB),
+  ])
   return c.html(renderLayout('Meus Alertas de Preço', content, {
     description: 'Gerencie seus alertas de preço. Receba emails quando o produto baixar de preço.',
     navCategories: navCatsAlertas,
+    footerConfig: footerCfgAlertas,
   }))
 })
 
+// ── renderFooterSection — footer dinâmico ─────────────────
+function renderFooterSection(opts: {
+  navCategories?: { name: string; slug: string; icon?: string }[]
+  footerConfig?: FooterConfigData
+}): string {
+  const fc = opts.footerConfig
+  const cats = (opts.navCategories && opts.navCategories.length > 0
+    ? opts.navCategories.slice(0, 8)
+    : [
+        { slug: 'smartphones',      name: 'Smartphones' },
+        { slug: 'notebooks',        name: 'Notebooks' },
+        { slug: 'tv',               name: 'TVs' },
+        { slug: 'games',            name: 'Games' },
+        { slug: 'eletrodomesticos', name: 'Eletrodomésticos' },
+        { slug: 'audio',            name: 'Áudio' },
+        { slug: 'cameras',          name: 'Câmeras' },
+        { slug: 'moda',             name: 'Moda' },
+      ]
+  )
+
+  // Bloco brand
+  const siteName   = fc?.brand.site_name ?? 'KainowRadar'
+  const tagline    = fc?.brand.tagline   ?? 'Seu radar inteligente de ofertas. Encontre o menor preço nas maiores lojas do Brasil.'
+
+  // Bloco stores (só visíveis)
+  const storeItems = fc
+    ? fc.stores.filter(s => s.visible).map(s =>
+        `<li><a href="${s.url}" class="hover:text-white transition-colors">${s.name}</a></li>`
+      ).join('')
+    : `<li>Amazon</li><li>Magazine Luiza</li><li>Mercado Livre</li><li>Americanas</li>`
+
+  // Bloco info (só visíveis)
+  const infoItems = fc
+    ? fc.info.filter(i => i.visible).map(i =>
+        `<li><a href="${i.url}" class="hover:text-white transition-colors">${i.label}</a></li>`
+      ).join('')
+    : `<li><a href="#" class="hover:text-white">Sobre</a></li>
+       <li><a href="#" class="hover:text-white">Política de Privacidade</a></li>
+       <li><a href="#" class="hover:text-white">Como funciona</a></li>`
+
+  // Bloco bottom
+  const disclaimer = fc?.bottom.disclaimer ?? 'Este site usa links de afiliados. Podemos receber comissão nas compras realizadas através dos nossos links, sem custo adicional para você.'
+  const copyright  = fc?.bottom.copyright  ?? '© 2025 KainowRadar. Todos os direitos reservados.'
+
+  return `
+  <footer class="bg-gray-900 text-gray-400 mt-16 py-12">
+    <div class="max-w-7xl mx-auto px-4">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-8 mb-8">
+        <!-- Brand -->
+        <div>
+          <div class="text-white font-bold mb-3">${siteName}</div>
+          <p class="text-sm leading-relaxed">${tagline}</p>
+        </div>
+        <!-- Categorias -->
+        <div>
+          <div class="text-white font-semibold mb-3">Categorias</div>
+          <ul class="space-y-2 text-sm">
+            ${cats.map(cat => `<li><a href="/categoria/${cat.slug}" class="hover:text-white transition-colors">${cat.name}</a></li>`).join('')}
+          </ul>
+        </div>
+        <!-- Lojas Parceiras -->
+        <div>
+          <div class="text-white font-semibold mb-3">Lojas Parceiras</div>
+          <ul class="space-y-2 text-sm">
+            ${storeItems}
+          </ul>
+        </div>
+        <!-- Informações -->
+        <div>
+          <div class="text-white font-semibold mb-3">Informações</div>
+          <ul class="space-y-2 text-sm">
+            ${infoItems}
+          </ul>
+        </div>
+      </div>
+      <div class="border-t border-gray-800 pt-6 text-xs text-gray-600 text-center">
+        <p>${disclaimer}</p>
+        <p class="mt-2">${copyright}</p>
+      </div>
+    </div>
+  </footer>`
+}
+
 export { renderProductCard, formatCurrency }
+export type { FooterConfigData }
 export default pages

@@ -10,7 +10,7 @@ import api from './routes/api'
 import admin from './routes/admin'
 import auth from './routes/auth'
 import onboarding from './routes/onboarding'
-import pages, { renderLayout, renderProductCard, formatCurrency } from './routes/pages'
+import pages, { renderLayout, renderProductCard, formatCurrency, loadFooterConfig } from './routes/pages'
 import editorial from './routes/editorial'
 import { CacheManager } from './lib/cache'
 
@@ -107,8 +107,8 @@ app.get('/', async (c) => {
     { color: '#84CC16', bg: '#f7fee7' },
   ]
 
-  // Busca dados em paralelo (inclui editorial da IA)
-  const [featuredResult, dealsResult, categoriesResult, storesResult, editorialResult] = await Promise.all([
+  // Busca dados em paralelo (inclui editorial da IA e footer config)
+  const [featuredResult, dealsResult, categoriesResult, storesResult, editorialResult, footerCfg] = await Promise.all([
     DB.prepare(`
       SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
       FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
@@ -127,6 +127,8 @@ app.get('/', async (c) => {
     DB.prepare(`SELECT id, name, slug, logo_url FROM stores WHERE is_active = 1 ORDER BY name ASC LIMIT 100`).all(),
     // Destaques gerados pela IA editorial (tabela ai_editorial)
     DB.prepare(`SELECT * FROM ai_editorial ORDER BY priority DESC LIMIT 10`).all().catch(() => ({ results: [] })),
+    // Footer dinâmico do D1
+    loadFooterConfig(DB),
   ])
 
   const featured    = featuredResult.results   as any[]
@@ -586,7 +588,7 @@ app.get('/', async (c) => {
 
   const content = heroHTML + storesHTML + bannerHTML + insightsHTML + searchResultsHTML + dealsHTML + catBlocksHTML + featuredHTML + howHTML
 
-  return c.html(renderLayout('KainowRadar — Seu radar inteligente de ofertas', content, { navCategories: categories }))
+  return c.html(renderLayout('KainowRadar — Seu radar inteligente de ofertas', content, { navCategories: categories, footerConfig: footerCfg }))
 })
 
 // ── 404 ───────────────────────────────────────────────────
