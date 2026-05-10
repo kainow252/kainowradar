@@ -380,6 +380,16 @@ admin.post('/api/api-configs/seed', async (c) => {
     { id: 'instagram-shop', name: 'Instagram Shopping',       network: 'instagram-shop',     commission_rate: 5.0  },
     { id: 'youtube-shop',   name: 'YouTube Shopping',         network: 'youtube-shop',       commission_rate: 5.0  },
     { id: 'facebook-shop',  name: 'Facebook Shops / Meta',    network: 'facebook-shop',      commission_rate: 5.0  },
+    // ── Plataformas de Parceria ───────────────────────────
+    { id: 'ltk',            name: 'LTK (LikeToKnow.it)',      network: 'ltk-api',            commission_rate: 8.0  },
+    { id: 'impact',         name: 'Impact.com',               network: 'impact-api',         commission_rate: 5.0  },
+    // ── Live Commerce ─────────────────────────────────────
+    { id: 'twitch',         name: 'Twitch + Amazon Assoc.',   network: 'twitch-api',         commission_rate: 5.0  },
+    // ── Discovery Commerce ────────────────────────────────
+    { id: 'pinterest',      name: 'Pinterest Shopping API',   network: 'pinterest-api',      commission_rate: 4.0  },
+    // ── E-commerce Builder ────────────────────────────────
+    { id: 'woocommerce',    name: 'WooCommerce Affiliates',   network: 'woocommerce-api',    commission_rate: 15.0 },
+    { id: 'shopify-store',  name: 'Shopify Multi-vendor',     network: 'shopify-store-api',  commission_rate: 15.0 },
   ]
   let inserted = 0
   for (const n of networks) {
@@ -1285,6 +1295,16 @@ const NETWORK_COLORS = {
   'eduzz-api':          { bg: '#f5f3ff', border: '#7C3AED', label: 'Eduzz'         },
   'monetizze-api':      { bg: '#f0fdf4', border: '#00B359', label: 'Monetizze'     },
   'dafiti-api':         { bg: '#f8f8f8', border: '#555555', label: 'Dafiti'        },
+  // Plataformas de Parceria
+  'ltk-api':            { bg: '#fff0f3', border: '#FF385C', label: 'LTK'            },
+  'impact-api':         { bg: '#fff4f0', border: '#FF6B35', label: 'Impact.com'     },
+  // Live Commerce
+  'twitch-api':         { bg: '#f5f0ff', border: '#9146FF', label: 'Twitch'         },
+  // Discovery Commerce
+  'pinterest-api':      { bg: '#fff0f0', border: '#E60023', label: 'Pinterest'      },
+  // E-commerce Builder
+  'woocommerce-api':    { bg: '#f5f0ff', border: '#7F54B3', label: 'WooCommerce'    },
+  'shopify-store-api':  { bg: '#f0f1ff', border: '#5C6AC4', label: 'Shopify'        },
   // Social Commerce
   'tiktok-shop':        { bg: '#f0f0f5', border: '#010101', label: 'TikTok Shop'    },
   'kwai-shop':          { bg: '#fff4ee', border: '#FF6600', label: 'Kwai Shop'      },
@@ -1388,6 +1408,12 @@ async function renderStores(area) {
           <option value="instagram-shop">Instagram</option>
           <option value="youtube-shop">YouTube</option>
           <option value="facebook-shop">Facebook</option>
+          <option value="ltk-api">LTK</option>
+          <option value="impact-api">Impact.com</option>
+          <option value="twitch-api">Twitch</option>
+          <option value="pinterest-api">Pinterest</option>
+          <option value="woocommerce-api">WooCommerce</option>
+          <option value="shopify-store-api">Shopify Store</option>
         </select>
         <button onclick="renderStores(document.getElementById('content-area'))"
           class="btn-secondary flex items-center gap-2 whitespace-nowrap">↻ Atualizar</button>
@@ -1450,6 +1476,12 @@ function openStoreModal(id) {
               <option value="instagram-shop">Instagram Shopping</option>
               <option value="youtube-shop">YouTube Shopping</option>
               <option value="facebook-shop">Facebook Shops</option>
+              <option value="ltk-api">LTK (LikeToKnow.it)</option>
+              <option value="impact-api">Impact.com</option>
+              <option value="twitch-api">Twitch</option>
+              <option value="pinterest-api">Pinterest Shopping</option>
+              <option value="woocommerce-api">WooCommerce Affiliates</option>
+              <option value="shopify-store-api">Shopify Multi-vendor</option>
             </select>
           </div>
           <div>
@@ -1745,6 +1777,158 @@ const AFFILIATE_NETWORKS = [
     commission: 'Sob consulta',
     network: 'nestle-api',
   },
+  // ── Plataformas de Parceria ──────────────────────────
+  {
+    id: 'ltk',
+    name: 'LTK (LikeToKnow.it)',
+    group: 'Plataformas de Parceria',
+    icon: '💗',
+    color: '#FF385C',
+    bg: '#fff0f3',
+    border: '#FF385C',
+    desc: 'LTK Creator API — vitrine de influenciadores de moda, beleza e decoração. Cada item é um link de afiliado rastreável. Padrão ouro para conteúdo estético.',
+    fields: [
+      'api_key:API Key (LTK Partner Portal)',
+      'client_id:Publisher ID',
+      'client_secret:Client Secret',
+      'partner_tag:Creator Profile ID',
+    ],
+    docsUrl: 'https://www.ltk.com/partner',
+    commission: '5–20%',
+    network: 'ltk-api',
+    authType: 'OAuth2',
+    scopes: ['profile.read', 'products.read', 'links.create', 'analytics.read'],
+    baseUrl: 'https://api.liketoknow.it/v2',
+    webhookSupport: true,
+    integrations: ['Instagram', 'TikTok', 'YouTube'],
+    notes: 'Ecossistema fechado mas integrado ao Instagram/TikTok. Ideal para influenciadores de lifestyle. Requer aprovação editorial.',
+  },
+  {
+    id: 'impact',
+    name: 'Impact.com',
+    group: 'Plataformas de Parceria',
+    icon: '⚡',
+    color: '#FF6B35',
+    bg: '#fff4f0',
+    border: '#FF6B35',
+    desc: 'Impact Partnership Cloud API — automação completa de parcerias. Apple, Canva, Uber e centenas de marcas usam Impact para gerenciar afiliados.',
+    fields: [
+      'api_key:Account SID (Impact Dashboard)',
+      'client_secret:Auth Token',
+      'client_id:Program ID',
+      'partner_tag:Media Partner ID',
+    ],
+    docsUrl: 'https://developer.impact.com/',
+    commission: '2–30% (varia por marca)',
+    network: 'impact-api',
+    authType: 'Basic Auth (SID + Token)',
+    scopes: ['Ads', 'Conversions', 'Reports', 'Catalogs', 'Coupons'],
+    baseUrl: 'https://api.impact.com/Mediapartners',
+    webhookSupport: true,
+    brands: ['Apple', 'Canva', 'Uber', 'Airbnb', 'Nike', 'Sephora'],
+    notes: 'A API mais completa do mercado para gestão de múltiplas marcas. Ideal para quem quer um painel único com centenas de anunciantes.',
+  },
+  // ── Live Commerce ─────────────────────────────────────
+  {
+    id: 'twitch',
+    name: 'Twitch + Amazon Afiliados',
+    group: 'Live Commerce',
+    icon: '🎮',
+    color: '#9146FF',
+    bg: '#f5f0ff',
+    border: '#9146FF',
+    desc: 'Twitch Extensions API + Amazon Associates — overlays interativos em lives. Espectador clica e compra sem fechar a transmissão. Referência para público gamer e tech.',
+    fields: [
+      'api_key:Amazon Access Key (PA-API)',
+      'client_id:Twitch Client ID (dev.twitch.tv)',
+      'client_secret:Twitch Client Secret',
+      'partner_tag:Amazon Associate Tag',
+    ],
+    docsUrl: 'https://dev.twitch.tv/docs/extensions/',
+    commission: '1–10% (Amazon) + bits Twitch',
+    network: 'twitch-api',
+    authType: 'OAuth2 (Twitch) + AWS Signature (Amazon)',
+    scopes: ['channel:read:subscriptions', 'bits:read', 'channel:manage:extensions'],
+    baseUrl: 'https://api.twitch.tv/helix',
+    webhookSupport: true,
+    notes: 'Integração dupla: Twitch Extensions para overlays interativos + Amazon PA-API para produtos. Ideal para streamers que vendem produtos tech/gamer durante lives.',
+  },
+  // ── Discovery Commerce ────────────────────────────────
+  {
+    id: 'pinterest',
+    name: 'Pinterest Shopping API v5',
+    group: 'Discovery Commerce',
+    icon: '📌',
+    color: '#E60023',
+    bg: '#fff0f0',
+    border: '#E60023',
+    desc: 'Pinterest API v5 — catálogos dinâmicos, Pins automatizados e API de Conversões. Ideal para moda, decoração e DIY. Automação de novos produtos como Pins.',
+    fields: [
+      'api_key:Access Token (Pinterest Developers)',
+      'client_id:App ID',
+      'client_secret:App Secret',
+      'partner_tag:Ad Account ID',
+    ],
+    docsUrl: 'https://developers.pinterest.com/docs/api/v5/',
+    commission: '3–10%',
+    network: 'pinterest-api',
+    authType: 'OAuth2',
+    scopes: ['boards:read', 'boards:write', 'pins:read', 'pins:write', 'catalogs:read', 'catalogs:write', 'ads:read'],
+    baseUrl: 'https://api.pinterest.com/v5',
+    webhookSupport: true,
+    notes: 'API v5 focada em Shopping: catálogos dinâmicos automáticos + Conversion API para otimizar anúncios. Criar Pin automaticamente ao adicionar novo produto na base de dados.',
+  },
+  // ── E-commerce Builder ────────────────────────────────
+  {
+    id: 'woocommerce',
+    name: 'WooCommerce Affiliates',
+    group: 'E-commerce Builder',
+    icon: '🛍️',
+    color: '#7F54B3',
+    bg: '#f5f0ff',
+    border: '#7F54B3',
+    desc: 'WooCommerce REST API + plugins de afiliados (AffiliateWP, YITH) — crie sua própria rede multi-vendor onde outros vendem e ganham comissão automática.',
+    fields: [
+      'api_key:Consumer Key (WooCommerce → Settings → REST API)',
+      'client_secret:Consumer Secret',
+      'client_id:Site URL (ex: minhaloja.com)',
+      'partner_tag:Affiliate Program Slug',
+    ],
+    docsUrl: 'https://woocommerce.github.io/woocommerce-rest-api-docs/',
+    commission: 'Você define (5–30%)',
+    network: 'woocommerce-api',
+    authType: 'Basic Auth (Consumer Key/Secret) ou OAuth1',
+    scopes: ['products', 'orders', 'customers', 'coupons', 'reports'],
+    baseUrl: 'https://seusite.com/wp-json/wc/v3',
+    webhookSupport: true,
+    plugins: ['AffiliateWP', 'YITH WooCommerce Affiliates', 'SliceWP'],
+    notes: 'Você vira o dono da plataforma. Use plugins como AffiliateWP para criar rede própria onde afiliados ganham comissão automática por cada venda.',
+  },
+  {
+    id: 'shopify-store',
+    name: 'Shopify Multi-vendor',
+    group: 'E-commerce Builder',
+    icon: '🏪',
+    color: '#5C6AC4',
+    bg: '#f0f1ff',
+    border: '#5C6AC4',
+    desc: 'Shopify Admin API + apps de afiliados (Refersion, Tapfiliate) — loja própria com sistema de comissões para afiliados/vendedores. Alternativa mais profissional ao WooCommerce.',
+    fields: [
+      'api_key:Admin API Access Token (Shopify Partners)',
+      'client_id:API Key',
+      'client_secret:API Secret Key',
+      'partner_tag:Store Domain (ex: minhaloja.myshopify.com)',
+    ],
+    docsUrl: 'https://shopify.dev/docs/api/admin-rest',
+    commission: 'Você define (5–30%)',
+    network: 'shopify-store-api',
+    authType: 'OAuth2 + Admin API Token',
+    scopes: ['read_products', 'write_products', 'read_orders', 'write_orders', 'read_customers'],
+    baseUrl: 'https://{shop}.myshopify.com/admin/api/2024-01',
+    webhookSupport: true,
+    apps: ['Refersion', 'Tapfiliate', 'Goaffpro', 'UpPromote'],
+    notes: 'Solução enterprise para criar sua própria rede de afiliados. Use apps como Refersion para painel completo de gestão de comissões e pagamentos automáticos.',
+  },
   // ── Social Commerce ──────────────────────────────────
   {
     id: 'tiktok-shop',
@@ -1868,7 +2052,7 @@ const AFFILIATE_NETWORKS = [
   },
 ]
 
-const AFFILIATE_GROUPS = ['Marketplaces', 'Infoprodutos', 'Redes Multimarcas', 'Tecnologia & SaaS', 'Social Commerce', 'Outros']
+const AFFILIATE_GROUPS = ['Marketplaces', 'Infoprodutos', 'Redes Multimarcas', 'Plataformas de Parceria', 'Live Commerce', 'Discovery Commerce', 'E-commerce Builder', 'Tecnologia & SaaS', 'Social Commerce', 'Outros']
 
 async function renderApiConfigs(area) {
   // Garante que todos os 18 registros existam no banco (idempotente)
@@ -1885,6 +2069,10 @@ async function renderApiConfigs(area) {
     'Marketplaces': '🛒',
     'Infoprodutos': '🎓',
     'Redes Multimarcas': '🌐',
+    'Plataformas de Parceria': '🤝',
+    'Live Commerce': '🎮',
+    'Discovery Commerce': '🔍',
+    'E-commerce Builder': '🏗️',
     'Tecnologia & SaaS': '⚙️',
     'Social Commerce': '📱',
     'Outros': '🏷️',
