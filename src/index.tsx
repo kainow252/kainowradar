@@ -190,21 +190,21 @@ app.get('/', async (c) => {
           </span>
         </div>
 
-        <!-- Container único: H1 + subtítulo + search + populares — todos mesma largura -->
-        <div style="width:100%;max-width:100%;box-sizing:border-box;">
+        <!-- Bloco hero — largura definida pela search bar -->
+        <div id="hero-block" style="width:100%;box-sizing:border-box;">
 
           <!-- Título principal -->
-          <h1 style="text-align:left;font-size:clamp(1.6rem,3.5vw,2.6rem);font-weight:900;color:#fff;line-height:1.15;letter-spacing:-0.02em;margin-bottom:0.5rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+          <h1 id="hero-h1" style="font-size:clamp(1.4rem,3vw,2.4rem);font-weight:900;color:#fff;line-height:1.15;letter-spacing:-0.02em;margin-bottom:0.4rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
             O menor preço está <span class="hero-gradient-text">aqui. Sempre.</span>
           </h1>
 
           <!-- Subtítulo -->
-          <p style="color:rgba(191,219,254,0.75);font-size:0.9rem;line-height:1.5;margin-bottom:0.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+          <p id="hero-sub" style="color:rgba(191,219,254,0.75);font-size:0.875rem;line-height:1.5;margin-bottom:0.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
             Compare preços em tempo real nas maiores lojas do Brasil e compre sempre na melhor oferta.
           </p>
 
           <!-- Barra de busca -->
-          <div class="hero-search-wrap">
+          <div id="hero-search-wrap" class="hero-search-wrap">
             <svg class="hero-search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
             </svg>
@@ -221,8 +221,8 @@ app.get('/', async (c) => {
             </button>
           </div>
 
-          <!-- Populares — uma linha, overflow hidden limpo (sem corte parcial) -->
-          <div style="display:flex;flex-wrap:nowrap;align-items:center;gap:0.5rem;margin-top:0.75rem;overflow:hidden;max-width:100%;">
+          <!-- Populares — uma linha, mesmo tamanho -->
+          <div id="hero-tags" style="display:flex;flex-wrap:nowrap;align-items:center;gap:0.5rem;margin-top:0.75rem;overflow:hidden;">
             <span style="color:rgba(147,197,253,0.5);font-size:0.75rem;font-weight:500;white-space:nowrap;flex-shrink:0;">Populares:</span>
             ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV', 'iPad', 'Geladeira', 'MacBook', 'Xbox Series', 'Monitor', 'Headphone', 'Kindle'].map(t =>
               `<button onclick="quickSearch('${t}')" class="quick-tag" style="flex-shrink:0;">${t}</button>`
@@ -232,6 +232,25 @@ app.get('/', async (c) => {
         </div>
 
       </div>
+      <script>
+        (function() {
+          function syncHeroWidth() {
+            var wrap = document.getElementById('hero-search-wrap');
+            if (!wrap) return;
+            var w = wrap.offsetWidth;
+            ['hero-h1','hero-sub','hero-tags'].forEach(function(id) {
+              var el = document.getElementById(id);
+              if (el) { el.style.maxWidth = w + 'px'; el.style.width = w + 'px'; }
+            });
+          }
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', syncHeroWidth);
+          } else {
+            syncHeroWidth();
+          }
+          window.addEventListener('resize', syncHeroWidth);
+        })();
+      </script>
     </section>
   `
 
