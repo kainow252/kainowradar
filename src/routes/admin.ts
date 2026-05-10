@@ -285,6 +285,35 @@ admin.get('/api/stores', async (c) => {
   return c.json(results)
 })
 
+// ── PATCH /admin/api/stores/:id — Editar loja completa ────
+admin.patch('/api/stores/:id', async (c) => {
+  const { DB } = c.env
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json()
+  const { logo_url, affiliate_network, checkout_pattern, deeplink_base, commission_rate, is_active } = body
+
+  await DB.prepare(`
+    UPDATE stores SET
+      logo_url          = CASE WHEN ? IS NOT NULL THEN ? ELSE logo_url END,
+      affiliate_network = CASE WHEN ? IS NOT NULL THEN ? ELSE affiliate_network END,
+      checkout_pattern  = CASE WHEN ? IS NOT NULL THEN ? ELSE checkout_pattern END,
+      deeplink_base     = CASE WHEN ? IS NOT NULL THEN ? ELSE deeplink_base END,
+      commission_rate   = CASE WHEN ? IS NOT NULL THEN ? ELSE commission_rate END,
+      is_active         = CASE WHEN ? IS NOT NULL THEN ? ELSE is_active END
+    WHERE id = ?
+  `).bind(
+    logo_url ?? null, logo_url ?? null,
+    affiliate_network ?? null, affiliate_network ?? null,
+    checkout_pattern ?? null, checkout_pattern ?? null,
+    deeplink_base ?? null, deeplink_base ?? null,
+    commission_rate ?? null, commission_rate ?? null,
+    is_active ?? null, is_active ?? null,
+    id
+  ).run()
+
+  return c.json({ ok: true })
+})
+
 // ── PATCH /admin/api/stores/:id/toggle — Ativa/desativa ───
 admin.patch('/api/stores/:id/toggle', async (c) => {
   const { DB } = c.env
@@ -1235,49 +1264,277 @@ async function renderOffers(area, page = 1) {
 }
 
 // ── STORES ────────────────────────────────────────────────
+// ── Mapa de cores por rede ─────────────────────────────────
+const NETWORK_COLORS = {
+  'amazon-pa-api':      { bg: '#fff8ee', border: '#FF9900', label: 'Amazon PA-API' },
+  'meli-api':           { bg: '#fffde6', border: '#FFE600', label: 'Mercado Livre' },
+  'magalu-api':         { bg: '#eef5ff', border: '#0086FF', label: 'Magalu API'    },
+  'shopee-api':         { bg: '#fff3f0', border: '#EE4D2D', label: 'Shopee API'    },
+  'shein-api':          { bg: '#f5f5f5', border: '#444444', label: 'Shein'         },
+  'aliexpress-portals': { bg: '#fff0f0', border: '#FF4747', label: 'AliExpress'    },
+  'awin':               { bg: '#e8f4fd', border: '#007AC9', label: 'Awin'          },
+  'lomadee':            { bg: '#f0f0ff', border: '#6366F1', label: 'SocialSoul'    },
+  'rakuten':            { bg: '#fff0f0', border: '#BF0000', label: 'Rakuten'       },
+  'hotmart-api':        { bg: '#fff3f0', border: '#FF5722', label: 'Hotmart'       },
+  'eduzz-api':          { bg: '#f5f3ff', border: '#7C3AED', label: 'Eduzz'         },
+  'monetizze-api':      { bg: '#f0fdf4', border: '#00B359', label: 'Monetizze'     },
+  'dafiti-api':         { bg: '#f8f8f8', border: '#555555', label: 'Dafiti'        },
+}
+
+// Variável global para os dados de lojas (busca local)
+let _storesData = []
+
 async function renderStores(area) {
   const data = await api('GET', '/admin/api/stores')
   if (!data) return
-  const cards = data.map(s => \`
-    <div class="stat-card hover:shadow-md transition-shadow">
-      <div class="flex items-start justify-between mb-4">
-        <div class="flex items-center gap-3">
-          \${s.logo_url ? \`<img src="\${s.logo_url}" class="h-8 max-w-[80px] object-contain">\` : \`<div class="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center font-bold text-slate-600">\${s.name[0]}</div>\`}
-          <div>
-            <div class="font-bold text-slate-800">\${s.name}</div>
-            <div class="text-xs text-slate-400">\${s.affiliate_network || '—'}</div>
+  _storesData = data
+
+  const total    = data.length
+  const active   = data.filter(s => s.is_active).length
+  const withOff  = data.filter(s => s.offer_count > 0).length
+
+  function buildStoreCard(s) {
+    const nc = NETWORK_COLORS[s.affiliate_network] || { bg: '#f8fafc', border: '#cbd5e1', label: s.affiliate_network || '—' }
+    const logoHTML = s.logo_url
+      ? \`<img src="\${s.logo_url}" alt="\${s.name}"
+              class="h-8 max-w-[72px] object-contain"
+              onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"
+              style="display:block">
+         <div class="w-9 h-9 rounded-lg flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
+              style="background:\${nc.border};display:none">\${s.name[0]}</div>\`
+      : \`<div class="w-9 h-9 rounded-lg flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
+              style="background:\${nc.border}">\${s.name[0]}</div>\`
+
+    return \`
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden hover:shadow-md transition-all"
+           id="store-card-\${s.id}" data-name="\${s.name.toLowerCase()}" data-network="\${s.affiliate_network || ''}">
+        <!-- Header colorido com a cor da rede -->
+        <div class="px-4 py-3 flex items-center justify-between"
+             style="background:\${nc.bg}; border-bottom:2px solid \${nc.border}20">
+          <div class="flex items-center gap-2.5">
+            \${logoHTML}
+            <div class="min-w-0">
+              <div class="font-bold text-slate-800 text-sm leading-tight truncate">\${s.name}</div>
+              <div class="text-xs font-medium mt-0.5 truncate" style="color:\${nc.border}">\${nc.label}</div>
+            </div>
+          </div>
+          <label class="toggle-switch flex-shrink-0 ml-2">
+            <input type="checkbox" \${s.is_active ? 'checked' : ''}
+                   onchange="toggleStore(\${s.id}, this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <!-- Métricas -->
+        <div class="px-4 py-3">
+          <div class="grid grid-cols-3 gap-2 text-center mb-3">
+            <div class="bg-slate-50 rounded-xl py-2">
+              <div class="text-base font-bold text-slate-800">\${s.offer_count || 0}</div>
+              <div class="text-xs text-slate-400">Ofertas</div>
+            </div>
+            <div class="bg-green-50 rounded-xl py-2">
+              <div class="text-xs font-bold text-green-700 leading-tight">\${s.min_price ? fBRL(s.min_price) : '—'}</div>
+              <div class="text-xs text-slate-400">Min</div>
+            </div>
+            <div class="bg-blue-50 rounded-xl py-2">
+              <div class="text-sm font-semibold text-blue-700">\${s.commission_rate || 0}%</div>
+              <div class="text-xs text-slate-400">Comissão</div>
+            </div>
+          </div>
+
+          <!-- Status badge -->
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs \${s.is_active
+              ? 'text-green-700 bg-green-50'
+              : 'text-slate-400 bg-slate-100'} px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+              \${s.is_active
+                ? '<span class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse inline-block"></span> Ativa'
+                : 'Inativa'}
+            </span>
+            <button onclick="openStoreModal(\${s.id})"
+                    class="text-xs text-slate-400 hover:text-blue-600 transition-colors px-2 py-1 rounded-lg hover:bg-blue-50">
+              ✏️ Editar
+            </button>
+          </div>
+
+          <!-- URL padrão truncada -->
+          <div class="mt-2 text-xs text-slate-400 truncate" title="\${s.checkout_pattern || s.deeplink_base || ''}">
+            \${s.checkout_pattern || s.deeplink_base || '—'}
           </div>
         </div>
-        <label class="toggle-switch">
-          <input type="checkbox" \${s.is_active ? 'checked' : ''} onchange="toggleStore(\${s.id}, this.checked)">
-          <span class="toggle-slider"></span>
-        </label>
       </div>
-      <div class="grid grid-cols-3 gap-3 text-center">
-        <div class="bg-slate-50 rounded-xl p-2">
-          <div class="text-lg font-bold text-slate-800">\${s.offer_count || 0}</div>
-          <div class="text-xs text-slate-400">Ofertas</div>
-        </div>
-        <div class="bg-green-50 rounded-xl p-2">
-          <div class="text-sm font-bold text-green-700">\${fBRL(s.min_price)}</div>
-          <div class="text-xs text-slate-400">Min</div>
-        </div>
-        <div class="bg-blue-50 rounded-xl p-2">
-          <div class="text-sm font-semibold text-blue-700">\${s.commission_rate || 0}%</div>
-          <div class="text-xs text-slate-400">Comissão</div>
-        </div>
-      </div>
-      <div class="mt-3 pt-3 border-t border-slate-100 text-xs text-slate-400 truncate">
-        \${s.checkout_pattern || s.deeplink_base || '—'}
-      </div>
-    </div>
-  \`).join('')
+    \`
+  }
 
   area.innerHTML = \`
     <div class="section">
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">\${cards}</div>
+      <!-- Sumário -->
+      <div class="grid grid-cols-3 gap-4 mb-6">
+        <div class="stat-card text-center border-t-4 border-blue-400">
+          <div class="text-3xl font-black text-slate-800">\${total}</div>
+          <div class="text-sm text-slate-500 mt-1">Lojas cadastradas</div>
+        </div>
+        <div class="stat-card text-center border-t-4 border-green-400">
+          <div class="text-3xl font-black text-green-700">\${active}</div>
+          <div class="text-sm text-slate-500 mt-1">Lojas ativas</div>
+        </div>
+        <div class="stat-card text-center border-t-4 border-amber-400">
+          <div class="text-3xl font-black text-amber-700">\${withOff}</div>
+          <div class="text-sm text-slate-500 mt-1">Com ofertas</div>
+        </div>
+      </div>
+
+      <!-- Filtros -->
+      <div class="flex flex-wrap items-center gap-3 mb-5">
+        <input type="text" id="store-search" placeholder="🔍 Buscar loja..."
+               class="input max-w-xs text-sm" oninput="filterStores()">
+        <select id="store-network-filter" class="input max-w-[200px] text-sm" onchange="filterStores()">
+          <option value="">Todas as redes</option>
+          <option value="amazon-pa-api">Amazon PA-API</option>
+          <option value="meli-api">Mercado Livre</option>
+          <option value="magalu-api">Magalu API</option>
+          <option value="shopee-api">Shopee API</option>
+          <option value="aliexpress-portals">AliExpress</option>
+          <option value="awin">Awin</option>
+          <option value="lomadee">SocialSoul/Lomadee</option>
+          <option value="shein-api">Shein</option>
+          <option value="hotmart-api">Hotmart</option>
+          <option value="eduzz-api">Eduzz</option>
+          <option value="monetizze-api">Monetizze</option>
+        </select>
+        <select id="store-status-filter" class="input max-w-[150px] text-sm" onchange="filterStores()">
+          <option value="">Todas</option>
+          <option value="active">Ativas</option>
+          <option value="inactive">Inativas</option>
+        </select>
+        <button onclick="toggleAllStores(true)"
+                class="text-xs font-semibold bg-green-50 text-green-700 px-3 py-2 rounded-xl border border-green-200 hover:bg-green-100 transition-all">
+          ✓ Ativar todas
+        </button>
+        <button onclick="toggleAllStores(false)"
+                class="text-xs font-semibold bg-slate-50 text-slate-500 px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-100 transition-all">
+          Desativar todas
+        </button>
+      </div>
+
+      <!-- Grid de cards -->
+      <div id="stores-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        \${data.map(buildStoreCard).join('')}
+      </div>
+      <div id="stores-empty" class="hidden text-center py-12 text-slate-400">
+        <div class="text-4xl mb-2">🔍</div>
+        <div>Nenhuma loja encontrada com esses filtros</div>
+      </div>
     </div>
   \`
+}
+
+function filterStores() {
+  const q       = (document.getElementById('store-search')?.value || '').toLowerCase()
+  const network = document.getElementById('store-network-filter')?.value || ''
+  const status  = document.getElementById('store-status-filter')?.value || ''
+  let visible   = 0
+  document.querySelectorAll('#stores-grid [id^="store-card-"]').forEach(card => {
+    const name    = card.dataset.name || ''
+    const net     = card.dataset.network || ''
+    const checked = card.querySelector('input[type=checkbox]')?.checked
+    const matchQ  = !q || name.includes(q)
+    const matchN  = !network || net === network
+    const matchS  = !status || (status === 'active' ? checked : !checked)
+    const show    = matchQ && matchN && matchS
+    card.style.display = show ? '' : 'none'
+    if (show) visible++
+  })
+  const empty = document.getElementById('stores-empty')
+  if (empty) empty.classList.toggle('hidden', visible > 0)
+}
+
+async function toggleAllStores(active) {
+  const cards = document.querySelectorAll('#stores-grid [id^="store-card-"]')
+  const ids   = Array.from(cards)
+    .filter(c => c.style.display !== 'none')
+    .map(c => parseInt(c.id.replace('store-card-', '')))
+  if (!ids.length) return
+  toast(\`Atualizando \${ids.length} lojas...\`, 'info')
+  await Promise.all(ids.map(id => api('PATCH', \`/admin/api/stores/\${id}/toggle\`, { active })))
+  toast(\`\${ids.length} lojas \${active ? 'ativadas' : 'desativadas'} ✓\`, 'success')
+  renderStores(document.getElementById('content-area'))
+}
+
+function openStoreModal(id) {
+  const s = _storesData.find(x => x.id === id)
+  if (!s) return
+  const modal = document.getElementById('modal-container')
+  modal.innerHTML = \`
+    <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+      <div class="modal max-w-lg" style="max-height:90vh;overflow-y:auto;">
+        <div class="flex items-center gap-3 mb-5 pb-4 border-b border-slate-100">
+          \${s.logo_url
+            ? \`<img src="\${s.logo_url}" class="h-10 max-w-[80px] object-contain">\`
+            : \`<div class="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center font-bold text-white">\${s.name[0]}</div>\`}
+          <div>
+            <h3 class="font-bold text-slate-800 text-lg">\${s.name}</h3>
+            <p class="text-xs text-slate-400">\${s.affiliate_network || '—'}</p>
+          </div>
+        </div>
+        <div class="space-y-3">
+          <div>
+            <label class="block text-sm font-medium text-slate-600 mb-1">Logo URL</label>
+            <input type="url" id="se-logo" class="input" value="\${s.logo_url || ''}" placeholder="https://logo.clearbit.com/loja.com.br">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-600 mb-1">Rede afiliada</label>
+            <select id="se-network" class="input">
+              \${['amazon-pa-api','meli-api','magalu-api','shopee-api','aliexpress-portals','shein-api',
+                 'awin','lomadee','rakuten','hotmart-api','eduzz-api','monetizze-api','braip-api',
+                 'dafiti-api','hostinger-api','shopify-partners','nuvemshop-api','nestle-api']
+                .map(n => \`<option value="\${n}" \${s.affiliate_network === n ? 'selected' : ''}>\${n}</option>\`).join('')}
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-600 mb-1">Padrão de checkout</label>
+            <input type="text" id="se-checkout" class="input" value="\${s.checkout_pattern || ''}" placeholder="https://loja.com.br/checkout/{ID}">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-600 mb-1">Deeplink base</label>
+            <input type="text" id="se-deeplink" class="input" value="\${s.deeplink_base || ''}" placeholder="https://loja.com.br/produto/{ID}">
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-sm font-medium text-slate-600 mb-1">Comissão (%)</label>
+              <input type="number" id="se-commission" class="input" value="\${s.commission_rate || ''}" placeholder="5.0" step="0.1">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-600 mb-1">Status</label>
+              <select id="se-active" class="input">
+                <option value="1" \${s.is_active ? 'selected' : ''}>Ativa</option>
+                <option value="0" \${!s.is_active ? 'selected' : ''}>Inativa</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center gap-3 mt-5 pt-4 border-t border-slate-100">
+          <button onclick="saveStoreEdit(\${s.id})" class="btn-primary flex-1">💾 Salvar</button>
+          <button onclick="closeModal()" class="btn-secondary">Cancelar</button>
+        </div>
+      </div>
+    </div>
+  \`
+}
+
+async function saveStoreEdit(id) {
+  const body = {
+    logo_url:        document.getElementById('se-logo')?.value.trim() || null,
+    affiliate_network: document.getElementById('se-network')?.value || null,
+    checkout_pattern:  document.getElementById('se-checkout')?.value.trim() || null,
+    deeplink_base:     document.getElementById('se-deeplink')?.value.trim() || null,
+    commission_rate:   parseFloat(document.getElementById('se-commission')?.value) || null,
+    is_active:         parseInt(document.getElementById('se-active')?.value) ?? null,
+  }
+  await api('PATCH', \`/admin/api/stores/\${id}\`, body)
+  toast('Loja atualizada ✓', 'success')
+  closeModal()
+  renderStores(document.getElementById('content-area'))
 }
 
 async function toggleStore(id, active) {
