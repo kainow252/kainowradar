@@ -91,6 +91,16 @@ document.addEventListener('keydown', (e) => {
   }
 })
 
+// Toggle colapsável do grid de categorias no drawer
+function toggleMobCats() {
+  const grid    = el('mob-cats-grid')
+  const chevron = el('mob-cats-chevron')
+  if (!grid) return
+  const isOpen = grid.style.display !== 'none'
+  grid.style.display    = isOpen ? 'none' : ''
+  if (chevron) chevron.style.transform = isOpen ? 'rotate(-90deg)' : 'rotate(0deg)'
+}
+
 // Sincroniza estado do usuário no drawer (após loadUser)
 function syncMobUserArea() {
   const u = State.user

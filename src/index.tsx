@@ -538,8 +538,9 @@ app.get('/', async (c) => {
   ` : ''
 
   // ── CATEGORIAS EM BLOCOS (estilo Buscapé com nossa cara) ──
+  // No mobile este bloco fica oculto — as categorias aparecem no menu hambúrguer
   const catBlocksHTML = categories.length > 0 ? `
-    <section class="bg-white border-y border-gray-100 py-8">
+    <section class="hidden md:block bg-white border-y border-gray-100 py-8">
       <div class="max-w-7xl mx-auto px-4">
         <div class="flex items-center justify-between mb-5">
           <div class="flex items-center gap-3">

@@ -683,28 +683,50 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
     <!-- Conteúdo rolável -->
     <div class="flex-1 overflow-y-auto overscroll-contain py-2">
 
-      <!-- Categorias -->
-      <div class="px-3 pt-2 pb-1">
-        <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-3 mb-2">Categorias</p>
-        <nav class="space-y-0.5">
-          ${(opts.navCategories && opts.navCategories.length > 0
-            ? opts.navCategories
-            : [
-                { slug: 'smartphones',     icon: '📱', name: 'Celulares' },
-                { slug: 'notebooks',       icon: '💻', name: 'Notebooks' },
-                { slug: 'tv',              icon: '📺', name: 'TVs' },
-                { slug: 'games',           icon: '🎮', name: 'Games' },
-                { slug: 'eletrodomesticos',icon: '🏠', name: 'Eletrodomésticos' },
-                { slug: 'audio',           icon: '🎧', name: 'Áudio' },
-                { slug: 'cameras',         icon: '📷', name: 'Câmeras' },
-                { slug: 'moda',            icon: '👗', name: 'Moda' },
-              ]
-          ).map(cat => `
-            <a href="/categoria/${cat.slug}" onclick="closeHamburger()" class="mob-menu-link">
-              <span class="mob-menu-icon">${cat.icon || '🛍️'}</span> ${cat.name}
-            </a>
-          `).join('')}
-        </nav>
+      <!-- Explorar por Categoria — grid visual (igual à seção da homepage no desktop) -->
+      <div class="px-3 pt-3 pb-1">
+
+        <!-- Cabeçalho colapsável -->
+        <button onclick="toggleMobCats()" id="mob-cats-toggle"
+          class="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-gray-50 transition-colors group">
+          <div class="flex items-center gap-2">
+            <div class="w-1 h-5 bg-gradient-to-b from-blue-500 to-blue-700 rounded-full"></div>
+            <span class="text-xs font-black text-gray-700 uppercase tracking-wider">Explorar por Categoria</span>
+          </div>
+          <svg id="mob-cats-chevron" class="w-4 h-4 text-gray-400 transition-transform duration-200 rotate-0"
+               fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
+
+        <!-- Grid de categorias — aberto por padrão -->
+        <div id="mob-cats-grid" class="mt-2 pb-1">
+          <div class="grid grid-cols-3 gap-2 px-1">
+            ${(opts.navCategories && opts.navCategories.length > 0
+              ? opts.navCategories
+              : [
+                  { slug: 'smartphones',      icon: '📱', name: 'Smartphones' },
+                  { slug: 'notebooks',        icon: '💻', name: 'Notebooks' },
+                  { slug: 'tv',               icon: '📺', name: 'TVs & Smart TVs' },
+                  { slug: 'games',            icon: '🎮', name: 'Games & Consoles' },
+                  { slug: 'eletrodomesticos', icon: '🏠', name: 'Eletrodomésticos' },
+                  { slug: 'audio',            icon: '🎧', name: 'Áudio & Fones' },
+                  { slug: 'cameras',          icon: '📷', name: 'Câmeras & Drones' },
+                  { slug: 'moda',             icon: '👗', name: 'Moda & Calçados' },
+                  { slug: 'tablets',          icon: '📟', name: 'Tablets & iPads' },
+                  { slug: 'computadores',     icon: '🖥️', name: 'Computadores' },
+                  { slug: 'monitores',        icon: '🖥', name: 'Monitores' },
+                  { slug: 'impressoras',      icon: '🖨️', name: 'Impressoras' },
+                ]
+            ).map(cat => `
+              <a href="/categoria/${cat.slug}" onclick="closeHamburger()"
+                class="flex flex-col items-center gap-1.5 p-2.5 bg-gray-50 hover:bg-blue-50 border border-gray-100 hover:border-blue-200 rounded-xl transition-all text-center group">
+                <span class="text-2xl leading-none group-hover:scale-110 transition-transform">${cat.icon || '🛍️'}</span>
+                <span class="text-[10px] font-bold text-gray-700 group-hover:text-blue-700 leading-tight line-clamp-2">${cat.name}</span>
+              </a>
+            `).join('')}
+          </div>
+        </div>
       </div>
 
       <!-- Divisor -->
