@@ -601,6 +601,145 @@ admin.delete('/api/users/:id', async (c) => {
   return c.json({ ok: true })
 })
 
+// ── PATCH /admin/api/members/:id — Editar cliente (oauth_users) ──
+admin.patch('/api/members/:id', async (c) => {
+  const { DB } = c.env
+  const id   = c.req.param('id')
+  const body = await c.req.json().catch(() => ({})) as any
+  const { full_name, status, notify_email, offers_email } = body
+  await DB.prepare(`
+    UPDATE oauth_users SET
+      full_name    = COALESCE(?, full_name),
+      notify_email = COALESCE(?, notify_email),
+      offers_email = COALESCE(?, offers_email)
+    WHERE id = ?
+  `).bind(full_name ?? null, notify_email ?? null, offers_email ?? null, id).run()
+  // bloquear sessão se status=blocked
+  if (status === 'blocked') {
+    await DB.prepare(`UPDATE oauth_users SET session_token = NULL, session_expires_at = NULL WHERE id = ?`).bind(id).run()
+  }
+  return c.json({ ok: true })
+})
+
+// ── GET /admin/api/members — Lista clientes oauth ─────────
+admin.get('/api/members', async (c) => {
+  const { DB } = c.env
+  const page    = Math.max(1, parseInt(c.req.query('page') || '1'))
+  const perPage = 25
+  const offset  = (page - 1) * perPage
+  const q       = c.req.query('q') || ''
+  const filter  = c.req.query('filter') || ''
+
+  let where = 'WHERE 1=1'
+  const binds: any[] = []
+  if (q) { where += ' AND (email LIKE ? OR full_name LIKE ?)'; binds.push(`%${q}%`, `%${q}%`) }
+  if (filter === 'google')   { where += " AND auth_provider = 'google'"; }
+  if (filter === 'email')    { where += " AND auth_provider = 'email'";  }
+  if (filter === 'offers')   { where += ' AND offers_email = 1';         }
+  if (filter === 'notified') { where += ' AND notify_email = 1';         }
+
+  const [count, data] = await Promise.all([
+    DB.prepare(`SELECT COUNT(*) as total FROM oauth_users ${where}`).bind(...binds).first<any>(),
+    DB.prepare(`
+      SELECT id, email, full_name, avatar_url, auth_provider, notify_email, offers_email,
+             onboarding_done, last_login_at, login_count, created_at, session_expires_at
+      FROM oauth_users ${where}
+      ORDER BY created_at DESC LIMIT ? OFFSET ?
+    `).bind(...binds, perPage, offset).all()
+  ])
+  return c.json({ members: data.results, total: count?.total || 0, page, per_page: perPage })
+})
+
+// ── GET /admin/api/admin-users — Lista admins ─────────────
+admin.get('/api/admin-users', async (c) => {
+  const { DB } = c.env
+  const { results } = await DB.prepare(`
+    SELECT au.*, GROUP_CONCAT(ap.permission) as permissions
+    FROM admin_users au
+    LEFT JOIN admin_permissions ap ON ap.admin_id = au.id AND ap.granted = 1
+    GROUP BY au.id
+    ORDER BY au.created_at DESC
+  `).all<any>()
+  return c.json(results || [])
+})
+
+// ── POST /admin/api/admin-users — Criar admin ─────────────
+admin.post('/api/admin-users', async (c) => {
+  const { DB } = c.env
+  const body = await c.req.json().catch(() => ({})) as any
+  const { name, email, password, role, permissions } = body
+
+  if (!name || !email || !password) return c.json({ error: 'Nome, email e senha obrigatórios' }, 400)
+  if (password.length < 6) return c.json({ error: 'Senha mínima de 6 caracteres' }, 400)
+
+  const existing = await DB.prepare(`SELECT id FROM admin_users WHERE email = ?`).bind(email.toLowerCase()).first<any>()
+  if (existing) return c.json({ error: 'Email já cadastrado' }, 409)
+
+  const salt  = Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2,'0')).join('')
+  const buf   = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(salt + password))
+  const hash  = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('')
+  const id    = crypto.randomUUID()
+
+  await DB.prepare(`
+    INSERT INTO admin_users (id, name, email, password_hash, role, status)
+    VALUES (?, ?, ?, ?, ?, 'active')
+  `).bind(id, name.trim(), email.toLowerCase().trim(), `${salt}:${hash}`, role || 'moderator').run()
+
+  // Salva permissões
+  if (Array.isArray(permissions)) {
+    for (const perm of permissions) {
+      await DB.prepare(`INSERT OR REPLACE INTO admin_permissions (admin_id, permission, granted) VALUES (?,?,1)`)
+        .bind(id, perm).run()
+    }
+  }
+  return c.json({ ok: true, id })
+})
+
+// ── PATCH /admin/api/admin-users/:id — Editar admin ───────
+admin.patch('/api/admin-users/:id', async (c) => {
+  const { DB } = c.env
+  const id   = c.req.param('id')
+  const body = await c.req.json().catch(() => ({})) as any
+  const { name, email, password, role, status, permissions } = body
+
+  if (name || email || role || status) {
+    let hash: string | null = null
+    if (password && password.length >= 6) {
+      const salt = Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2,'0')).join('')
+      const buf  = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(salt + password))
+      hash = `${salt}:${Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('')}`
+    }
+    await DB.prepare(`
+      UPDATE admin_users SET
+        name         = COALESCE(?, name),
+        email        = COALESCE(?, email),
+        password_hash= CASE WHEN ? IS NOT NULL THEN ? ELSE password_hash END,
+        role         = COALESCE(?, role),
+        status       = COALESCE(?, status),
+        updated_at   = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(name ?? null, email?.toLowerCase() ?? null, hash, hash, role ?? null, status ?? null, id).run()
+  }
+
+  // Atualiza permissões — limpa e recria
+  if (Array.isArray(permissions)) {
+    await DB.prepare(`DELETE FROM admin_permissions WHERE admin_id = ?`).bind(id).run()
+    for (const perm of permissions) {
+      await DB.prepare(`INSERT OR REPLACE INTO admin_permissions (admin_id, permission, granted) VALUES (?,?,1)`)
+        .bind(id, perm).run()
+    }
+  }
+  return c.json({ ok: true })
+})
+
+// ── DELETE /admin/api/admin-users/:id — Remover admin ─────
+admin.delete('/api/admin-users/:id', async (c) => {
+  const { DB } = c.env
+  const id = c.req.param('id')
+  await DB.prepare(`DELETE FROM admin_users WHERE id = ?`).bind(id).run()
+  return c.json({ ok: true })
+})
+
 // ── GET /admin/api/price-history/:productId ───────────────
 admin.get('/api/price-history/:productId', async (c) => {
   const { DB } = c.env
@@ -3712,76 +3851,455 @@ async function renderAnalytics(area) {
   }
 }
 
-// ── USERS ─────────────────────────────────────────────────
-async function renderUsers(area, page = 1) {
-  const data = await api('GET', \`/admin/api/users?page=\${page}\`)
+// ── USERS — 2 abas: Clientes + Admins ────────────────────
+const PERMS_LIST = [
+  { key:'dashboard.view',    label:'📊 Ver Dashboard'       },
+  { key:'products.view',     label:'📦 Ver Produtos'         },
+  { key:'products.edit',     label:'📦 Editar Produtos'      },
+  { key:'offers.view',       label:'💰 Ver Ofertas'          },
+  { key:'offers.edit',       label:'💰 Editar Ofertas'       },
+  { key:'stores.view',       label:'🏪 Ver Lojas'            },
+  { key:'stores.edit',       label:'🏪 Editar Lojas'         },
+  { key:'api.view',          label:'🔌 Ver APIs'             },
+  { key:'api.edit',          label:'🔌 Editar APIs'          },
+  { key:'editorial.view',    label:'🤖 Ver IA Editorial'     },
+  { key:'editorial.edit',    label:'🤖 Usar IA Editorial'    },
+  { key:'users.view',        label:'👥 Ver Usuários'         },
+  { key:'users.edit',        label:'👥 Editar Usuários'      },
+  { key:'admins.manage',     label:'🔑 Gerenciar Admins'     },
+  { key:'analytics.view',    label:'📈 Ver Analytics'        },
+  { key:'footer.edit',       label:'🦶 Editar Rodapé'        },
+]
+
+const ROLES_MAP = {
+  super_admin: { label:'Super Admin', color:'red'    },
+  admin:       { label:'Admin',       color:'yellow' },
+  moderator:   { label:'Moderador',   color:'blue'   },
+  editor:      { label:'Editor',      color:'green'  },
+}
+
+function rolePermissions(role) {
+  if (role === 'super_admin') return PERMS_LIST.map(p => p.key)
+  if (role === 'admin')       return PERMS_LIST.map(p => p.key).filter(k => k !== 'admins.manage')
+  if (role === 'moderator')   return ['dashboard.view','products.view','offers.view','stores.view','users.view','analytics.view']
+  if (role === 'editor')      return ['dashboard.view','products.view','products.edit','editorial.view','editorial.edit','footer.edit']
+  return []
+}
+
+let _usersTab = 'clients'
+
+async function renderUsers(area) {
+  area.innerHTML = \`
+  <div class="space-y-4">
+    <!-- Abas -->
+    <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div class="flex border-b border-slate-100">
+        <button id="utab-clients" onclick="switchUsersTab('clients')"
+          class="flex-1 py-3.5 text-sm font-bold text-blue-600 border-b-2 border-blue-600 transition-all">
+          👥 Clientes / Membros
+        </button>
+        <button id="utab-admins" onclick="switchUsersTab('admins')"
+          class="flex-1 py-3.5 text-sm font-bold text-slate-400 border-b-2 border-transparent hover:text-slate-600 transition-all">
+          🔑 Administradores
+        </button>
+      </div>
+    </div>
+    <!-- Conteúdo da aba ativa -->
+    <div id="users-tab-content"></div>
+  </div>\`
+  switchUsersTab(_usersTab)
+}
+
+function switchUsersTab(tab) {
+  _usersTab = tab
+  const tc  = document.getElementById('utab-clients')
+  const ta  = document.getElementById('utab-admins')
+  if (!tc || !ta) return
+  const activeClass   = 'flex-1 py-3.5 text-sm font-bold text-blue-600 border-b-2 border-blue-600 transition-all'
+  const inactiveClass = 'flex-1 py-3.5 text-sm font-bold text-slate-400 border-b-2 border-transparent hover:text-slate-600 transition-all'
+  tc.className = tab === 'clients' ? activeClass : inactiveClass
+  ta.className = tab === 'admins'  ? activeClass : inactiveClass
+  const content = document.getElementById('users-tab-content')
+  if (tab === 'clients') renderMembersTab(content)
+  else                   renderAdminsTab(content)
+}
+
+// ── ABA CLIENTES ──────────────────────────────────────────
+async function renderMembersTab(area, page = 1, q = '', filter = '') {
+  area.innerHTML = spin
+  const qs   = new URLSearchParams({ page, q, filter }).toString()
+  const data = await api('GET', \`/admin/api/members?\${qs}\`)
   if (!data) return
 
-  const rows = (data.users || []).length > 0
-    ? data.users.map(u => \`
-      <tr class="hover:bg-slate-50">
+  const providerBadge = p => p === 'google'
+    ? \`<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700"><svg class="w-3 h-3" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>Google</span>\`
+    : \`<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">✉️ Email</span>\`
+
+  const rows = (data.members || []).length > 0
+    ? data.members.map(u => \`
+      <tr class="hover:bg-slate-50 transition-colors">
         <td class="table-td">
           <div class="flex items-center gap-3">
-            <div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-sm">
-              \${(u.full_name || u.email || '?')[0].toUpperCase()}
-            </div>
+            \${u.avatar_url
+              ? \`<img src="\${u.avatar_url}" class="w-9 h-9 rounded-full object-cover border border-slate-200" alt="">\`
+              : \`<div class="w-9 h-9 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-bold text-sm">\${(u.full_name||u.email||'?')[0].toUpperCase()}</div>\`}
             <div>
               <div class="font-semibold text-sm text-slate-800">\${u.full_name || '—'}</div>
               <div class="text-xs text-slate-400">\${u.email}</div>
             </div>
           </div>
         </td>
-        <td class="table-td">\${badge(u.role || 'customer', u.role==='admin' ? 'red' : 'blue')}</td>
-        <td class="table-td">\${u.status==='active' ? badge('Ativo','green') : badge('Bloqueado','red')}</td>
-        <td class="table-td text-xs text-slate-400">\${fDateTime(u.last_login_at)}</td>
-        <td class="table-td text-xs text-slate-400">\${fDate(u.created_at)}</td>
+        <td class="table-td">\${providerBadge(u.auth_provider)}</td>
+        <td class="table-td text-center">
+          \${u.notify_email ? '<span class="text-green-500 text-lg" title="Alertas de preço">🔔</span>' : '<span class="text-slate-300 text-lg">🔔</span>'}
+          \${u.offers_email ? '<span class="text-blue-500 text-lg" title="Ofertas por email">📧</span>' : '<span class="text-slate-300 text-lg">📧</span>'}
+        </td>
+        <td class="table-td text-xs text-slate-500">\${u.login_count || 0}x</td>
+        <td class="table-td text-xs text-slate-500">\${fDateTime(u.last_login_at)}</td>
+        <td class="table-td text-xs text-slate-500">\${fDate(u.created_at)}</td>
         <td class="table-td">
-          <div class="flex gap-2">
-            \${u.status==='active'
-              ? \`<button data-uid="\${u.id}" data-status="blocked" onclick="setUserStatus(this.dataset.uid, this.dataset.status)" class="btn-danger text-xs">Bloquear</button>\`
-              : \`<button data-uid="\${u.id}" data-status="active" onclick="setUserStatus(this.dataset.uid, this.dataset.status)" class="btn-success text-xs">Ativar</button>\`}
-            \${u.role!=='admin' ? \`<button data-uid="\${u.id}" onclick="deleteUser(this.dataset.uid)" class="btn-danger text-xs">Excluir</button>\` : ''}
+          <div class="flex gap-1.5">
+            <button onclick='openEditMemberModal(\${JSON.stringify(u)})' class="btn-secondary text-xs px-2.5 py-1.5">✏️ Editar</button>
+            <button onclick="blockMember('\${u.id}', \${!u.session_expires_at})" class="text-xs px-2.5 py-1.5 rounded-lg \${!u.session_expires_at ? 'bg-green-50 text-green-600 hover:bg-green-100' : 'bg-red-50 text-red-600 hover:bg-red-100'} transition-all">
+              \${!u.session_expires_at ? '✅ Ativar' : '🚫 Bloquear'}
+            </button>
           </div>
         </td>
-      </tr>
-    \`).join('')
-    : \`<tr><td colspan="6" class="py-12 text-center text-slate-400">Nenhum usuário cadastrado ainda</td></tr>\`
+      </tr>\`).join('')
+    : \`<tr><td colspan="7" class="py-16 text-center text-slate-400">Nenhum membro cadastrado ainda</td></tr>\`
+
+  const filterOpts = [
+    ['','Todos'],['google','Google'],['email','Email'],['offers','Quer Ofertas'],['notified','Alertas Ativos']
+  ].map(([v,l]) => \`<option value="\${v}" \${filter===v?'selected':''}>\${l}</option>\`).join('')
 
   area.innerHTML = \`
-    <div class="section">
-      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-        <div class="px-5 py-4 border-b border-slate-100">
-          <h3 class="font-bold text-slate-800">Usuários <span class="text-slate-400 font-normal text-sm ml-1">\${data.total || 0} total</span></h3>
-        </div>
-        <div class="overflow-x-auto">
-          <table class="w-full">
-            <thead><tr>
-              <th class="table-th">Usuário</th>
-              <th class="table-th">Role</th>
-              <th class="table-th">Status</th>
-              <th class="table-th">Último login</th>
-              <th class="table-th">Cadastro</th>
-              <th class="table-th">Ações</th>
-            </tr></thead>
-            <tbody>\${rows}</tbody>
-          </table>
-        </div>
+  <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+    <!-- Toolbar -->
+    <div class="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center gap-3">
+      <div class="flex-1 min-w-[200px]">
+        <input id="members-search" type="text" value="\${q}" placeholder="Buscar por nome ou email..."
+          class="input w-full"
+          onkeydown="if(event.key==='Enter'){const v=this.value;renderMembersTab(document.getElementById('users-tab-content'),1,v,document.getElementById('members-filter').value)}">
       </div>
+      <select id="members-filter" class="input w-44"
+        onchange="renderMembersTab(document.getElementById('users-tab-content'),1,document.getElementById('members-search').value,this.value)">
+        \${filterOpts}
+      </select>
+      <button onclick="renderMembersTab(document.getElementById('users-tab-content'),1,document.getElementById('members-search').value,document.getElementById('members-filter').value)"
+        class="btn-primary">🔍 Buscar</button>
+      <span class="text-sm text-slate-500 ml-auto">\${data.total || 0} membros</span>
     </div>
-  \`
+    <!-- Tabela -->
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead><tr>
+          <th class="table-th">Membro</th>
+          <th class="table-th">Provedor</th>
+          <th class="table-th text-center">Notif.</th>
+          <th class="table-th">Logins</th>
+          <th class="table-th">Último login</th>
+          <th class="table-th">Cadastro</th>
+          <th class="table-th">Ações</th>
+        </tr></thead>
+        <tbody>\${rows}</tbody>
+      </table>
+    </div>
+    \${renderPagination(page, data.total, data.per_page, p => \`renderMembersTab(document.getElementById('users-tab-content'),\${p},'\${q}','\${filter}')\`)}
+  </div>\`
 }
 
+function openEditMemberModal(u) {
+  document.getElementById('modal-container').innerHTML = \`
+  <div id="edit-member-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
+      <div class="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-5 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          \${u.avatar_url
+            ? \`<img src="\${u.avatar_url}" class="w-10 h-10 rounded-full border-2 border-white/30">\`
+            : \`<div class="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center text-white font-bold">\${(u.full_name||u.email||'?')[0].toUpperCase()}</div>\`}
+          <div>
+            <div class="text-white font-bold">\${u.full_name || 'Sem nome'}</div>
+            <div class="text-blue-200 text-xs">\${u.email}</div>
+          </div>
+        </div>
+        <button onclick="document.getElementById('edit-member-modal').remove()" class="text-white/70 hover:text-white text-xl leading-none">✕</button>
+      </div>
+      <div class="p-6 space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1.5">Nome completo</label>
+          <input type="text" id="em-name" value="\${u.full_name||''}" class="input" placeholder="Nome do usuário">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1.5">Provedor</label>
+          <div class="px-3 py-2 bg-slate-50 rounded-xl text-sm text-slate-500">\${u.auth_provider === 'google' ? '🔵 Google OAuth' : '✉️ Email/Senha'}</div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <label class="flex items-center gap-2.5 p-3 rounded-xl border border-slate-200 hover:border-blue-400 cursor-pointer transition-all">
+            <input type="checkbox" id="em-notify" \${u.notify_email ? 'checked' : ''} class="w-4 h-4 rounded accent-blue-600">
+            <div>
+              <div class="text-sm font-semibold text-slate-700">🔔 Alertas</div>
+              <div class="text-xs text-slate-400">Alertas de preço</div>
+            </div>
+          </label>
+          <label class="flex items-center gap-2.5 p-3 rounded-xl border border-slate-200 hover:border-blue-400 cursor-pointer transition-all">
+            <input type="checkbox" id="em-offers" \${u.offers_email ? 'checked' : ''} class="w-4 h-4 rounded accent-blue-600">
+            <div>
+              <div class="text-sm font-semibold text-slate-700">📧 Ofertas</div>
+              <div class="text-xs text-slate-400">Email de promos</div>
+            </div>
+          </label>
+        </div>
+        <div id="em-error" class="hidden text-sm text-red-600 bg-red-50 rounded-xl px-3 py-2"></div>
+      </div>
+      <div class="px-6 pb-6 flex gap-3">
+        <button onclick="document.getElementById('edit-member-modal').remove()" class="btn-secondary flex-1">Cancelar</button>
+        <button onclick="saveMember('\${u.id}')" class="btn-primary flex-1">💾 Salvar</button>
+      </div>
+    </div>
+  </div>\`
+}
+
+async function saveMember(id) {
+  const name         = document.getElementById('em-name')?.value?.trim()
+  const notify_email = document.getElementById('em-notify')?.checked ? 1 : 0
+  const offers_email = document.getElementById('em-offers')?.checked ? 1 : 0
+  const err          = document.getElementById('em-error')
+  const r = await api('PATCH', \`/admin/api/members/\${id}\`, { full_name: name, notify_email, offers_email })
+  if (!r?.ok) { err.textContent = 'Erro ao salvar.'; err.classList.remove('hidden'); return }
+  document.getElementById('edit-member-modal')?.remove()
+  toast('Membro atualizado ✓', 'success')
+  renderMembersTab(document.getElementById('users-tab-content'))
+}
+
+async function blockMember(id, activate) {
+  const action = activate ? 'ativar' : 'bloquear'
+  if (!confirm(\`Confirmar: \${action} este membro?\`)) return
+  await api('PATCH', \`/admin/api/members/\${id}\`, { status: activate ? 'active' : 'blocked' })
+  toast(activate ? 'Membro ativado ✓' : 'Membro bloqueado', activate ? 'success' : 'info')
+  renderMembersTab(document.getElementById('users-tab-content'))
+}
+
+// ── ABA ADMINS ────────────────────────────────────────────
+async function renderAdminsTab(area) {
+  area.innerHTML = spin
+  const admins = await api('GET', '/admin/api/admin-users')
+  if (!admins) return
+
+  const rows = admins.length > 0
+    ? admins.map(a => {
+        const rm = ROLES_MAP[a.role] || { label: a.role, color: 'blue' }
+        const perms = a.permissions ? a.permissions.split(',') : []
+        return \`
+        <tr class="hover:bg-slate-50 transition-colors">
+          <td class="table-td">
+            <div class="flex items-center gap-3">
+              <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-slate-600 to-slate-800 flex items-center justify-center text-white font-bold text-sm">
+                \${(a.name||a.email||'?')[0].toUpperCase()}
+              </div>
+              <div>
+                <div class="font-semibold text-sm text-slate-800">\${a.name}</div>
+                <div class="text-xs text-slate-400">\${a.email}</div>
+              </div>
+            </div>
+          </td>
+          <td class="table-td">\${badge(rm.label, rm.color)}</td>
+          <td class="table-td">\${a.status==='active' ? badge('Ativo','green') : badge('Inativo','red')}</td>
+          <td class="table-td">
+            <div class="flex flex-wrap gap-1 max-w-xs">
+              \${perms.slice(0,4).map(p => \`<span class="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">\${p.split('.')[0]}</span>\`).join('')}
+              \${perms.length > 4 ? \`<span class="text-xs text-slate-400">+\${perms.length-4}</span>\` : ''}
+            </div>
+          </td>
+          <td class="table-td text-xs text-slate-500">\${fDateTime(a.last_login_at)}</td>
+          <td class="table-td text-xs text-slate-500">\${fDate(a.created_at)}</td>
+          <td class="table-td">
+            <div class="flex gap-1.5">
+              <button onclick='openEditAdminModal(\${JSON.stringify(a)})' class="btn-secondary text-xs px-2.5 py-1.5">✏️ Editar</button>
+              <button onclick="deleteAdminUser('\${a.id}','\${a.name}')" class="btn-danger text-xs px-2.5 py-1.5">🗑️</button>
+            </div>
+          </td>
+        </tr>\`
+      }).join('')
+    : \`<tr><td colspan="7" class="py-16 text-center text-slate-400">Nenhum administrador cadastrado ainda</td></tr>\`
+
+  area.innerHTML = \`
+  <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+    <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+      <div>
+        <h3 class="font-bold text-slate-800">Administradores <span class="text-slate-400 font-normal text-sm ml-1">\${admins.length} cadastrados</span></h3>
+        <p class="text-xs text-slate-400 mt-0.5">Gerencie o acesso ao painel admin e as permissões de cada usuário</p>
+      </div>
+      <button onclick="openNewAdminModal()" class="btn-primary">+ Novo Admin</button>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead><tr>
+          <th class="table-th">Administrador</th>
+          <th class="table-th">Cargo</th>
+          <th class="table-th">Status</th>
+          <th class="table-th">Permissões</th>
+          <th class="table-th">Último acesso</th>
+          <th class="table-th">Criado em</th>
+          <th class="table-th">Ações</th>
+        </tr></thead>
+        <tbody>\${rows}</tbody>
+      </table>
+    </div>
+  </div>\`
+}
+
+function openNewAdminModal() { openAdminModal(null) }
+function openEditAdminModal(a) { openAdminModal(a) }
+
+function openAdminModal(a) {
+  const isEdit = !!a
+  const currentPerms = a?.permissions ? a.permissions.split(',') : (a ? rolePermissions(a.role) : rolePermissions('moderator'))
+
+  const permsHTML = PERMS_LIST.map(p => \`
+    <label class="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-slate-50 transition-colors">
+      <input type="checkbox" name="aperm" value="\${p.key}"
+        \${currentPerms.includes(p.key) ? 'checked' : ''}
+        class="w-4 h-4 rounded accent-blue-600">
+      <span class="text-sm text-slate-700">\${p.label}</span>
+    </label>\`).join('')
+
+  const rolesHTML = Object.entries(ROLES_MAP).map(([v, r]) =>
+    \`<option value="\${v}" \${a?.role===v?'selected':''}>\${r.label}</option>\`).join('')
+
+  document.getElementById('modal-container').innerHTML = \`
+  <div id="admin-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+      <!-- Header -->
+      <div class="bg-gradient-to-r from-slate-800 to-slate-900 px-6 py-5 flex items-center justify-between shrink-0">
+        <div>
+          <h3 class="text-white font-black text-lg">\${isEdit ? '✏️ Editar Admin' : '+ Novo Administrador'}</h3>
+          <p class="text-slate-400 text-xs mt-0.5">\${isEdit ? a.email : 'Configure acesso e permissões'}</p>
+        </div>
+        <button onclick="document.getElementById('admin-modal').remove()" class="text-white/60 hover:text-white text-2xl leading-none">✕</button>
+      </div>
+
+      <!-- Scroll body -->
+      <div class="overflow-y-auto flex-1 p-6 space-y-5">
+
+        <!-- Dados básicos -->
+        <div class="grid grid-cols-2 gap-4">
+          <div class="col-span-2">
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">Nome completo *</label>
+            <input type="text" id="am-name" value="\${a?.name||''}" class="input" placeholder="Ex: João Silva">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">Email *</label>
+            <input type="email" id="am-email" value="\${a?.email||''}" class="input" placeholder="joao@empresa.com">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">\${isEdit ? 'Nova senha (deixe em branco para manter)' : 'Senha *'}</label>
+            <input type="password" id="am-password" class="input" placeholder="••••••••" autocomplete="new-password">
+          </div>
+        </div>
+
+        <!-- Cargo -->
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1.5">Cargo / Role</label>
+          <select id="am-role" class="input" onchange="applyRolePreset(this.value)">
+            \${rolesHTML}
+          </select>
+          <p class="text-xs text-slate-400 mt-1">Ao selecionar um cargo, as permissões padrão serão preenchidas automaticamente.</p>
+        </div>
+
+        \${isEdit ? \`
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1.5">Status</label>
+          <select id="am-status" class="input">
+            <option value="active" \${a.status==='active'?'selected':''}>✅ Ativo</option>
+            <option value="inactive" \${a.status==='inactive'?'selected':''}>⏸️ Inativo</option>
+          </select>
+        </div>\` : ''}
+
+        <!-- Permissões -->
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <label class="text-xs font-semibold text-slate-600">Permissões individuais</label>
+            <div class="flex gap-2">
+              <button type="button" onclick="setAllPerms(true)"  class="text-xs text-blue-600 hover:underline">Marcar tudo</button>
+              <button type="button" onclick="setAllPerms(false)" class="text-xs text-slate-400 hover:underline">Desmarcar tudo</button>
+            </div>
+          </div>
+          <div class="border border-slate-200 rounded-xl p-3 grid grid-cols-2 gap-0.5 max-h-56 overflow-y-auto">
+            \${permsHTML}
+          </div>
+        </div>
+
+        <div id="am-error" class="hidden text-sm text-red-600 bg-red-50 rounded-xl px-3 py-2"></div>
+      </div>
+
+      <!-- Footer -->
+      <div class="px-6 py-4 border-t border-slate-100 flex gap-3 shrink-0">
+        <button onclick="document.getElementById('admin-modal').remove()" class="btn-secondary flex-1">Cancelar</button>
+        <button onclick="saveAdminUser('\${a?.id||''}')" class="btn-primary flex-1">\${isEdit ? '💾 Salvar' : '✅ Criar Admin'}</button>
+      </div>
+    </div>
+  </div>\`
+}
+
+function applyRolePreset(role) {
+  const perms = rolePermissions(role)
+  document.querySelectorAll('input[name="aperm"]').forEach(cb => {
+    cb.checked = perms.includes(cb.value)
+  })
+}
+
+function setAllPerms(checked) {
+  document.querySelectorAll('input[name="aperm"]').forEach(cb => { cb.checked = checked })
+}
+
+async function saveAdminUser(id) {
+  const name     = document.getElementById('am-name')?.value?.trim()
+  const email    = document.getElementById('am-email')?.value?.trim()
+  const password = document.getElementById('am-password')?.value
+  const role     = document.getElementById('am-role')?.value
+  const status   = document.getElementById('am-status')?.value
+  const err      = document.getElementById('am-error')
+  const permissions = [...document.querySelectorAll('input[name="aperm"]:checked')].map(cb => cb.value)
+
+  if (!name)  { err.textContent='Nome obrigatório.';  err.classList.remove('hidden'); return }
+  if (!email) { err.textContent='Email obrigatório.'; err.classList.remove('hidden'); return }
+
+  const isEdit = !!id
+  const method = isEdit ? 'PATCH' : 'POST'
+  const url    = isEdit ? \`/admin/api/admin-users/\${id}\` : '/admin/api/admin-users'
+  const body: any = { name, email, role, permissions }
+  if (status)                body.status   = status
+  if (password?.length >= 6) body.password = password
+  if (!isEdit && !password)  { err.textContent='Senha obrigatória.'; err.classList.remove('hidden'); return }
+  if (!isEdit) body.password = password
+
+  const r = await api(method, url, body)
+  if (!r?.ok) {
+    err.textContent = r?.error || 'Erro ao salvar.'
+    err.classList.remove('hidden')
+    return
+  }
+  document.getElementById('admin-modal')?.remove()
+  toast(isEdit ? 'Admin atualizado ✓' : 'Admin criado com sucesso ✓', 'success')
+  renderAdminsTab(document.getElementById('users-tab-content'))
+}
+
+async function deleteAdminUser(id, name) {
+  if (!confirm(\`Remover o admin "\${name}"? Esta ação não pode ser desfeita.\`)) return
+  await api('DELETE', \`/admin/api/admin-users/\${id}\`)
+  toast('Admin removido', 'info')
+  renderAdminsTab(document.getElementById('users-tab-content'))
+}
+
+// Mantém compatibilidade com funções antigas
 async function setUserStatus(id, status) {
   await api('PATCH', \`/admin/api/users/\${id}/status\`, { status })
   toast(status === 'active' ? 'Usuário ativado ✓' : 'Usuário bloqueado', status === 'active' ? 'success' : 'info')
-  renderUsers(document.getElementById('content-area'))
 }
-
 async function deleteUser(id) {
   if (!confirm('Excluir este usuário? Esta ação não pode ser desfeita.')) return
   await api('DELETE', \`/admin/api/users/\${id}\`)
   toast('Usuário excluído', 'info')
-  renderUsers(document.getElementById('content-area'))
 }
 
 // ── Pagination helper ─────────────────────────────────────
