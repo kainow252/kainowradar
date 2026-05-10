@@ -740,6 +740,699 @@ admin.delete('/api/admin-users/:id', async (c) => {
   return c.json({ ok: true })
 })
 
+// ============================================================
+// SOCIAL MEDIA — Helpers + CRUD Accounts + CRUD Posts + Cron
+// ============================================================
+
+// ── Helper: XOR encrypt/decrypt para tokens ───────────────
+function xorCrypt(text: string, key: string): string {
+  if (!text || !key) return text
+  const keyBytes = new TextEncoder().encode(key)
+  const textBytes = new TextEncoder().encode(text)
+  const out = new Uint8Array(textBytes.length)
+  for (let i = 0; i < textBytes.length; i++) {
+    out[i] = textBytes[i] ^ keyBytes[i % keyBytes.length]
+  }
+  // Base64url encode
+  return btoa(String.fromCharCode(...out))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
+}
+
+function xorDecrypt(encoded: string, key: string): string {
+  if (!encoded || !key) return encoded
+  // Desfaz base64url
+  const b64 = encoded.replace(/-/g, '+').replace(/_/g, '/') + '=='.slice(0, (4 - encoded.length % 4) % 4)
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
+  const keyBytes = new TextEncoder().encode(key)
+  const out = new Uint8Array(bytes.length)
+  for (let i = 0; i < bytes.length; i++) {
+    out[i] = bytes[i] ^ keyBytes[i % keyBytes.length]
+  }
+  return new TextDecoder().decode(out)
+}
+
+function getXorKey(env: any): string {
+  return (env as any).SOCIAL_XOR_KEY || 'kainow-radar-xor-default-2025'
+}
+
+// ── Helper: Gera ID curto para social_accounts ────────────
+function genSocialId(): string {
+  return 'sa_' + Array.from(crypto.getRandomValues(new Uint8Array(8)))
+    .map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+// ── Integrações por plataforma ────────────────────────────
+
+async function postToInstagram(account: any, text: string, imageUrl?: string): Promise<{ ok: boolean; post_id?: string; url?: string; error?: string }> {
+  // Instagram Graph API — requer ig_user_id + access_token
+  const igUserId = account.ig_user_id
+  const token = account.access_token
+  if (!igUserId || !token) return { ok: false, error: 'ig_user_id e access_token são obrigatórios para Instagram' }
+
+  try {
+    // Passo 1: Criar container de mídia (com ou sem imagem)
+    const mediaParams: Record<string, string> = {
+      caption: text,
+      access_token: token,
+    }
+    if (imageUrl) {
+      mediaParams.image_url = imageUrl
+      mediaParams.media_type = 'IMAGE'
+    } else {
+      // Post de texto (feed normal sem mídia requer imagem — usar carousel ou reel seria necessário)
+      // Para simplificar, usamos media_type IMAGE com imagem de placeholder ou retornamos erro
+      return { ok: false, error: 'Instagram requer imagem para publicar no feed' }
+    }
+
+    const containerRes = await fetch(`https://graph.facebook.com/v19.0/${igUserId}/media`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(mediaParams),
+    })
+    const containerData = await containerRes.json() as any
+    if (!containerRes.ok || !containerData.id) {
+      return { ok: false, error: containerData?.error?.message || 'Erro ao criar container' }
+    }
+
+    // Passo 2: Publicar container
+    const publishRes = await fetch(`https://graph.facebook.com/v19.0/${igUserId}/media_publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ creation_id: containerData.id, access_token: token }),
+    })
+    const publishData = await publishRes.json() as any
+    if (!publishRes.ok || !publishData.id) {
+      return { ok: false, error: publishData?.error?.message || 'Erro ao publicar no Instagram' }
+    }
+
+    return { ok: true, post_id: publishData.id, url: `https://www.instagram.com/p/${publishData.id}/` }
+  } catch (e: any) {
+    return { ok: false, error: e.message }
+  }
+}
+
+async function postToFacebook(account: any, text: string, imageUrl?: string, linkUrl?: string): Promise<{ ok: boolean; post_id?: string; url?: string; error?: string }> {
+  const pageId = account.page_id || account.account_id
+  const token = account.access_token
+  if (!pageId || !token) return { ok: false, error: 'page_id e access_token são obrigatórios para Facebook' }
+
+  try {
+    const body: Record<string, string> = { message: text, access_token: token }
+    let endpoint = `https://graph.facebook.com/v19.0/${pageId}/feed`
+
+    if (imageUrl) {
+      endpoint = `https://graph.facebook.com/v19.0/${pageId}/photos`
+      body.url = imageUrl
+      body.caption = text
+    } else if (linkUrl) {
+      body.link = linkUrl
+    }
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const data = await res.json() as any
+    if (!res.ok || !data.id) {
+      return { ok: false, error: data?.error?.message || 'Erro ao publicar no Facebook' }
+    }
+
+    const [pid, eid] = (data.id as string).split('_')
+    const postUrl = eid
+      ? `https://www.facebook.com/permalink.php?story_fbid=${eid}&id=${pid}`
+      : `https://www.facebook.com/${data.id}`
+
+    return { ok: true, post_id: data.id, url: postUrl }
+  } catch (e: any) {
+    return { ok: false, error: e.message }
+  }
+}
+
+async function postToX(account: any, text: string, _imageUrl?: string): Promise<{ ok: boolean; post_id?: string; url?: string; error?: string }> {
+  const token = account.access_token        // OAuth 2.0 user access token
+  const apiKey = account.token_secret       // reutilizamos token_secret para API Key / Bearer Token
+  const bearerToken = apiKey || token
+  if (!bearerToken) return { ok: false, error: 'Bearer Token ou Access Token obrigatórios para X/Twitter' }
+
+  try {
+    const res = await fetch('https://api.twitter.com/2/tweets', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${bearerToken}`,
+      },
+      body: JSON.stringify({ text }),
+    })
+    const data = await res.json() as any
+    if (!res.ok || !data?.data?.id) {
+      return { ok: false, error: data?.detail || data?.errors?.[0]?.message || 'Erro ao publicar no X/Twitter' }
+    }
+
+    const tweetId = data.data.id
+    const handle = account.account_name?.replace('@', '') || 'i'
+    return { ok: true, post_id: tweetId, url: `https://x.com/${handle}/status/${tweetId}` }
+  } catch (e: any) {
+    return { ok: false, error: e.message }
+  }
+}
+
+async function postToLinkedIn(account: any, text: string, imageUrl?: string): Promise<{ ok: boolean; post_id?: string; url?: string; error?: string }> {
+  const token = account.access_token
+  const personId = account.account_id     // urn:li:person:{id} ou urn:li:organization:{id}
+  if (!token || !personId) return { ok: false, error: 'access_token e account_id (URN) obrigatórios para LinkedIn' }
+
+  try {
+    // URN do autor — se não começar com urn: tenta montar
+    const author = personId.startsWith('urn:') ? personId : `urn:li:person:${personId}`
+
+    const shareContent: any = {
+      author,
+      lifecycleState: 'PUBLISHED',
+      specificContent: {
+        'com.linkedin.ugc.ShareContent': {
+          shareCommentary: { text },
+          shareMediaCategory: imageUrl ? 'IMAGE' : 'NONE',
+        }
+      },
+      visibility: { 'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC' }
+    }
+
+    // Imagem no LinkedIn requer upload prévio via Assets API — simplificado: apenas link
+    if (imageUrl) {
+      shareContent.specificContent['com.linkedin.ugc.ShareContent'].media = [{
+        status: 'READY',
+        originalUrl: imageUrl,
+      }]
+    }
+
+    const res = await fetch('https://api.linkedin.com/v2/ugcPosts', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'X-Restli-Protocol-Version': '2.0.0',
+      },
+      body: JSON.stringify(shareContent),
+    })
+    const data = await res.json() as any
+    if (!res.ok) {
+      return { ok: false, error: data?.message || data?.status?.toString() || 'Erro ao publicar no LinkedIn' }
+    }
+
+    const postId = res.headers.get('x-restli-id') || data?.id || ''
+    return { ok: true, post_id: postId, url: `https://www.linkedin.com/feed/update/${postId}/` }
+  } catch (e: any) {
+    return { ok: false, error: e.message }
+  }
+}
+
+// ── Dispatcher: publica um post em sua plataforma ─────────
+async function dispatchPost(account: any, post: any): Promise<{ ok: boolean; post_id?: string; url?: string; error?: string }> {
+  const platform = post.platform || account.platform
+  const text = [post.content_text, post.hashtags].filter(Boolean).join('\n\n')
+
+  switch (platform) {
+    case 'instagram': return postToInstagram(account, text, post.image_url)
+    case 'facebook':  return postToFacebook(account, text, post.image_url, post.link_url)
+    case 'x':         return postToX(account, text, post.image_url)
+    case 'linkedin':  return postToLinkedIn(account, text, post.image_url)
+    default: return { ok: false, error: `Plataforma desconhecida: ${platform}` }
+  }
+}
+
+// ── GET /admin/api/social-accounts ───────────────────────
+admin.get('/api/social-accounts', async (c) => {
+  const { DB } = c.env
+  const { results } = await DB.prepare(`
+    SELECT id, platform, account_name, account_id, page_id, ig_user_id,
+           token_expires_at, is_active, last_test_at, last_test_ok, last_test_msg,
+           created_at, updated_at
+    FROM social_accounts ORDER BY platform, account_name
+  `).all()
+  return c.json(results)
+})
+
+// ── POST /admin/api/social-accounts — Conectar conta ─────
+admin.post('/api/social-accounts', async (c) => {
+  const { DB } = c.env
+  const body = await c.req.json().catch(() => ({})) as any
+  const { platform, account_name, account_id, access_token, token_secret,
+          refresh_token, page_id, ig_user_id, token_expires_at } = body
+
+  if (!platform || !account_name) return c.json({ error: 'platform e account_name obrigatórios' }, 400)
+
+  const key = getXorKey(c.env)
+  const id = genSocialId()
+
+  await DB.prepare(`
+    INSERT INTO social_accounts
+      (id, platform, account_name, account_id, access_token, token_secret,
+       refresh_token, page_id, ig_user_id, token_expires_at, is_active)
+    VALUES (?,?,?,?,?,?,?,?,?,?,1)
+  `).bind(
+    id, platform, account_name,
+    account_id || null,
+    access_token ? xorCrypt(access_token, key) : null,
+    token_secret ? xorCrypt(token_secret, key) : null,
+    refresh_token ? xorCrypt(refresh_token, key) : null,
+    page_id || null,
+    ig_user_id || null,
+    token_expires_at || null
+  ).run()
+
+  return c.json({ ok: true, id })
+})
+
+// ── PATCH /admin/api/social-accounts/:id — Editar conta ──
+admin.patch('/api/social-accounts/:id', async (c) => {
+  const { DB } = c.env
+  const id = c.req.param('id')
+  const body = await c.req.json().catch(() => ({})) as any
+  const { account_name, account_id, access_token, token_secret,
+          refresh_token, page_id, ig_user_id, token_expires_at, is_active } = body
+
+  const key = getXorKey(c.env)
+
+  await DB.prepare(`
+    UPDATE social_accounts SET
+      account_name     = COALESCE(?, account_name),
+      account_id       = COALESCE(?, account_id),
+      access_token     = CASE WHEN ? IS NOT NULL THEN ? ELSE access_token END,
+      token_secret     = CASE WHEN ? IS NOT NULL THEN ? ELSE token_secret END,
+      refresh_token    = CASE WHEN ? IS NOT NULL THEN ? ELSE refresh_token END,
+      page_id          = COALESCE(?, page_id),
+      ig_user_id       = COALESCE(?, ig_user_id),
+      token_expires_at = COALESCE(?, token_expires_at),
+      is_active        = COALESCE(?, is_active),
+      updated_at       = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(
+    account_name ?? null,
+    account_id ?? null,
+    access_token ? 'y' : null, access_token ? xorCrypt(access_token, key) : null,
+    token_secret ? 'y' : null, token_secret ? xorCrypt(token_secret, key) : null,
+    refresh_token ? 'y' : null, refresh_token ? xorCrypt(refresh_token, key) : null,
+    page_id ?? null,
+    ig_user_id ?? null,
+    token_expires_at ?? null,
+    is_active ?? null,
+    id
+  ).run()
+
+  return c.json({ ok: true })
+})
+
+// ── POST /admin/api/social-accounts/:id/test — Testar token
+admin.post('/api/social-accounts/:id/test', async (c) => {
+  const { DB } = c.env
+  const id = c.req.param('id')
+  const key = getXorKey(c.env)
+
+  const row = await DB.prepare(`SELECT * FROM social_accounts WHERE id = ?`).bind(id).first<any>()
+  if (!row) return c.json({ error: 'Conta não encontrada' }, 404)
+
+  const account = {
+    ...row,
+    access_token: row.access_token ? xorDecrypt(row.access_token, key) : null,
+    token_secret: row.token_secret ? xorDecrypt(row.token_secret, key) : null,
+    refresh_token: row.refresh_token ? xorDecrypt(row.refresh_token, key) : null,
+  }
+
+  let ok = false
+  let msg = ''
+
+  try {
+    if (row.platform === 'instagram') {
+      const igId = account.ig_user_id
+      if (!igId || !account.access_token) throw new Error('ig_user_id e access_token obrigatórios')
+      const res = await fetch(`https://graph.facebook.com/v19.0/${igId}?fields=id,name,username&access_token=${account.access_token}`)
+      const data = await res.json() as any
+      if (!res.ok) throw new Error(data?.error?.message || 'Token inválido')
+      ok = true; msg = `Conectado como @${data.username || data.name}`
+    } else if (row.platform === 'facebook') {
+      const pageId = account.page_id || account.account_id
+      if (!pageId || !account.access_token) throw new Error('page_id e access_token obrigatórios')
+      const res = await fetch(`https://graph.facebook.com/v19.0/${pageId}?fields=id,name&access_token=${account.access_token}`)
+      const data = await res.json() as any
+      if (!res.ok) throw new Error(data?.error?.message || 'Token inválido')
+      ok = true; msg = `Página: ${data.name}`
+    } else if (row.platform === 'x') {
+      const bearer = account.token_secret || account.access_token
+      if (!bearer) throw new Error('Bearer Token obrigatório')
+      const res = await fetch('https://api.twitter.com/2/users/me', {
+        headers: { 'Authorization': `Bearer ${bearer}` }
+      })
+      const data = await res.json() as any
+      if (!res.ok) throw new Error(data?.detail || 'Token inválido')
+      ok = true; msg = `Conectado como @${data?.data?.username || '?'}`
+    } else if (row.platform === 'linkedin') {
+      if (!account.access_token) throw new Error('Access Token obrigatório')
+      const res = await fetch('https://api.linkedin.com/v2/userinfo', {
+        headers: { 'Authorization': `Bearer ${account.access_token}` }
+      })
+      const data = await res.json() as any
+      if (!res.ok) throw new Error(data?.message || 'Token inválido')
+      ok = true; msg = `Conectado como ${data?.name || data?.sub || '?'}`
+    } else {
+      throw new Error(`Plataforma ${row.platform} não suportada para teste`)
+    }
+  } catch (e: any) {
+    ok = false; msg = e.message
+  }
+
+  await DB.prepare(`
+    UPDATE social_accounts SET last_test_at = CURRENT_TIMESTAMP, last_test_ok = ?, last_test_msg = ? WHERE id = ?
+  `).bind(ok ? 1 : 0, msg, id).run()
+
+  return c.json({ ok, message: msg })
+})
+
+// ── DELETE /admin/api/social-accounts/:id ────────────────
+admin.delete('/api/social-accounts/:id', async (c) => {
+  const { DB } = c.env
+  const id = c.req.param('id')
+  await DB.prepare(`DELETE FROM social_accounts WHERE id = ?`).bind(id).run()
+  return c.json({ ok: true })
+})
+
+// ── GET /admin/api/social-posts — Lista posts ─────────────
+admin.get('/api/social-posts', async (c) => {
+  const { DB } = c.env
+  const status  = c.req.query('status') || ''
+  const platform = c.req.query('platform') || ''
+  const page    = Math.max(1, parseInt(c.req.query('page') || '1'))
+  const perPage = 20
+  const offset  = (page - 1) * perPage
+
+  let where = 'WHERE 1=1'
+  const binds: any[] = []
+  if (status)   { where += ' AND sp.status = ?';   binds.push(status) }
+  if (platform) { where += ' AND sp.platform = ?'; binds.push(platform) }
+
+  const [count, data] = await Promise.all([
+    DB.prepare(`SELECT COUNT(*) as total FROM social_posts sp ${where}`).bind(...binds).first<{ total: number }>(),
+    DB.prepare(`
+      SELECT sp.*, sa.account_name, sa.platform as acc_platform
+      FROM social_posts sp
+      LEFT JOIN social_accounts sa ON sa.id = sp.account_id
+      ${where}
+      ORDER BY COALESCE(sp.scheduled_at, sp.created_at) DESC
+      LIMIT ? OFFSET ?
+    `).bind(...binds, perPage, offset).all()
+  ])
+
+  return c.json({ posts: data.results, total: count?.total || 0, page, per_page: perPage })
+})
+
+// ── POST /admin/api/social-posts — Criar / Agendar post ──
+admin.post('/api/social-posts', async (c) => {
+  const { DB } = c.env
+  const body = await c.req.json().catch(() => ({})) as any
+  const { account_id, platform, content_text, image_url, link_url,
+          hashtags, ai_generated, ai_prompt, status, scheduled_at } = body
+
+  if (!account_id || !content_text) return c.json({ error: 'account_id e content_text obrigatórios' }, 400)
+
+  // Se publish_now — publica imediatamente
+  if (status === 'publish_now') {
+    const key = getXorKey(c.env)
+    const row = await DB.prepare(`SELECT * FROM social_accounts WHERE id = ?`).bind(account_id).first<any>()
+    if (!row) return c.json({ error: 'Conta não encontrada' }, 404)
+
+    const account = {
+      ...row,
+      access_token: row.access_token ? xorDecrypt(row.access_token, key) : null,
+      token_secret: row.token_secret ? xorDecrypt(row.token_secret, key) : null,
+    }
+    const postData = { platform: platform || row.platform, content_text, image_url, link_url, hashtags }
+    const result = await dispatchPost(account, postData)
+
+    const newStatus = result.ok ? 'published' : 'failed'
+    const { meta } = await DB.prepare(`
+      INSERT INTO social_posts
+        (account_id, platform, content_text, image_url, link_url, hashtags,
+         ai_generated, ai_prompt, status, published_at, error_message,
+         platform_post_id, platform_post_url, created_by)
+      VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?,?,?,?)
+    `).bind(
+      account_id, platform || row.platform, content_text,
+      image_url || null, link_url || null, hashtags || null,
+      ai_generated ? 1 : 0, ai_prompt || null,
+      newStatus,
+      result.error || null, result.post_id || null, result.url || null,
+      'admin'
+    ).run()
+
+    return c.json({ ok: result.ok, id: meta.last_row_id, post_id: result.post_id, url: result.url, error: result.error })
+  }
+
+  // Agendar ou rascunho
+  const finalStatus = scheduled_at ? 'scheduled' : (status || 'draft')
+  const { meta } = await DB.prepare(`
+    INSERT INTO social_posts
+      (account_id, platform, content_text, image_url, link_url, hashtags,
+       ai_generated, ai_prompt, status, scheduled_at, created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+  `).bind(
+    account_id, platform, content_text,
+    image_url || null, link_url || null, hashtags || null,
+    ai_generated ? 1 : 0, ai_prompt || null,
+    finalStatus, scheduled_at || null, 'admin'
+  ).run()
+
+  return c.json({ ok: true, id: meta.last_row_id })
+})
+
+// ── PATCH /admin/api/social-posts/:id — Editar post ──────
+admin.patch('/api/social-posts/:id', async (c) => {
+  const { DB } = c.env
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json().catch(() => ({})) as any
+  const { content_text, image_url, link_url, hashtags, status, scheduled_at } = body
+
+  await DB.prepare(`
+    UPDATE social_posts SET
+      content_text = COALESCE(?, content_text),
+      image_url    = COALESCE(?, image_url),
+      link_url     = COALESCE(?, link_url),
+      hashtags     = COALESCE(?, hashtags),
+      status       = COALESCE(?, status),
+      scheduled_at = COALESCE(?, scheduled_at),
+      updated_at   = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(
+    content_text ?? null, image_url ?? null, link_url ?? null,
+    hashtags ?? null, status ?? null, scheduled_at ?? null, id
+  ).run()
+
+  return c.json({ ok: true })
+})
+
+// ── DELETE /admin/api/social-posts/:id ───────────────────
+admin.delete('/api/social-posts/:id', async (c) => {
+  const { DB } = c.env
+  const id = parseInt(c.req.param('id'))
+  await DB.prepare(`DELETE FROM social_posts WHERE id = ?`).bind(id).run()
+  return c.json({ ok: true })
+})
+
+// ── POST /admin/api/social/cron — Dispatcher agendados ───
+// Chamado pelo Cloudflare Cron Trigger OU manualmente via botão
+admin.post('/api/social/cron', async (c) => {
+  const { DB } = c.env
+  const key = getXorKey(c.env)
+
+  // Busca posts agendados que já passaram do horário
+  const { results: due } = await DB.prepare(`
+    SELECT sp.*, sa.access_token, sa.token_secret, sa.refresh_token,
+           sa.page_id, sa.ig_user_id, sa.account_id as sa_account_id
+    FROM social_posts sp
+    JOIN social_accounts sa ON sa.id = sp.account_id
+    WHERE sp.status = 'scheduled'
+      AND sp.scheduled_at <= CURRENT_TIMESTAMP
+      AND sa.is_active = 1
+    ORDER BY sp.scheduled_at ASC
+    LIMIT 10
+  `).all<any>()
+
+  if (!due.length) return c.json({ ok: true, published: 0, message: 'Nenhum post agendado para publicar agora' })
+
+  let published = 0
+  let failed = 0
+  const results: any[] = []
+
+  for (const post of due) {
+    const account = {
+      ...post,
+      access_token: post.access_token ? xorDecrypt(post.access_token, key) : null,
+      token_secret: post.token_secret ? xorDecrypt(post.token_secret, key) : null,
+      refresh_token: post.refresh_token ? xorDecrypt(post.refresh_token, key) : null,
+    }
+
+    // Marca como "publishing" para evitar dupla execução
+    await DB.prepare(`UPDATE social_posts SET status = 'publishing' WHERE id = ?`).bind(post.id).run()
+
+    const result = await dispatchPost(account, post)
+
+    if (result.ok) {
+      await DB.prepare(`
+        UPDATE social_posts SET
+          status = 'published', published_at = CURRENT_TIMESTAMP,
+          platform_post_id = ?, platform_post_url = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(result.post_id || null, result.url || null, post.id).run()
+      published++
+    } else {
+      await DB.prepare(`
+        UPDATE social_posts SET
+          status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(result.error || 'Erro desconhecido', post.id).run()
+      failed++
+    }
+
+    results.push({ id: post.id, platform: post.platform, ok: result.ok, error: result.error })
+  }
+
+  return c.json({ ok: true, published, failed, results })
+})
+
+// ── POST /admin/api/social/ai-generate — IA gera conteúdo ─
+admin.post('/api/social/ai-generate', async (c) => {
+  const { DB } = c.env
+  const body = await c.req.json().catch(() => ({})) as any
+  const { platform, tone, include_price, include_hashtags, custom_prompt } = body
+
+  // Busca top 5 produtos mais baratos com desconto
+  const { results: topProducts } = await DB.prepare(`
+    SELECT p.name, p.brand, p.category,
+           MIN(o.price) as price, o2.original_price,
+           o2.discount_percent, s.name as store_name
+    FROM products p
+    JOIN offers o ON o.product_id = p.id AND o.is_active = 1 AND o.in_stock = 1
+    JOIN offers o2 ON o2.product_id = p.id
+      AND o2.price = (SELECT MIN(o3.price) FROM offers o3 WHERE o3.product_id = p.id AND o3.is_active = 1 AND o3.in_stock = 1)
+      AND o2.is_active = 1 AND o2.in_stock = 1
+    JOIN stores s ON s.id = o2.store_id
+    WHERE p.is_active = 1 AND o2.discount_percent >= 5
+    GROUP BY p.id
+    ORDER BY o2.discount_percent DESC
+    LIMIT 5
+  `).all<any>()
+
+  if (!topProducts.length) {
+    return c.json({ error: 'Nenhum produto com desconto encontrado para gerar conteúdo' }, 400)
+  }
+
+  // Formata lista de produtos para o contexto da IA
+  const fBRL = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`
+  const productList = topProducts.map((p, i) => {
+    const parts = [`${i + 1}. ${p.name}${p.brand ? ` (${p.brand})` : ''}`]
+    if (include_price !== false && p.price) parts.push(`por ${fBRL(p.price)}`)
+    if (p.discount_percent) parts.push(`${Math.round(p.discount_percent)}% OFF`)
+    if (p.store_name) parts.push(`na ${p.store_name}`)
+    return parts.join(' ')
+  }).join('\n')
+
+  const platformGuide: Record<string, string> = {
+    instagram: 'Tom visual e inspirador, use emojis, até 2.200 caracteres. Hashtags no final.',
+    facebook: 'Tom conversacional e informativo, até 500 caracteres ideais. CTA claro.',
+    x: 'Conciso e direto, máximo 280 caracteres. 1-2 hashtags no máximo.',
+    linkedin: 'Tom profissional, foque em economia e valor. Sem muitos emojis.',
+  }
+
+  const toneMap: Record<string, string> = {
+    urgente: 'urgente e com senso de escassez',
+    animado: 'animado e empolgante com muitos emojis',
+    profissional: 'profissional e informativo',
+    descontraido: 'descontraído e amigável, como um amigo dando dica',
+  }
+
+  const platformHint = platformGuide[platform] || 'Tom equilibrado e atraente.'
+  const toneHint = toneMap[tone] || 'natural e atraente'
+
+  const aiKey = (c.env as any).OPENAI_API_KEY || ''
+
+  if (!aiKey) {
+    // Fallback: gera conteúdo template sem IA
+    const emoji: Record<string, string> = { instagram: '📸', facebook: '🛍️', x: '🔥', linkedin: '💡' }
+    const e = emoji[platform] || '🛒'
+    const top = topProducts[0]
+    let text = ''
+
+    if (platform === 'x') {
+      text = `${e} OFERTA: ${top.name} por ${fBRL(top.price)} (${Math.round(top.discount_percent)}% OFF) na ${top.store_name}! No KainowRadar você compara e economiza.`
+      if (text.length > 280) text = text.slice(0, 277) + '...'
+    } else {
+      text = `${e} As melhores ofertas de hoje no KainowRadar!\n\n${productList}\n\nCompare preços e economize! 🔍 kainowradar.com`
+    }
+
+    const hashtags = include_hashtags !== false
+      ? '#oferta #desconto #kainowradar #economize #promoção'
+      : ''
+
+    return c.json({
+      ok: true,
+      ai_generated: false,
+      content_text: text,
+      hashtags,
+      prompt_used: 'template',
+      products_used: topProducts.map(p => p.name),
+    })
+  }
+
+  // Chama OpenAI para gerar conteúdo real
+  const systemPrompt = `Você é um especialista em marketing digital para e-commerce brasileiro.
+Crie posts para redes sociais divulgando ofertas de produtos.
+Idioma: Português do Brasil.
+Plataforma: ${platform?.toUpperCase() || 'GENÉRICA'} — ${platformHint}
+Tom: ${toneHint}.
+${include_hashtags !== false ? 'Inclua hashtags relevantes separadas por espaço no campo hashtags.' : 'Não inclua hashtags.'}`
+
+  const userPrompt = custom_prompt
+    ? `${custom_prompt}\n\nProdutos disponíveis:\n${productList}`
+    : `Crie um post para ${platform} divulgando estas ofertas do KainowRadar:\n\n${productList}\n\nIncluir preços: ${include_price !== false ? 'sim' : 'não'}. Tom: ${toneHint}.`
+
+  try {
+    const aiRes = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${aiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt + '\n\nResponda APENAS com JSON: {"content_text":"...","hashtags":"..."}' }
+        ],
+        temperature: 0.8,
+        max_tokens: 600,
+      }),
+    })
+
+    const aiData = await aiRes.json() as any
+    const raw = aiData?.choices?.[0]?.message?.content || ''
+
+    // Extrai JSON da resposta
+    const jsonMatch = raw.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) throw new Error('IA não retornou JSON válido')
+    const parsed = JSON.parse(jsonMatch[0])
+
+    return c.json({
+      ok: true,
+      ai_generated: true,
+      content_text: parsed.content_text || '',
+      hashtags: parsed.hashtags || '',
+      prompt_used: userPrompt,
+      products_used: topProducts.map(p => p.name),
+    })
+  } catch (e: any) {
+    return c.json({ error: `Erro na geração por IA: ${e.message}` }, 500)
+  }
+})
+
 // ── GET /admin/api/price-history/:productId ───────────────
 admin.get('/api/price-history/:productId', async (c) => {
   const { DB } = c.env
@@ -1031,6 +1724,9 @@ function renderAdminSPA(): string {
       <div onclick="showSection('footer')" class="sidebar-link" data-section="footer">
         <span class="text-lg">🦶</span> Rodapé do Site
       </div>
+      <div onclick="showSection('social')" class="sidebar-link" data-section="social">
+        <span class="text-lg">📣</span> Social Media
+      </div>
       <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Análise</div>
       <div onclick="showSection('analytics')" class="sidebar-link" data-section="analytics">
         <span class="text-lg">📈</span> Analytics
@@ -1184,6 +1880,7 @@ async function loadSection(name) {
     footer:    ['🦶 Rodapé do Site', 'Editar textos, lojas parceiras e links de informações'],
     analytics: ['Analytics', 'Cliques, conversões e performance'],
     users: ['Usuários', 'Gerenciar clientes e membros'],
+    social: ['📣 Social Media', 'Gerencie contas e publique nas redes sociais'],
   }
   const [title, subtitle] = titles[name] || ['Admin', '']
   document.getElementById('page-title').textContent = title
@@ -1201,6 +1898,7 @@ async function loadSection(name) {
     queue: renderQueue,
     analytics: renderAnalytics,
     users: renderUsers,
+    social: renderSocial,
   }
   if (sections[name]) await sections[name](area)
 }
@@ -3869,6 +4567,8 @@ const PERMS_LIST = [
   { key:'admins.manage',     label:'🔑 Gerenciar Admins'     },
   { key:'analytics.view',    label:'📈 Ver Analytics'        },
   { key:'footer.edit',       label:'🦶 Editar Rodapé'        },
+  { key:'social.view',       label:'📣 Ver Social Media'     },
+  { key:'social.edit',       label:'📣 Publicar Social Media'},
 ]
 
 const ROLES_MAP = {
@@ -4311,6 +5011,834 @@ function renderPagination(page, total, perPage, onPage) {
     btns.push(\`<button onclick="(\${onPage.toString()})(\${i})" class="px-3 py-1.5 text-sm rounded-lg border \${i===page?'bg-blue-600 text-white border-blue-600':'border-slate-200 hover:bg-slate-50'}">\${i}</button>\`)
   }
   return \`<div class="flex items-center gap-2 px-5 py-4 border-t border-slate-100">\${btns.join('')}<span class="text-sm text-slate-500 ml-2">\${total} total</span></div>\`
+}
+
+// ── SOCIAL MEDIA ──────────────────────────────────────────
+// Estado local da seção Social
+const Social = {
+  tab: 'accounts',       // 'accounts' | 'create' | 'schedule' | 'history'
+  accounts: [],
+  aiLoading: false,
+}
+
+const PLATFORM_META = {
+  instagram: { label: 'Instagram', color: 'from-pink-500 to-purple-600', icon: '📸', textLimit: 2200 },
+  facebook:  { label: 'Facebook',  color: 'from-blue-600 to-blue-800',   icon: '👍', textLimit: 63206 },
+  x:         { label: 'X/Twitter', color: 'from-slate-800 to-black',     icon: '✖️', textLimit: 280 },
+  linkedin:  { label: 'LinkedIn',  color: 'from-blue-700 to-blue-900',   icon: '💼', textLimit: 3000 },
+}
+
+async function renderSocial(area) {
+  area.innerHTML = \`
+    <div class="section">
+      <!-- Abas -->
+      <div class="flex gap-1 bg-slate-100 rounded-xl p-1 mb-6 w-fit">
+        \${[
+          { id: 'accounts', label: '🔗 Contas Conectadas' },
+          { id: 'create',   label: '✏️ Criar Post' },
+          { id: 'schedule', label: '📅 Agenda' },
+          { id: 'history',  label: '📋 Histórico' },
+        ].map(t => \`
+          <button onclick="switchSocialTab('\${t.id}')" id="social-tab-\${t.id}"
+            class="px-4 py-2 rounded-lg text-sm font-medium transition-all \${Social.tab === t.id ? 'bg-white text-blue-700 shadow-sm font-semibold' : 'text-slate-600 hover:text-slate-800'}">
+            \${t.label}
+          </button>
+        \`).join('')}
+      </div>
+      <!-- Conteúdo das abas -->
+      <div id="social-tab-content"></div>
+    </div>
+  \`
+  await loadSocialTab(Social.tab)
+}
+
+function switchSocialTab(tab) {
+  Social.tab = tab
+  document.querySelectorAll('[id^="social-tab-"]').forEach(el => {
+    const isActive = el.id === \`social-tab-\${tab}\`
+    el.className = \`px-4 py-2 rounded-lg text-sm font-medium transition-all \${isActive ? 'bg-white text-blue-700 shadow-sm font-semibold' : 'text-slate-600 hover:text-slate-800'}\`
+  })
+  loadSocialTab(tab)
+}
+
+async function loadSocialTab(tab) {
+  const content = document.getElementById('social-tab-content')
+  if (!content) return
+  content.innerHTML = \`<div class="flex items-center justify-center py-16"><div class="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div></div>\`
+
+  if (tab === 'accounts')  await renderSocialAccounts(content)
+  if (tab === 'create')    await renderSocialCreate(content)
+  if (tab === 'schedule')  await renderSocialSchedule(content)
+  if (tab === 'history')   await renderSocialHistory(content)
+}
+
+// ── ABA: Contas Conectadas ────────────────────────────────
+async function renderSocialAccounts(area) {
+  const data = await api('GET', '/admin/api/social-accounts')
+  Social.accounts = data || []
+
+  const platformBadge = (p) => {
+    const m = PLATFORM_META[p] || { label: p, icon: '🌐' }
+    return \`<span class="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-gradient-to-r \${m.color || 'from-slate-500 to-slate-700'} text-white">\${m.icon} \${m.label}</span>\`
+  }
+
+  const statusBadge = (acc) => {
+    if (!acc.last_test_at) return \`<span class="text-xs text-slate-400">Não testado</span>\`
+    return acc.last_test_ok
+      ? \`<span class="text-xs text-green-600 font-semibold">✓ Conectado</span>\`
+      : \`<span class="text-xs text-red-500 font-semibold" title="\${acc.last_test_msg || ''}">✗ Falhou</span>\`
+  }
+
+  area.innerHTML = \`
+    <div class="flex items-center justify-between mb-4">
+      <div class="text-sm text-slate-500">\${Social.accounts.length} conta(s) cadastrada(s)</div>
+      <button onclick="openSocialAccountModal()" class="btn-primary text-sm">+ Conectar Conta</button>
+    </div>
+
+    \${!Social.accounts.length ? \`
+      <div class="text-center py-16 bg-white rounded-2xl border border-dashed border-slate-200">
+        <div class="text-4xl mb-3">📡</div>
+        <div class="text-slate-600 font-medium mb-1">Nenhuma conta conectada</div>
+        <div class="text-slate-400 text-sm mb-4">Conecte uma rede social para começar a publicar</div>
+        <button onclick="openSocialAccountModal()" class="btn-primary text-sm">+ Conectar Primeira Conta</button>
+      </div>
+    \` : \`
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        \${Social.accounts.map(acc => \`
+          <div class="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm hover:shadow-md transition-shadow">
+            <div class="flex items-start justify-between mb-3">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br \${(PLATFORM_META[acc.platform] || {}).color || 'from-slate-400 to-slate-600'} flex items-center justify-center text-lg shadow">
+                  \${(PLATFORM_META[acc.platform] || { icon: '🌐' }).icon}
+                </div>
+                <div>
+                  <div class="font-semibold text-slate-800 text-sm">\${acc.account_name}</div>
+                  <div class="flex items-center gap-2 mt-0.5">\${platformBadge(acc.platform)}</div>
+                </div>
+              </div>
+              <div class="flex items-center gap-1">
+                <button onclick="testSocialAccount('\${acc.id}', this)" class="text-xs text-blue-600 hover:bg-blue-50 px-2 py-1 rounded-lg transition-colors font-medium">Testar</button>
+                <button onclick="openSocialAccountModal('\${acc.id}')" class="text-xs text-slate-500 hover:bg-slate-100 px-2 py-1 rounded-lg transition-colors">Editar</button>
+                <button onclick="deleteSocialAccount('\${acc.id}', '\${acc.account_name.replace(/'/g,'\\\\'')}') " class="text-xs text-red-400 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors">Remover</button>
+              </div>
+            </div>
+
+            <div class="flex items-center justify-between text-xs text-slate-400">
+              <div class="flex items-center gap-3">
+                \${acc.is_active
+                  ? '<span class="text-green-600 font-medium">● Ativa</span>'
+                  : '<span class="text-slate-400">○ Inativa</span>'}
+                \${statusBadge(acc)}
+              </div>
+              \${acc.last_test_msg && !acc.last_test_ok ? \`<div class="text-red-400 text-xs truncate max-w-[200px]" title="\${acc.last_test_msg}">\${acc.last_test_msg}</div>\` : ''}
+              <div>\${acc.last_test_at ? 'Testado ' + fDate(acc.last_test_at) : ''}</div>
+            </div>
+          </div>
+        \`).join('')}
+      </div>
+    \`}
+
+    <!-- Guia de configuração por plataforma -->
+    <div class="mt-6 bg-blue-50 border border-blue-100 rounded-2xl p-5">
+      <h4 class="font-semibold text-blue-800 mb-3 text-sm">📖 Guia rápido de tokens por plataforma</h4>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-blue-700">
+        <div>
+          <div class="font-semibold mb-1">📸 Instagram (Graph API)</div>
+          <ol class="list-decimal ml-4 space-y-0.5 text-blue-600">
+            <li>Crie um App no Meta for Developers</li>
+            <li>Adicione o produto "Instagram Graph API"</li>
+            <li>Obtenha o <strong>Instagram User ID</strong> (ig_user_id)</li>
+            <li>Gere um <strong>Page Access Token</strong> com permissões instagram_content_publish</li>
+            <li>Converta para Long-Lived Token (60 dias)</li>
+          </ol>
+        </div>
+        <div>
+          <div class="font-semibold mb-1">👍 Facebook (Graph API)</div>
+          <ol class="list-decimal ml-4 space-y-0.5 text-blue-600">
+            <li>Mesmo App Meta acima</li>
+            <li>Obtenha o <strong>Page ID</strong> da sua Página</li>
+            <li>Gere <strong>Page Access Token</strong> com pages_publish</li>
+            <li>Converta para Long-Lived Token</li>
+          </ol>
+        </div>
+        <div>
+          <div class="font-semibold mb-1">✖️ X/Twitter (API v2)</div>
+          <ol class="list-decimal ml-4 space-y-0.5 text-blue-600">
+            <li>Acesse developer.twitter.com</li>
+            <li>Crie um projeto e App com permissão Read+Write</li>
+            <li>Gere <strong>Bearer Token</strong> (para token_secret)</li>
+            <li>Ou use OAuth 2.0 User Token (access_token)</li>
+          </ol>
+        </div>
+        <div>
+          <div class="font-semibold mb-1">💼 LinkedIn (API v2)</div>
+          <ol class="list-decimal ml-4 space-y-0.5 text-blue-600">
+            <li>Crie App em linkedin.com/developers</li>
+            <li>Solicite acesso ao produto "Share on LinkedIn"</li>
+            <li>OAuth 2.0: scope r_liteprofile + w_member_social</li>
+            <li>Account ID = URN: urn:li:person:{id}</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  \`
+}
+
+async function testSocialAccount(id, btn) {
+  const origText = btn.textContent
+  btn.textContent = 'Testando...'
+  btn.disabled = true
+  const res = await api('POST', \`/admin/api/social-accounts/\${id}/test\`)
+  btn.textContent = origText
+  btn.disabled = false
+  if (!res) return
+  toast(res.ok ? \`✓ \${res.message}\` : \`✗ \${res.message}\`, res.ok ? 'success' : 'error')
+  await loadSocialTab('accounts')
+}
+
+async function deleteSocialAccount(id, name) {
+  if (!confirm(\`Remover a conta "\${name}"? Todos os posts vinculados serão apagados.\`)) return
+  await api('DELETE', \`/admin/api/social-accounts/\${id}\`)
+  toast('Conta removida', 'info')
+  await loadSocialTab('accounts')
+}
+
+function openSocialAccountModal(id = null) {
+  const acc = id ? Social.accounts.find(a => a.id === id) : null
+  const isEdit = !!acc
+
+  document.getElementById('modal-container').innerHTML = \`
+    <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" id="soc-acc-modal">
+      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div class="flex items-center justify-between p-5 border-b border-slate-100">
+          <h3 class="font-bold text-slate-800">\${isEdit ? 'Editar Conta' : 'Conectar Conta de Rede Social'}</h3>
+          <button onclick="document.getElementById('soc-acc-modal').remove()" class="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+        </div>
+        <div class="p-5 space-y-4">
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="label">Plataforma</label>
+              <select id="soc-platform" class="input" \${isEdit ? 'disabled' : ''} onchange="updateSocialFormFields()">
+                <option value="">Selecione...</option>
+                \${Object.entries(PLATFORM_META).map(([k,v]) => \`<option value="\${k}" \${acc?.platform===k?'selected':''}>\${v.icon} \${v.label}</option>\`).join('')}
+              </select>
+            </div>
+            <div>
+              <label class="label">Nome/Handle da Conta</label>
+              <input id="soc-name" class="input" placeholder="@handle ou Nome da Página" value="\${acc?.account_name || ''}">
+            </div>
+          </div>
+
+          <div id="soc-platform-fields" class="space-y-3">
+            <!-- preenchido por updateSocialFormFields() -->
+          </div>
+
+          <div>
+            <label class="label">Data de Expiração do Token (opcional)</label>
+            <input type="datetime-local" id="soc-expires" class="input" value="\${acc?.token_expires_at ? acc.token_expires_at.slice(0,16) : ''}">
+          </div>
+
+          \${isEdit ? \`
+            <div class="flex items-center gap-2">
+              <input type="checkbox" id="soc-active" class="rounded" \${acc.is_active?'checked':''}>
+              <label for="soc-active" class="text-sm text-slate-600">Conta ativa</label>
+            </div>
+          \` : ''}
+
+          <p class="text-xs text-amber-600 bg-amber-50 rounded-lg p-3">
+            ⚠️ Os tokens são armazenados de forma criptografada. Nunca compartilhe seus tokens de acesso.
+            \${isEdit ? 'Deixe os campos de token em branco para manter os valores atuais.' : ''}
+          </p>
+        </div>
+        <div class="flex gap-3 p-5 border-t border-slate-100">
+          <button onclick="document.getElementById('soc-acc-modal').remove()" class="btn-secondary flex-1">Cancelar</button>
+          <button onclick="saveSocialAccount(\${id ? \`'\${id}'\` : 'null'})" class="btn-primary flex-1">\${isEdit ? 'Salvar' : 'Conectar'}</button>
+        </div>
+      </div>
+    </div>
+  \`
+  // Preenche campos dinâmicos após injetar o modal
+  setTimeout(() => updateSocialFormFields(acc), 50)
+}
+
+function updateSocialFormFields(acc = null) {
+  const platform = document.getElementById('soc-platform')?.value || acc?.platform
+  const container = document.getElementById('soc-platform-fields')
+  if (!container) return
+
+  const fieldSets = {
+    instagram: [
+      { id: 'soc-ig-user',    label: 'Instagram User ID (ig_user_id)', placeholder: '17841400000000000' },
+      { id: 'soc-access',     label: 'Page Access Token (Long-Lived)',  placeholder: 'EAABsbCS...', type: 'password' },
+    ],
+    facebook: [
+      { id: 'soc-page-id',    label: 'Facebook Page ID',               placeholder: '111234567890' },
+      { id: 'soc-access',     label: 'Page Access Token (Long-Lived)',  placeholder: 'EAABsbCS...', type: 'password' },
+    ],
+    x: [
+      { id: 'soc-acc-id',     label: 'Account ID (opcional)',          placeholder: '123456789' },
+      { id: 'soc-secret',     label: 'Bearer Token (API v2)',          placeholder: 'AAAAAAAAAAAAAAAAAAAAAml...', type: 'password' },
+      { id: 'soc-access',     label: 'OAuth 2.0 User Access Token (opcional)', placeholder: '...', type: 'password' },
+    ],
+    linkedin: [
+      { id: 'soc-acc-id',     label: 'Person/Org URN',                 placeholder: 'urn:li:person:AbcDef123' },
+      { id: 'soc-access',     label: 'OAuth 2.0 Access Token',         placeholder: 'AQV...', type: 'password' },
+      { id: 'soc-refresh',    label: 'Refresh Token (opcional)',        placeholder: 'AQW...', type: 'password' },
+    ],
+  }
+
+  const fields = fieldSets[platform] || []
+  container.innerHTML = fields.map(f => \`
+    <div>
+      <label class="label">\${f.label}</label>
+      <input id="\${f.id}" class="input \${f.type === 'password' ? 'font-mono' : ''}" type="\${f.type || 'text'}" placeholder="\${f.placeholder}">
+    </div>
+  \`).join('')
+}
+
+async function saveSocialAccount(id) {
+  const platform = document.getElementById('soc-platform')?.value
+  const account_name = document.getElementById('soc-name')?.value?.trim()
+  if (!account_name) { toast('Preencha o nome/handle da conta', 'error'); return }
+  if (!id && !platform) { toast('Selecione a plataforma', 'error'); return }
+
+  const get = (sel) => document.getElementById(sel)?.value?.trim() || ''
+
+  const payload: any = {
+    account_name,
+    token_expires_at: get('soc-expires') || null,
+  }
+  if (!id) payload.platform = platform
+
+  // Tokens conforme plataforma
+  const plat = id ? (Social.accounts.find(a => a.id === id)?.platform) : platform
+  if (plat === 'instagram') {
+    if (get('soc-ig-user')) payload.ig_user_id   = get('soc-ig-user')
+    if (get('soc-access'))  payload.access_token  = get('soc-access')
+  } else if (plat === 'facebook') {
+    if (get('soc-page-id')) payload.page_id       = get('soc-page-id')
+    if (get('soc-access'))  payload.access_token   = get('soc-access')
+  } else if (plat === 'x') {
+    if (get('soc-acc-id'))  payload.account_id    = get('soc-acc-id')
+    if (get('soc-secret'))  payload.token_secret   = get('soc-secret')
+    if (get('soc-access'))  payload.access_token   = get('soc-access')
+  } else if (plat === 'linkedin') {
+    if (get('soc-acc-id'))  payload.account_id    = get('soc-acc-id')
+    if (get('soc-access'))  payload.access_token   = get('soc-access')
+    if (get('soc-refresh')) payload.refresh_token  = get('soc-refresh')
+  }
+
+  if (id) {
+    const active = document.getElementById('soc-active')
+    if (active) payload.is_active = active.checked ? 1 : 0
+    await api('PATCH', \`/admin/api/social-accounts/\${id}\`, payload)
+    toast('Conta atualizada ✓', 'success')
+  } else {
+    await api('POST', '/admin/api/social-accounts', payload)
+    toast('Conta conectada ✓', 'success')
+  }
+
+  document.getElementById('soc-acc-modal')?.remove()
+  await loadSocialTab('accounts')
+}
+
+// ── ABA: Criar Post ───────────────────────────────────────
+async function renderSocialCreate(area) {
+  // Garante que accounts estão carregadas
+  if (!Social.accounts.length) {
+    const data = await api('GET', '/admin/api/social-accounts')
+    Social.accounts = data || []
+  }
+
+  const activeAccounts = Social.accounts.filter(a => a.is_active)
+
+  area.innerHTML = \`
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- Formulário -->
+      <div class="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm space-y-4">
+        <h3 class="font-bold text-slate-800">Novo Post</h3>
+
+        <!-- Conta -->
+        <div>
+          <label class="label">Conta de destino</label>
+          \${!activeAccounts.length
+            ? \`<div class="p-3 bg-amber-50 border border-amber-100 rounded-xl text-sm text-amber-700">
+                Nenhuma conta ativa. <button onclick="switchSocialTab('accounts')" class="underline font-medium">Conectar conta →</button>
+              </div>\`
+            : \`<select id="post-account" class="input" onchange="updatePostPreview()">
+                <option value="">Selecione a conta...</option>
+                \${activeAccounts.map(a => \`<option value="\${a.id}" data-platform="\${a.platform}">\${(PLATFORM_META[a.platform]||{icon:'🌐'}).icon} \${a.account_name} (\${a.platform})</option>\`).join('')}
+              </select>\`
+          }
+        </div>
+
+        <!-- Texto -->
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <label class="label mb-0">Texto do post</label>
+            <span id="post-chars" class="text-xs text-slate-400">0 / ∞</span>
+          </div>
+          <textarea id="post-text" class="input min-h-[140px] resize-y" placeholder="Digite o texto do post..."
+            oninput="updatePostPreview()"></textarea>
+        </div>
+
+        <!-- Hashtags -->
+        <div>
+          <label class="label">Hashtags</label>
+          <input id="post-hashtags" class="input font-mono text-sm" placeholder="#oferta #desconto #kainowradar"
+            oninput="updatePostPreview()">
+        </div>
+
+        <!-- Imagem URL -->
+        <div>
+          <label class="label">URL da Imagem (opcional)</label>
+          <input id="post-image" class="input" placeholder="https://..." oninput="updatePostPreview()">
+        </div>
+
+        <!-- Link URL -->
+        <div>
+          <label class="label">Link (opcional)</label>
+          <input id="post-link" class="input" placeholder="https://kainowradar.com/...">
+        </div>
+
+        <!-- IA Generate -->
+        <div class="bg-gradient-to-r from-purple-50 to-blue-50 rounded-xl p-4 border border-purple-100">
+          <div class="flex items-center justify-between mb-3">
+            <div class="text-sm font-semibold text-purple-800">🤖 Gerar com IA</div>
+          </div>
+          <div class="grid grid-cols-2 gap-2 mb-3">
+            <div>
+              <label class="text-xs text-slate-500 mb-1 block">Tom</label>
+              <select id="ai-tone" class="input text-sm py-1.5">
+                <option value="animado">Animado 🎉</option>
+                <option value="urgente">Urgente ⚡</option>
+                <option value="profissional">Profissional 💼</option>
+                <option value="descontraido">Descontraído 😊</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs text-slate-500 mb-1 block">Opções</label>
+              <div class="flex flex-col gap-1 mt-1">
+                <label class="flex items-center gap-1.5 text-xs text-slate-600">
+                  <input type="checkbox" id="ai-price" checked class="rounded"> Incluir preços
+                </label>
+                <label class="flex items-center gap-1.5 text-xs text-slate-600">
+                  <input type="checkbox" id="ai-hashtags" checked class="rounded"> Incluir hashtags
+                </label>
+              </div>
+            </div>
+          </div>
+          <button onclick="generateWithAI()" id="ai-gen-btn"
+            class="w-full bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white text-sm font-semibold py-2 rounded-xl transition-all">
+            ✨ Gerar Conteúdo com IA
+          </button>
+        </div>
+
+        <!-- Agendamento -->
+        <div class="flex items-center gap-3">
+          <div class="flex-1">
+            <label class="label">Agendar para (opcional)</label>
+            <input type="datetime-local" id="post-schedule" class="input">
+          </div>
+        </div>
+
+        <!-- Botões de ação -->
+        <div class="flex gap-2">
+          <button onclick="submitSocialPost('draft')" class="btn-secondary flex-1 text-sm">💾 Salvar Rascunho</button>
+          <button onclick="submitSocialPost('scheduled')" id="btn-schedule" class="btn-secondary flex-1 text-sm">📅 Agendar</button>
+          <button onclick="submitSocialPost('publish_now')" class="btn-primary flex-1 text-sm">🚀 Publicar Agora</button>
+        </div>
+      </div>
+
+      <!-- Preview -->
+      <div>
+        <div class="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm sticky top-24">
+          <h3 class="font-bold text-slate-800 mb-4">Preview</h3>
+          <div id="post-preview" class="text-slate-400 text-sm text-center py-8">
+            Selecione uma conta e escreva o texto para ver o preview
+          </div>
+        </div>
+      </div>
+    </div>
+  \`
+}
+
+function updatePostPreview() {
+  const accountSel = document.getElementById('post-account')
+  const text = document.getElementById('post-text')?.value || ''
+  const hashtags = document.getElementById('post-hashtags')?.value || ''
+  const imageUrl = document.getElementById('post-image')?.value || ''
+  const preview = document.getElementById('post-preview')
+  const charsEl = document.getElementById('post-chars')
+  if (!preview) return
+
+  const platform = accountSel?.options[accountSel?.selectedIndex]?.dataset?.platform || ''
+  const meta = PLATFORM_META[platform] || {}
+  const fullText = [text, hashtags].filter(Boolean).join('\n\n')
+  const limit = meta.textLimit || Infinity
+  const over = fullText.length > limit
+
+  if (charsEl) {
+    charsEl.textContent = \`\${fullText.length} / \${limit === Infinity ? '∞' : limit}\`
+    charsEl.className = \`text-xs \${over ? 'text-red-500 font-semibold' : 'text-slate-400'}\`
+  }
+
+  if (!platform || !text) {
+    preview.innerHTML = \`<div class="text-slate-400 text-sm text-center py-8">Preencha os campos para ver o preview</div>\`
+    return
+  }
+
+  const accountName = accountSel?.options[accountSel?.selectedIndex]?.text?.split('(')[0]?.trim() || 'Conta'
+
+  preview.innerHTML = \`
+    <div class="rounded-xl border-2 border-gradient overflow-hidden" style="border-color: transparent; background: linear-gradient(white,white) padding-box, linear-gradient(135deg, #3b82f6, #a855f7) border-box;">
+      <!-- Header mock -->
+      <div class="flex items-center gap-2 p-3 bg-gradient-to-r \${meta.color || 'from-slate-500 to-slate-700'}">
+        <div class="w-8 h-8 rounded-full bg-white/30 flex items-center justify-center text-base">\${meta.icon || '🌐'}</div>
+        <div>
+          <div class="text-white font-semibold text-xs">\${accountName}</div>
+          <div class="text-white/70 text-xs">\${meta.label || platform}</div>
+        </div>
+      </div>
+      <!-- Imagem preview -->
+      \${imageUrl ? \`<div class="bg-slate-100 overflow-hidden"><img src="\${imageUrl}" alt="preview" class="w-full max-h-48 object-cover" onerror="this.style.display='none'"></div>\` : ''}
+      <!-- Texto -->
+      <div class="p-3">
+        <div class="text-slate-800 text-sm whitespace-pre-wrap break-words">\${fullText.slice(0,300)}\${fullText.length > 300 ? '...' : ''}</div>
+        \${over ? \`<div class="mt-2 text-xs text-red-500 font-semibold">⚠️ Texto excede o limite de \${limit} caracteres para \${meta.label || platform}</div>\` : ''}
+      </div>
+    </div>
+  \`
+}
+
+async function generateWithAI() {
+  const accountSel = document.getElementById('post-account')
+  const platform = accountSel?.options[accountSel?.selectedIndex]?.dataset?.platform || ''
+  if (!platform) { toast('Selecione a conta primeiro', 'error'); return }
+
+  const btn = document.getElementById('ai-gen-btn')
+  btn.textContent = '⏳ Gerando...'
+  btn.disabled = true
+
+  const res = await api('POST', '/admin/api/social/ai-generate', {
+    platform,
+    tone: document.getElementById('ai-tone')?.value || 'animado',
+    include_price: document.getElementById('ai-price')?.checked !== false,
+    include_hashtags: document.getElementById('ai-hashtags')?.checked !== false,
+  })
+
+  btn.textContent = '✨ Gerar Conteúdo com IA'
+  btn.disabled = false
+
+  if (!res || res.error) { toast(res?.error || 'Erro ao gerar conteúdo', 'error'); return }
+
+  if (document.getElementById('post-text')) document.getElementById('post-text').value = res.content_text || ''
+  if (document.getElementById('post-hashtags')) document.getElementById('post-hashtags').value = res.hashtags || ''
+  updatePostPreview()
+  toast(res.ai_generated ? '✓ Conteúdo gerado pela IA!' : '✓ Conteúdo criado (template)', 'success')
+}
+
+async function submitSocialPost(action) {
+  const accountSel = document.getElementById('post-account')
+  const account_id = accountSel?.value
+  const platform = accountSel?.options[accountSel?.selectedIndex]?.dataset?.platform || ''
+  const content_text = document.getElementById('post-text')?.value?.trim() || ''
+  const hashtags = document.getElementById('post-hashtags')?.value?.trim() || ''
+  const image_url = document.getElementById('post-image')?.value?.trim() || ''
+  const link_url = document.getElementById('post-link')?.value?.trim() || ''
+  const scheduled_at = document.getElementById('post-schedule')?.value || ''
+
+  if (!account_id) { toast('Selecione a conta de destino', 'error'); return }
+  if (!content_text) { toast('O texto do post não pode estar vazio', 'error'); return }
+  if (action === 'scheduled' && !scheduled_at) { toast('Defina a data/hora de agendamento', 'error'); return }
+
+  const payload: any = {
+    account_id, platform, content_text,
+    hashtags: hashtags || null,
+    image_url: image_url || null,
+    link_url: link_url || null,
+    status: action,
+  }
+  if (action === 'scheduled' || scheduled_at) payload.scheduled_at = scheduled_at || null
+
+  const res = await api('POST', '/admin/api/social-posts', payload)
+  if (!res) return
+
+  if (action === 'publish_now') {
+    if (res.ok) {
+      toast('Post publicado com sucesso! ✓', 'success')
+      if (res.url) {
+        setTimeout(() => {
+          if (confirm(\`Post publicado! Abrir no \${platform}?\`)) window.open(res.url, '_blank')
+        }, 500)
+      }
+    } else {
+      toast(\`Erro ao publicar: \${res.error || 'Falha desconhecida'}\`, 'error')
+    }
+  } else if (action === 'scheduled') {
+    toast('Post agendado ✓', 'success')
+    setTimeout(() => switchSocialTab('schedule'), 1000)
+  } else {
+    toast('Rascunho salvo ✓', 'info')
+    setTimeout(() => switchSocialTab('history'), 1000)
+  }
+}
+
+// ── ABA: Agenda ───────────────────────────────────────────
+async function renderSocialSchedule(area) {
+  const data = await api('GET', '/admin/api/social-posts?status=scheduled')
+  const posts = data?.posts || []
+
+  area.innerHTML = \`
+    <div class="flex items-center justify-between mb-4">
+      <div class="text-sm text-slate-500">\${posts.length} post(s) agendado(s)</div>
+      <div class="flex gap-2">
+        <button onclick="runSocialCron(this)" class="btn-secondary text-sm">⚡ Publicar Agendados Agora</button>
+        <button onclick="switchSocialTab('create')" class="btn-primary text-sm">+ Criar Post</button>
+      </div>
+    </div>
+
+    \${!posts.length ? \`
+      <div class="text-center py-16 bg-white rounded-2xl border border-dashed border-slate-200">
+        <div class="text-4xl mb-3">📅</div>
+        <div class="text-slate-600 font-medium mb-1">Nenhum post agendado</div>
+        <div class="text-slate-400 text-sm mb-4">Posts agendados aparecerão aqui</div>
+        <button onclick="switchSocialTab('create')" class="btn-primary text-sm">+ Criar Post Agendado</button>
+      </div>
+    \` : \`
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <table class="w-full">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-100">
+              <th class="text-left text-xs text-slate-500 font-semibold px-5 py-3">Conta</th>
+              <th class="text-left text-xs text-slate-500 font-semibold px-5 py-3">Conteúdo</th>
+              <th class="text-left text-xs text-slate-500 font-semibold px-5 py-3">Agendado Para</th>
+              <th class="text-right text-xs text-slate-500 font-semibold px-5 py-3">Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            \${posts.map(post => \`
+              <tr class="border-b border-slate-50 hover:bg-slate-50">
+                <td class="px-5 py-3">
+                  <div class="flex items-center gap-2">
+                    <span class="text-lg">\${(PLATFORM_META[post.platform]||{icon:'🌐'}).icon}</span>
+                    <div>
+                      <div class="text-sm font-medium text-slate-700">\${post.account_name || '—'}</div>
+                      <div class="text-xs text-slate-400">\${(PLATFORM_META[post.platform]||{label:post.platform}).label}</div>
+                    </div>
+                  </div>
+                </td>
+                <td class="px-5 py-3 max-w-[300px]">
+                  <div class="text-sm text-slate-700 truncate">\${post.content_text}</div>
+                  \${post.hashtags ? \`<div class="text-xs text-blue-500 truncate">\${post.hashtags}</div>\` : ''}
+                  \${post.ai_generated ? \`<span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-medium">🤖 IA</span>\` : ''}
+                </td>
+                <td class="px-5 py-3">
+                  <div class="text-sm font-semibold text-slate-700">\${fDateTime(post.scheduled_at)}</div>
+                  \${new Date(post.scheduled_at) < new Date() ? \`<div class="text-xs text-orange-500 font-medium">⏰ Atrasado</div>\` : ''}
+                </td>
+                <td class="px-5 py-3 text-right">
+                  <div class="flex items-center justify-end gap-1">
+                    <button onclick="editScheduledPost(\${post.id})" class="text-xs text-blue-500 hover:bg-blue-50 px-2 py-1 rounded-lg transition-colors">Editar</button>
+                    <button onclick="cancelScheduledPost(\${post.id})" class="text-xs text-orange-500 hover:bg-orange-50 px-2 py-1 rounded-lg transition-colors">Cancelar</button>
+                    <button onclick="deleteScheduledPost(\${post.id})" class="text-xs text-red-400 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors">Excluir</button>
+                  </div>
+                </td>
+              </tr>
+            \`).join('')}
+          </tbody>
+        </table>
+      </div>
+    \`}
+  \`
+}
+
+async function runSocialCron(btn) {
+  btn.textContent = '⏳ Processando...'
+  btn.disabled = true
+  const res = await api('POST', '/admin/api/social/cron')
+  btn.textContent = '⚡ Publicar Agendados Agora'
+  btn.disabled = false
+  if (!res) return
+  toast(\`✓ \${res.published} publicado(s), \${res.failed || 0} falha(s)\`, res.failed ? 'error' : 'success')
+  await loadSocialTab('schedule')
+}
+
+async function cancelScheduledPost(id) {
+  if (!confirm('Cancelar este post agendado?')) return
+  await api('PATCH', \`/admin/api/social-posts/\${id}\`, { status: 'cancelled' })
+  toast('Post cancelado', 'info')
+  await loadSocialTab('schedule')
+}
+
+async function deleteScheduledPost(id) {
+  if (!confirm('Excluir este post? Esta ação não pode ser desfeita.')) return
+  await api('DELETE', \`/admin/api/social-posts/\${id}\`)
+  toast('Post excluído', 'info')
+  await loadSocialTab('schedule')
+}
+
+function editScheduledPost(id) {
+  // Abre modal de edição
+  api('GET', \`/admin/api/social-posts?status=scheduled\`).then(data => {
+    const post = (data?.posts || []).find(p => p.id === id)
+    if (!post) return
+
+    document.getElementById('modal-container').innerHTML = \`
+      <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" id="edit-post-modal">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+          <div class="flex items-center justify-between p-5 border-b border-slate-100">
+            <h3 class="font-bold text-slate-800">Editar Post Agendado</h3>
+            <button onclick="document.getElementById('edit-post-modal').remove()" class="text-slate-400 hover:text-slate-600 text-xl">&times;</button>
+          </div>
+          <div class="p-5 space-y-4">
+            <div>
+              <label class="label">Texto</label>
+              <textarea id="edit-text" class="input min-h-[120px]">\${post.content_text}</textarea>
+            </div>
+            <div>
+              <label class="label">Hashtags</label>
+              <input id="edit-hashtags" class="input" value="\${post.hashtags || ''}">
+            </div>
+            <div>
+              <label class="label">Nova data/hora</label>
+              <input type="datetime-local" id="edit-schedule" class="input" value="\${post.scheduled_at?.slice(0,16) || ''}">
+            </div>
+          </div>
+          <div class="flex gap-3 p-5 border-t border-slate-100">
+            <button onclick="document.getElementById('edit-post-modal').remove()" class="btn-secondary flex-1">Cancelar</button>
+            <button onclick="saveEditPost(\${id})" class="btn-primary flex-1">Salvar</button>
+          </div>
+        </div>
+      </div>
+    \`
+  })
+}
+
+async function saveEditPost(id) {
+  const content_text = document.getElementById('edit-text')?.value?.trim() || ''
+  const hashtags = document.getElementById('edit-hashtags')?.value?.trim() || ''
+  const scheduled_at = document.getElementById('edit-schedule')?.value || ''
+  if (!content_text) { toast('Texto não pode ficar vazio', 'error'); return }
+  await api('PATCH', \`/admin/api/social-posts/\${id}\`, { content_text, hashtags, scheduled_at: scheduled_at || null })
+  document.getElementById('edit-post-modal')?.remove()
+  toast('Post atualizado ✓', 'success')
+  await loadSocialTab('schedule')
+}
+
+// ── ABA: Histórico ────────────────────────────────────────
+async function renderSocialHistory(area) {
+  const statusFilter = (area as any)._statusFilter || ''
+  const platformFilter = (area as any)._platFilter || ''
+
+  const params = new URLSearchParams()
+  if (statusFilter) params.set('status', statusFilter)
+  if (platformFilter) params.set('platform', platformFilter)
+  params.set('page', (area as any)._page || '1')
+
+  const data = await api('GET', \`/admin/api/social-posts?\${params}\`)
+  const posts = data?.posts || []
+  const total = data?.total || 0
+
+  const statusBadge = (s) => {
+    const map = {
+      draft:      'bg-slate-100 text-slate-600',
+      scheduled:  'bg-blue-100 text-blue-700',
+      publishing: 'bg-yellow-100 text-yellow-700',
+      published:  'bg-green-100 text-green-700',
+      failed:     'bg-red-100 text-red-600',
+      cancelled:  'bg-slate-100 text-slate-500 line-through',
+    }
+    const labels = { draft:'Rascunho', scheduled:'Agendado', publishing:'Publicando', published:'Publicado', failed:'Falhou', cancelled:'Cancelado' }
+    return \`<span class="text-xs font-semibold px-2 py-0.5 rounded-full \${map[s]||'bg-slate-100 text-slate-600'}">\${labels[s]||s}</span>\`
+  }
+
+  area.innerHTML = \`
+    <!-- Filtros -->
+    <div class="flex flex-wrap items-center gap-2 mb-4">
+      <select onchange="setHistoryFilter('status', this.value, arguments[0].target.closest('[id=social-tab-content]'))" class="input py-1.5 text-sm w-auto">
+        <option value="" \${!statusFilter?'selected':''}>Todos os status</option>
+        \${['draft','scheduled','published','failed','cancelled'].map(s => \`<option value="\${s}" \${statusFilter===s?'selected':''}>\${s}</option>\`).join('')}
+      </select>
+      <select onchange="setHistoryFilter('platform', this.value, arguments[0].target.closest('[id=social-tab-content]'))" class="input py-1.5 text-sm w-auto">
+        <option value="" \${!platformFilter?'selected':''}>Todas as plataformas</option>
+        \${Object.entries(PLATFORM_META).map(([k,v]) => \`<option value="\${k}" \${platformFilter===k?'selected':''}>\${v.icon} \${v.label}</option>\`).join('')}
+      </select>
+      <span class="text-sm text-slate-400 ml-auto">\${total} post(s) encontrado(s)</span>
+    </div>
+
+    \${!posts.length ? \`
+      <div class="text-center py-16 bg-white rounded-2xl border border-dashed border-slate-200">
+        <div class="text-4xl mb-3">📋</div>
+        <div class="text-slate-600 font-medium">Nenhum post encontrado</div>
+      </div>
+    \` : \`
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <table class="w-full">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-100">
+              <th class="text-left text-xs text-slate-500 font-semibold px-5 py-3">Plataforma</th>
+              <th class="text-left text-xs text-slate-500 font-semibold px-5 py-3">Conteúdo</th>
+              <th class="text-left text-xs text-slate-500 font-semibold px-5 py-3">Status</th>
+              <th class="text-left text-xs text-slate-500 font-semibold px-5 py-3">Data</th>
+              <th class="text-right text-xs text-slate-500 font-semibold px-5 py-3">Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            \${posts.map(post => \`
+              <tr class="border-b border-slate-50 hover:bg-slate-50">
+                <td class="px-5 py-3">
+                  <div class="flex items-center gap-2">
+                    <span class="text-lg">\${(PLATFORM_META[post.platform]||{icon:'🌐'}).icon}</span>
+                    <div class="text-xs text-slate-500">\${post.account_name || '—'}</div>
+                  </div>
+                </td>
+                <td class="px-5 py-3 max-w-[280px]">
+                  <div class="text-sm text-slate-700 truncate">\${post.content_text}</div>
+                  \${post.error_message ? \`<div class="text-xs text-red-500 truncate" title="\${post.error_message}">\${post.error_message}</div>\` : ''}
+                  \${post.ai_generated ? \`<span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">🤖 IA</span>\` : ''}
+                </td>
+                <td class="px-5 py-3">\${statusBadge(post.status)}</td>
+                <td class="px-5 py-3 text-xs text-slate-500">
+                  \${post.published_at ? fDateTime(post.published_at) : (post.scheduled_at ? '📅 ' + fDateTime(post.scheduled_at) : fDate(post.created_at))}
+                </td>
+                <td class="px-5 py-3 text-right">
+                  <div class="flex items-center justify-end gap-1">
+                    \${post.platform_post_url ? \`<a href="\${post.platform_post_url}" target="_blank" class="text-xs text-blue-500 hover:bg-blue-50 px-2 py-1 rounded-lg transition-colors">↗ Ver</a>\` : ''}
+                    \${post.status === 'failed' ? \`<button onclick="retryPost(\${post.id})" class="text-xs text-orange-500 hover:bg-orange-50 px-2 py-1 rounded-lg transition-colors">↺ Retry</button>\` : ''}
+                    <button onclick="deleteHistoryPost(\${post.id})" class="text-xs text-red-400 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors">✕</button>
+                  </div>
+                </td>
+              </tr>
+            \`).join('')}
+          </tbody>
+        </table>
+        \${total > 20 ? \`<div class="px-5 py-3 text-xs text-slate-400 border-t border-slate-100">Mostrando 20 de \${total}. Use os filtros para refinar.</div>\` : ''}
+      </div>
+    \`}
+  \`
+}
+
+function setHistoryFilter(type, value, container) {
+  if (!container) container = document.getElementById('social-tab-content')
+  if (type === 'status') (container as any)._statusFilter = value
+  if (type === 'platform') (container as any)._platFilter = value
+  renderSocialHistory(container)
+}
+
+async function retryPost(id) {
+  // Recoloca o post como agendado para agora
+  await api('PATCH', \`/admin/api/social-posts/\${id}\`, { status: 'scheduled', scheduled_at: new Date().toISOString() })
+  const res = await api('POST', '/admin/api/social/cron')
+  toast(res?.published ? 'Post reenviado ✓' : 'Erro ao reenviar', res?.published ? 'success' : 'error')
+  await loadSocialTab('history')
+}
+
+async function deleteHistoryPost(id) {
+  if (!confirm('Excluir este registro?')) return
+  await api('DELETE', \`/admin/api/social-posts/\${id}\`)
+  toast('Registro excluído', 'info')
+  await loadSocialTab('history')
 }
 
 // ── Boot ──────────────────────────────────────────────────
