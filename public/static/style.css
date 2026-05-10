@@ -92,27 +92,27 @@ body {
   box-sizing: border-box;
 }
 
-/* Inner wrapper ─ único container que define a largura de TUDO
-   H1, sub, search e tags são todos filhos diretos → mesma largura garantida
-   Container: ~80% do viewport, máx 900px (igual ao modelo) */
+/* Inner wrapper ─ mesma largura do resto do site (max-w-7xl = 1280px + px-4)
+   Garante que H1, sub, search e tags se alinhem com header e seções abaixo */
 .hero-inner {
   display: grid;
   grid-template-columns: 1fr;
-  width: min(900px, 100% - 4rem);
+  width: 100%;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 2.75rem 0 2.25rem;
+  padding: 2.75rem 1rem 2.25rem;
   box-sizing: border-box;
   position: relative;
   z-index: 10;
 }
 
-/* H1 ─ 1 linha garantida em desktop
-   32 chars · Inter 900 · container max 900px
-   max seguro = 900 / (32 × 0.56) = 50.2px ≈ 3.14rem
-   preferred = 50.2 / 9.64 = 5.21vw (satura em vp ≥ 964px)
-   min = 0.95rem (mobile — texto pequeno mas visível, overflow:hidden corta se precisar) */
+/* H1 ─ 1 linha garantida em TODOS os viewports
+   Fórmula: fs = (100vw - 32px) / (32chars × 0.56fator)
+            fs = 5.58vw - 1.79px  →  escala exato com o container
+   max = 1280/(32×0.56) = 71.4px = 4.46rem  (satura em vp ≥ 1312px)
+   min = 0.95rem (mobile fallback) */
 .hero-h1 {
-  font-size: clamp(0.95rem, 5.21vw, 3.14rem);
+  font-size: clamp(0.95rem, 5.58vw - 1.79px, 4.46rem);
   font-weight: 900;
   color: #fff;
   line-height: 1.15;
@@ -125,13 +125,13 @@ body {
   text-overflow: clip;
 }
 
-/* Subtítulo ─ 1 linha garantida em desktop
-   90 chars · Inter 400 · container max 900px
-   max seguro = 900 / (90 × 0.50) = 20px = 1.25rem
-   preferred = 20 / 9.64 = 2.07vw (satura em vp ≥ 964px)
-   min = 0.62rem (mobile) */
+/* Subtítulo ─ 1 linha garantida em TODOS os viewports
+   Fórmula: fs = (100vw - 32px) / (90chars × 0.50fator)
+            fs = 2.22vw - 0.71px  →  escala exato com o container
+   max = 1280/(90×0.50) = 28.4px = 1.78rem  (satura em vp ≥ 1312px)
+   min = 0.62rem (mobile fallback) */
 .hero-sub {
-  font-size: clamp(0.62rem, 2.07vw, 1.25rem);
+  font-size: clamp(0.62rem, 2.22vw - 0.71px, 1.78rem);
   color: rgba(191,219,254,0.85);
   line-height: 1.5;
   margin: 0 0 1rem;
@@ -227,6 +227,8 @@ body {
   border: 1px solid rgba(255,255,255,0.15);
   cursor: pointer;
   transition: all 0.18s;
+  white-space: nowrap;   /* impede "iPhone 15" e "Galaxy S24" de quebrarem */
+  flex-shrink: 0;        /* tag nunca comprime — overflow:hidden no pai corta */
 }
 .quick-tag:hover {
   background: rgba(255,255,255,0.16);
