@@ -219,6 +219,56 @@ app.get('/', async (c) => {
 
       </div>
     </section>
+
+    <script>
+    /* ── FitHero: ajusta H1 e subtítulo para terem EXATAMENTE a largura da search bar ── */
+    (function fitHero() {
+      function adjust() {
+        var wrap = document.querySelector('.hero-search-wrap');
+        var h1   = document.querySelector('.hero-h1');
+        var sub  = document.querySelector('.hero-sub');
+        if (!wrap || !h1 || !sub) return;
+
+        var targetW = wrap.getBoundingClientRect().width;
+        if (targetW < 100) return;
+
+        /* ── H1: busca binária do font-size que faz scrollWidth == targetW ── */
+        h1.style.fontSize  = '';
+        h1.style.whiteSpace = 'nowrap';
+        var lo = 8, hi = 120, fsH1 = 16;
+        for (var i = 0; i < 24; i++) {
+          fsH1 = (lo + hi) / 2;
+          h1.style.fontSize = fsH1 + 'px';
+          var w = h1.scrollWidth;
+          if (Math.abs(w - targetW) < 0.5) break;
+          if (w < targetW) lo = fsH1; else hi = fsH1;
+        }
+        /* aplica com 1px de folga para o ponto final não ser cortado */
+        h1.style.fontSize = (fsH1 - 1) + 'px';
+
+        /* ── Subtítulo: mesmo raciocínio ── */
+        sub.style.fontSize  = '';
+        sub.style.whiteSpace = 'nowrap';
+        lo = 6; hi = 60; var fsSub = 14;
+        for (var j = 0; j < 24; j++) {
+          fsSub = (lo + hi) / 2;
+          sub.style.fontSize = fsSub + 'px';
+          var ws = sub.scrollWidth;
+          if (Math.abs(ws - targetW) < 0.5) break;
+          if (ws < targetW) lo = fsSub; else hi = fsSub;
+        }
+        sub.style.fontSize = (fsSub - 0.5) + 'px';
+      }
+
+      /* roda no load e em todo resize */
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() { adjust(); setTimeout(adjust, 100); });
+      } else {
+        adjust(); setTimeout(adjust, 100);
+      }
+      window.addEventListener('resize', adjust);
+    })();
+    </script>
   `
 
   // ── FAIXA DE LOJAS PARCEIRAS ──────────────────────────────

@@ -106,12 +106,10 @@ body {
   z-index: 10;
 }
 
-/* H1 ─ mesma largura visual da search bar em todos os viewports
-   Fórmula: fs = (100vw - 32px) / (32chars × 0.575fator)
-            fs = 5.43vw - 1.74px
-   max = 1280/(32×0.575) = 69.6px = 4.35rem  (satura em vp ≥ 1312px, sem corte) */
+/* H1 — font-size controlado pelo JS fitHero (busca binária = largura exata da search bar)
+   O CSS define apenas o fallback inicial; JS sobrescreve via style.fontSize */
 .hero-h1 {
-  font-size: clamp(0.95rem, 5.43vw - 1.74px, 4.35rem);
+  font-size: clamp(0.95rem, 5.58vw - 1.79px, 4.46rem); /* fallback se JS falhar */
   font-weight: 900;
   color: #fff;
   line-height: 1.15;
@@ -124,13 +122,10 @@ body {
   text-overflow: clip;
 }
 
-/* Subtítulo ─ 1 linha garantida em TODOS os viewports
-   Fórmula: fs = (100vw - 32px) / (90chars × 0.53fator)
-            fs = 2.08vw - 0.67px  →  fator real Inter 400 = 0.53
-   max = 1.5rem = 24px (conservador — garante folga)
-   min = 0.62rem (mobile fallback) */
+/* Subtítulo — font-size controlado pelo JS fitHero (busca binária = largura exata da search bar)
+   O CSS define apenas o fallback inicial; JS sobrescreve via style.fontSize */
 .hero-sub {
-  font-size: clamp(0.62rem, 2.08vw - 0.67px, 1.5rem);
+  font-size: clamp(0.62rem, 2.08vw - 0.67px, 1.5rem); /* fallback se JS falhar */
   color: rgba(191,219,254,0.85);
   line-height: 1.5;
   margin: 0 0 1rem;
