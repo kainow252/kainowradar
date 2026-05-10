@@ -640,6 +640,7 @@ body {
 /* ── RESPONSIVE ───────────────────────────────────────────── */
 @media (max-width: 768px) {
   .hero-section h1 { font-size: 1.75rem; }
+  .hero-section .hero-stats { gap: 1rem; }
   .section-title { font-size: 1.125rem; }
   .product-card-img { height: 140px; }
   .btn-buy { padding: 0.625rem 1rem; font-size: 0.875rem; }

@@ -180,55 +180,80 @@ app.get('/', async (c) => {
       <div class="hero-orb hero-orb-2"></div>
       <div class="hero-orb hero-orb-3"></div>
 
-      <div class="max-w-4xl mx-auto px-4 py-7 md:py-9 relative z-10">
+      <div class="max-w-5xl mx-auto px-4 pt-8 pb-7 md:pt-10 md:pb-8 relative z-10">
 
-        <!-- Badge topo -->
-        <div class="flex justify-center mb-3">
-          <span class="inline-flex items-center gap-1.5 bg-white/15 backdrop-blur-sm border border-white/25 text-white text-xs font-semibold px-3 py-1 rounded-full">
-            <span class="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"></span>
-            Seu radar inteligente de ofertas
-          </span>
-        </div>
+        <!-- Layout hero: texto à esquerda + busca à direita em desktop -->
+        <div class="flex flex-col lg:flex-row lg:items-center lg:gap-12">
 
-        <!-- Título -->
-        <div class="text-center mb-5">
-          <h1 class="text-3xl md:text-4xl lg:text-[2.75rem] font-black text-white mb-2 leading-tight tracking-tight">
-            Compare preços e <span class="hero-gradient-text">economize de verdade</span>
-          </h1>
-          <p class="text-blue-100/90 text-base font-semibold mb-1">
-            Seu radar inteligente de ofertas.
-          </p>
-          <p class="text-blue-100/70 text-sm mx-auto max-w-2xl">
-            Monitore milhares de produtos em tempo real e encontre o menor preço nas maiores lojas do Brasil.
-          </p>
-        </div>
-
-        <!-- Barra de busca -->
-        <div class="max-w-xl mx-auto mb-4">
-          <div class="relative">
-            <svg class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-            </svg>
-            <input type="text" id="hero-search"
-              placeholder="O que você quer comprar hoje?"
-              class="w-full pl-11 pr-24 py-3.5 rounded-xl text-gray-900 text-sm md:text-base shadow-xl outline-none focus:ring-4 focus:ring-yellow-300/60 border-0 font-medium"
-              autocomplete="off"
-              onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; searchProducts(); }"
-              oninput="document.getElementById('search-input').value=this.value; debounceSearch(this.value)">
-            <button
-              onclick="document.getElementById('search-input').value=document.getElementById('hero-search').value; searchProducts();"
-              class="absolute right-2 top-1/2 -translate-y-1/2 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 active:scale-95 text-white px-4 py-2 rounded-lg font-bold text-sm transition-all shadow-md">
-              Buscar
-            </button>
+          <!-- Coluna esquerda: copy -->
+          <div class="flex-1 text-center lg:text-left mb-6 lg:mb-0">
+            <!-- Badge -->
+            <div class="flex justify-center lg:justify-start mb-3">
+              <span class="inline-flex items-center gap-1.5 bg-white/15 backdrop-blur-sm border border-white/20 text-white/90 text-xs font-semibold px-3 py-1 rounded-full">
+                <span class="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"></span>
+                Radar de preços em tempo real
+              </span>
+            </div>
+            <!-- H1 -->
+            <h1 class="text-3xl md:text-4xl lg:text-[2.6rem] font-black text-white leading-tight tracking-tight mb-3">
+              Compare preços e<br>
+              <span class="hero-gradient-text">economize de verdade</span>
+            </h1>
+            <!-- Subtítulo único e direto -->
+            <p class="text-blue-100/75 text-sm md:text-base max-w-sm mx-auto lg:mx-0 leading-relaxed">
+              Monitore milhares de produtos e encontre o menor preço nas maiores lojas do Brasil — tudo em um só lugar.
+            </p>
+            <!-- Estatísticas rápidas -->
+            <div class="flex items-center justify-center lg:justify-start gap-5 mt-4">
+              <div class="text-center lg:text-left">
+                <div class="text-white font-black text-lg leading-none">+33</div>
+                <div class="text-blue-200/60 text-xs mt-0.5">Lojas parceiras</div>
+              </div>
+              <div class="w-px h-8 bg-white/15"></div>
+              <div class="text-center lg:text-left">
+                <div class="text-white font-black text-lg leading-none">100%</div>
+                <div class="text-blue-200/60 text-xs mt-0.5">Gratuito</div>
+              </div>
+              <div class="w-px h-8 bg-white/15"></div>
+              <div class="text-center lg:text-left">
+                <div class="text-white font-black text-lg leading-none">24/7</div>
+                <div class="text-blue-200/60 text-xs mt-0.5">Atualizado</div>
+              </div>
+            </div>
           </div>
-          <!-- Tags rápidas -->
-          <div class="flex flex-wrap justify-center gap-1.5 mt-2.5">
-            ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV'].map(t =>
-              `<button onclick="quickSearch('${t}')" class="quick-tag">${t}</button>`
-            ).join('')}
-          </div>
-        </div>
 
+          <!-- Coluna direita: busca -->
+          <div class="flex-shrink-0 w-full lg:w-[420px]">
+            <!-- Search card glassmorphism -->
+            <div class="bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-4 shadow-2xl">
+              <p class="text-white/80 text-xs font-semibold uppercase tracking-wider mb-3">Buscar produto</p>
+              <div class="relative">
+                <svg class="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                </svg>
+                <input type="text" id="hero-search"
+                  placeholder="Marca, modelo, categoria…"
+                  class="w-full pl-10 pr-[5.5rem] py-3 rounded-xl text-gray-900 text-sm shadow-lg outline-none focus:ring-4 focus:ring-yellow-300/50 border-0 font-medium"
+                  autocomplete="off"
+                  onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; searchProducts(); }"
+                  oninput="document.getElementById('search-input').value=this.value; debounceSearch(this.value)">
+                <button
+                  onclick="document.getElementById('search-input').value=document.getElementById('hero-search').value; searchProducts();"
+                  class="absolute right-1.5 top-1/2 -translate-y-1/2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white px-4 py-1.5 rounded-lg font-bold text-sm transition-all">
+                  Buscar
+                </button>
+              </div>
+              <!-- Tags rápidas -->
+              <div class="flex flex-wrap gap-1.5 mt-3">
+                <span class="text-white/40 text-xs self-center">Popular:</span>
+                ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV'].map(t =>
+                  `<button onclick="quickSearch('${t}')" class="quick-tag">${t}</button>`
+                ).join('')}
+              </div>
+            </div>
+          </div>
+
+        </div>
       </div>
     </section>
   `
