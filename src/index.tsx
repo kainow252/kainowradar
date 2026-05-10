@@ -155,17 +155,20 @@ app.get('/', async (c) => {
         <div class="flex justify-center mb-3">
           <span class="inline-flex items-center gap-1.5 bg-white/15 backdrop-blur-sm border border-white/25 text-white text-xs font-semibold px-3 py-1 rounded-full">
             <span class="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"></span>
-            Comparando preços em tempo real
+            Seu radar inteligente de ofertas
           </span>
         </div>
 
         <!-- Título -->
         <div class="text-center mb-5">
-          <h1 class="text-3xl md:text-4xl lg:text-[2.75rem] font-black text-white mb-2 leading-tight tracking-tight whitespace-nowrap">
+          <h1 class="text-3xl md:text-4xl lg:text-[2.75rem] font-black text-white mb-2 leading-tight tracking-tight">
             Compare preços e <span class="hero-gradient-text">economize de verdade</span>
           </h1>
-          <p class="text-blue-100/75 text-sm whitespace-nowrap mx-auto">
-            Veja de uma vez só o menor preço em Amazon, Magalu, Mercado Livre e muito mais.
+          <p class="text-blue-100/90 text-base font-semibold mb-1">
+            Seu radar inteligente de ofertas.
+          </p>
+          <p class="text-blue-100/70 text-sm mx-auto max-w-2xl">
+            Monitore milhares de produtos em tempo real e encontre o menor preço nas maiores lojas do Brasil.
           </p>
         </div>
 
@@ -433,7 +436,7 @@ app.get('/', async (c) => {
   const howHTML = `
     <section class="how-section">
       <div class="max-w-5xl mx-auto px-4 text-center">
-        <h2 class="text-2xl font-black text-white mb-2">Como o ShoppingCompare funciona</h2>
+        <h2 class="text-2xl font-black text-white mb-2">Como o KainowRadar funciona</h2>
         <p class="text-blue-200/70 text-sm mb-10">Simples, rápido e gratuito — sempre</p>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div class="how-step">
@@ -469,7 +472,7 @@ app.get('/', async (c) => {
 
   const content = heroHTML + storesHTML + bannerHTML + searchResultsHTML + dealsHTML + featuredHTML + howHTML
 
-  return c.html(renderLayout('ShoppingCompare — Compare preços e economize', content, { navCategories: categories }))
+  return c.html(renderLayout('KainowRadar — Seu radar inteligente de ofertas', content, { navCategories: categories }))
 })
 
 // ── 404 ───────────────────────────────────────────────────

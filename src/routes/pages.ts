@@ -116,7 +116,7 @@ pages.get('/produto/:slug', async (c) => {
   const isAtHistMin = histMin > 0 && minPrice <= histMin * 1.02
 
   // ── SEO — meta tags ricas (Feature 4) ───────────────────
-  const seoTitle = `${product.name} — Menor Preço ${formatCurrency(minPrice)} | ShoppingCompare`
+  const seoTitle = `${product.name} — Menor Preço ${formatCurrency(minPrice)} | KainowRadar`
   const seoDesc  = `Compare ${product.name} em ${offers.length} lojas. Menor preço: ${formatCurrency(minPrice)}${ offers[0]?.store_name ? ` na ${offers[0].store_name}` : '' }. ${ product.brand ? `Marca: ${product.brand}.` : '' } Economize até ${formatCurrency(savings)}.`
   const seoImg   = product.image_url || ''
   const seoUrl   = `https://shopping-compare.pages.dev/produto/${slug}`
@@ -445,7 +445,7 @@ pages.get('/categoria/:slug', async (c) => {
       <div class="product-grid">${products.map(renderProductCard).join('')}</div>
     </div>
   `
-  return c.html(renderLayout(`${catName} — Melhores Preços | Shopping`, content, { navCategories: navCatsCategoria }))
+  return c.html(renderLayout(`${catName} — Melhores Preços | KainowRadar`, content, { navCategories: navCatsCategoria }))
 })
 
 // ── Helpers ───────────────────────────────────────────────
@@ -490,13 +490,13 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title}</title>
-  <meta name="description" content="${opts.description || 'Compare preços em dezenas de lojas e economize. Amazon, Magalu, Mercado Livre e mais.'}">
+  <meta name="description" content="${opts.description || 'KainowRadar — Seu radar inteligente de ofertas. Monitore milhares de produtos e encontre o menor preço nas maiores lojas do Brasil.'}">  
   ${opts.canonical ? `<link rel="canonical" href="${opts.canonical}">` : ''}
   <!-- Open Graph -->
   <meta property="og:title" content="${title}">
-  <meta property="og:description" content="${opts.description || 'Compare preços e economize no ShoppingCompare.'}">
+  <meta property="og:description" content="${opts.description || 'KainowRadar — Seu radar inteligente de ofertas.'}">  
   <meta property="og:type" content="product">
-  <meta property="og:site_name" content="ShoppingCompare">
+  <meta property="og:site_name" content="KainowRadar">
   ${opts.ogImage ? `<meta property="og:image" content="${opts.ogImage}">` : ''}
   ${opts.canonical ? `<meta property="og:url" content="${opts.canonical}">` : ''}
   <!-- Twitter Card -->
@@ -554,7 +554,7 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
           </svg>
         </div>
         <div class="leading-none">
-          <span class="font-black text-white text-base tracking-tight">Shopping</span><span class="font-black text-yellow-300 text-base tracking-tight">Compare</span>
+          <span class="font-black text-white text-base tracking-tight">Kainow</span><span class="font-black text-yellow-300 text-base tracking-tight">Radar</span>
         </div>
       </a>
       <button onclick="closeHamburger()" aria-label="Fechar menu"
@@ -706,7 +706,7 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
             </svg>
           </div>
           <div class="hidden sm:block">
-            <span class="font-black text-lg text-gray-900 tracking-tight leading-none">Shopping</span><span class="font-black text-lg text-blue-600 tracking-tight leading-none">Compare</span>
+            <span class="font-black text-lg text-gray-900 tracking-tight leading-none">Kainow</span><span class="font-black text-lg text-blue-600 tracking-tight leading-none">Radar</span>
           </div>
         </a>
 
@@ -845,8 +845,8 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
     <div class="max-w-7xl mx-auto px-4">
       <div class="grid grid-cols-2 md:grid-cols-4 gap-8 mb-8">
         <div>
-          <div class="text-white font-bold mb-3">ShoppingCompare</div>
-          <p class="text-sm">Compare preços em dezenas de lojas e encontre o melhor negócio.</p>
+          <div class="text-white font-bold mb-3">KainowRadar</div>
+          <p class="text-sm">Seu radar inteligente de ofertas. Encontre o menor preço nas maiores lojas do Brasil.</p>
         </div>
         <div>
           <div class="text-white font-semibold mb-3">Categorias</div>
@@ -884,7 +884,7 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
       </div>
       <div class="border-t border-gray-800 pt-6 text-xs text-gray-600 text-center">
         <p>Este site usa links de afiliados. Podemos receber comissão nas compras realizadas através dos nossos links, sem custo adicional para você.</p>
-        <p class="mt-2">© 2025 ShoppingCompare. Todos os direitos reservados.</p>
+        <p class="mt-2">© 2025 KainowRadar. Todos os direitos reservados.</p>
       </div>
     </div>
   </footer>

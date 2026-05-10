@@ -635,7 +635,7 @@ function renderAdminSPA(): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Admin — ShoppingCompare</title>
+  <title>Admin — KainowRadar</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -691,7 +691,7 @@ function renderAdminSPA(): string {
       <div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-xl">
         <span class="text-white text-3xl font-black">S</span>
       </div>
-      <h1 class="text-2xl font-bold text-white">ShoppingCompare</h1>
+      <h1 class="text-2xl font-bold text-white">KainowRadar</h1>
       <p class="text-slate-400 text-sm mt-1">Painel Administrativo</p>
     </div>
     <div class="bg-white rounded-2xl p-6 shadow-2xl">
@@ -727,7 +727,7 @@ function renderAdminSPA(): string {
           <span class="text-white font-black text-lg">S</span>
         </div>
         <div>
-          <div class="text-white font-bold text-sm">ShoppingCompare</div>
+          <div class="text-white font-bold text-sm">KainowRadar</div>
           <div class="text-slate-400 text-xs">Painel Admin</div>
         </div>
       </div>

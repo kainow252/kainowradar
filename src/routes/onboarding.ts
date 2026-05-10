@@ -27,7 +27,7 @@ onboarding.get('/', async (c) => {
         <div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
           <span class="text-white text-2xl font-bold">S</span>
         </div>
-        <h1 class="text-2xl font-extrabold text-gray-900 mb-2">Bem-vindo ao ShoppingCompare! 🎉</h1>
+        <h1 class="text-2xl font-extrabold text-gray-900 mb-2">Bem-vindo ao KainowRadar! 🎉</h1>
         <p class="text-gray-500 text-sm leading-relaxed">
           Em quais lojas você <strong>já tem conta</strong>?<br>
           Vamos destacar onde é mais fácil para você comprar.
@@ -82,7 +82,7 @@ onboarding.get('/', async (c) => {
       <button onclick="saveOnboarding()"
         class="w-full bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold
                py-4 rounded-2xl text-base transition-colors flex items-center justify-center gap-2">
-        <span id="btn-text">Continuar para o ShoppingCompare</span>
+        <span id="btn-text">Continuar para o KainowRadar</span>
         <svg id="btn-spinner" class="hidden animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
@@ -144,7 +144,7 @@ onboarding.get('/', async (c) => {
           throw new Error('Erro ao salvar')
         }
       } catch {
-        btnText.textContent = 'Continuar para o ShoppingCompare'
+        btnText.textContent = 'Continuar para o KainowRadar'
         spinner.classList.add('hidden')
         btn.disabled = false
         alert('Erro ao salvar preferências. Tente novamente.')
@@ -153,7 +153,7 @@ onboarding.get('/', async (c) => {
   </script>
   `
 
-  return c.html(renderLayout('Bem-vindo — ShoppingCompare', content, { hideHeader: true }))
+  return c.html(renderLayout('Bem-vindo — KainowRadar', content, { hideHeader: true }))
 })
 
 export default onboarding
