@@ -180,77 +180,44 @@ app.get('/', async (c) => {
       <div class="hero-orb hero-orb-2"></div>
       <div class="hero-orb hero-orb-3"></div>
 
-      <div style="width:100%;padding:2rem 5% 1.5rem;box-sizing:border-box;position:relative;z-index:10;">
+      <!-- HERO INNER -->
+      <div class="hero-inner">
 
-        <!-- Eyebrow label — centralizado -->
-        <div class="flex justify-center mb-4">
-          <span class="hero-eyebrow">
-            <span class="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse inline-block mr-1.5"></span>
-            33 lojas &nbsp;·&nbsp; Atualizado 24/7 &nbsp;·&nbsp; 100% gratuito
-          </span>
+        <!-- H1 — mesma largura do search wrap -->
+        <h1 class="hero-h1">
+          O menor preço está <span class="hero-gradient-text">aqui. Sempre.</span>
+        </h1>
+
+        <!-- Subtítulo -->
+        <p class="hero-sub">
+          Compare preços em tempo real nas maiores lojas do Brasil e compre sempre na melhor oferta.
+        </p>
+
+        <!-- Search bar -->
+        <div class="hero-search-wrap">
+          <svg class="hero-search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+          <input type="text" id="hero-search"
+            placeholder="iPhone 15, Galaxy S24, PlayStation 5…"
+            class="hero-search-input"
+            autocomplete="off"
+            onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; searchProducts(); }"
+            oninput="document.getElementById('search-input').value=this.value; debounceSearch(this.value)">
+          <button
+            onclick="document.getElementById('search-input').value=document.getElementById('hero-search').value; searchProducts();"
+            class="hero-search-btn">Buscar</button>
         </div>
 
-        <!-- Bloco hero — largura definida pela search bar -->
-        <div id="hero-block" style="width:100%;box-sizing:border-box;">
-
-          <!-- Título principal -->
-          <h1 id="hero-h1" style="font-size:clamp(1.4rem,3vw,2.4rem);font-weight:900;color:#fff;line-height:1.15;letter-spacing:-0.02em;margin-bottom:0.4rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-            O menor preço está <span class="hero-gradient-text">aqui. Sempre.</span>
-          </h1>
-
-          <!-- Subtítulo -->
-          <p id="hero-sub" style="color:rgba(191,219,254,0.75);font-size:0.875rem;line-height:1.5;margin-bottom:0.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-            Compare preços em tempo real nas maiores lojas do Brasil e compre sempre na melhor oferta.
-          </p>
-
-          <!-- Barra de busca -->
-          <div id="hero-search-wrap" class="hero-search-wrap">
-            <svg class="hero-search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-            </svg>
-            <input type="text" id="hero-search"
-              placeholder="iPhone 15, Galaxy S24, PlayStation 5…"
-              class="hero-search-input"
-              autocomplete="off"
-              onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; searchProducts(); }"
-              oninput="document.getElementById('search-input').value=this.value; debounceSearch(this.value)">
-            <button
-              onclick="document.getElementById('search-input').value=document.getElementById('hero-search').value; searchProducts();"
-              class="hero-search-btn">
-              Buscar
-            </button>
-          </div>
-
-          <!-- Populares — uma linha, mesmo tamanho -->
-          <div id="hero-tags" style="display:flex;flex-wrap:nowrap;align-items:center;gap:0.5rem;margin-top:0.75rem;overflow:hidden;">
-            <span style="color:rgba(147,197,253,0.5);font-size:0.75rem;font-weight:500;white-space:nowrap;flex-shrink:0;">Populares:</span>
-            ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV', 'iPad', 'Geladeira', 'MacBook', 'Xbox Series', 'Monitor', 'Headphone', 'Kindle'].map(t =>
-              `<button onclick="quickSearch('${t}')" class="quick-tag" style="flex-shrink:0;">${t}</button>`
-            ).join('')}
-          </div>
-
+        <!-- Populares -->
+        <div class="hero-tags">
+          <span class="hero-tags-label">Populares:</span>
+          ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV', 'iPad', 'Geladeira', 'MacBook', 'Xbox Series', 'Monitor', 'Headphone', 'Kindle'].map(t =>
+            `<button onclick="quickSearch('${t}')" class="quick-tag">${t}</button>`
+          ).join('')}
         </div>
 
       </div>
-      <script>
-        (function() {
-          function syncHeroWidth() {
-            var wrap = document.getElementById('hero-search-wrap');
-            if (!wrap) return;
-            var w = wrap.offsetWidth;
-            ['hero-h1','hero-sub','hero-tags'].forEach(function(id) {
-              var el = document.getElementById(id);
-              if (el) { el.style.maxWidth = w + 'px'; el.style.width = w + 'px'; }
-            });
-          }
-          if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', syncHeroWidth);
-          } else {
-            syncHeroWidth();
-          }
-          window.addEventListener('resize', syncHeroWidth);
-        })();
-      </script>
     </section>
   `
 

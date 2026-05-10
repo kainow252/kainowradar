@@ -89,10 +89,67 @@ body {
   box-sizing: border-box;
 }
 
-/* Search bar hero */
+/* Inner wrapper — display:grid garante que TODOS os filhos
+   respeitem a mesma largura do container, sem exceção */
+.hero-inner {
+  display: grid;
+  grid-template-columns: 1fr;   /* 1 coluna = 100% do container */
+  width: 100%;
+  padding: 1.75rem 5% 1.25rem;
+  box-sizing: border-box;
+  position: relative;
+  z-index: 10;
+  overflow: hidden;             /* corta qualquer filho que extrapole */
+}
+
+/* H1 — fica dentro da coluna grid (1fr = largura do container) */
+.hero-h1 {
+  font-size: clamp(1.5rem, 3vw, 2.6rem);
+  font-weight: 900;
+  color: #fff;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.4rem 0;
+  min-width: 0;                 /* permite que grid comprima o filho */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Subtítulo */
+.hero-sub {
+  font-size: clamp(0.8rem, 1.4vw, 1rem);
+  color: rgba(191,219,254,0.75);
+  line-height: 1.5;
+  margin: 0 0 0.85rem 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Search wrap — filho do grid, largura = 1fr */
 .hero-search-wrap {
   position: relative;
-  width: 100%;
+  min-width: 0;
+}
+
+/* Tags populares */
+.hero-tags {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  overflow: hidden;
+  min-width: 0;
+}
+.hero-tags-label {
+  color: rgba(147,197,253,0.5);
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .hero-search-icon {
   position: absolute;
