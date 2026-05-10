@@ -2438,7 +2438,8 @@ function openAffModal(netId) {
         </div>
 
         <div class="flex items-center gap-3 mt-5 pt-4 border-t border-slate-100">
-          <button onclick="saveAffConfig('\${net.network}', \${JSON.stringify(net.fields).replace(/'/g,'&#39;')})"
+          <button data-network="\${net.network}" data-fields="\${JSON.stringify(net.fields).replace(/"/g,'&quot;')}"
+            onclick="saveAffConfig(this.dataset.network, JSON.parse(this.dataset.fields))"
             class="btn-primary flex-1">💾 Salvar configuração</button>
           <button onclick="closeModal()" class="btn-secondary">Cancelar</button>
           <a href="\${net.docsUrl}" target="_blank"
