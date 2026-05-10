@@ -150,24 +150,8 @@ body {
   overflow: hidden;
   margin-top: 0.85rem;
   width: 100%;
-}
-.hero-tags-marquee-wrapper::before,
-.hero-tags-marquee-wrapper::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 3rem;
-  z-index: 2;
-  pointer-events: none;
-}
-.hero-tags-marquee-wrapper::before {
-  left: 0;
-  background: linear-gradient(to right, rgba(10,26,60,0.9), transparent);
-}
-.hero-tags-marquee-wrapper::after {
-  right: 0;
-  background: linear-gradient(to left, rgba(10,26,60,0.9), transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 6%, black 94%, transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0%, black 6%, black 94%, transparent 100%);
 }
 .hero-tags-marquee {
   overflow: hidden;
