@@ -84,9 +84,9 @@ body {
 
 /* Bloco central do hero — subtítulo + search + populares na mesma largura */
 .hero-content-block {
-  width: 90%;
-  max-width: 860px;
-  margin: 0 auto;
+  width: 100%;
+  padding: 0 5%;
+  box-sizing: border-box;
 }
 
 /* Search bar hero */

@@ -180,7 +180,7 @@ app.get('/', async (c) => {
       <div class="hero-orb hero-orb-2"></div>
       <div class="hero-orb hero-orb-3"></div>
 
-      <div class="w-full py-8 relative z-10 text-center">
+      <div style="width:100%;padding:2rem 5% 1.5rem;box-sizing:border-box;position:relative;z-index:10;">
 
         <!-- Eyebrow label -->
         <div class="flex justify-center mb-4">
@@ -190,46 +190,41 @@ app.get('/', async (c) => {
           </span>
         </div>
 
-        <!-- Título principal -->
-        <h1 class="text-3xl md:text-4xl lg:text-5xl font-black text-white leading-tight tracking-tight mb-3 whitespace-nowrap">
+        <!-- Título principal —centralizado -->
+        <h1 style="text-align:center;font-size:clamp(1.8rem,4vw,3rem);font-weight:900;color:#fff;line-height:1.15;letter-spacing:-0.02em;margin-bottom:0.75rem;white-space:nowrap;">
           O menor preço está <span class="hero-gradient-text">aqui. Sempre.</span>
         </h1>
 
-        <!-- Bloco alinhado à largura da search bar -->
-        <div class="hero-content-block">
+        <!-- Subtítulo — mesma largura que a search bar -->
+        <p style="color:rgba(191,219,254,0.75);font-size:0.95rem;line-height:1.6;margin-bottom:1rem;">
+          Compare preços em tempo real nas maiores lojas do Brasil e compre sempre na melhor oferta.
+        </p>
 
-          <!-- Subtítulo -->
-          <p class="text-blue-200/70 text-sm md:text-base leading-relaxed mb-4 text-left">
-            Compare preços em tempo real nas maiores lojas do Brasil e compre sempre na melhor oferta.
-          </p>
+        <!-- Barra de busca — largura total do bloco -->
+        <div class="hero-search-wrap">
+          <svg class="hero-search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+          <input type="text" id="hero-search"
+            placeholder="iPhone 15, Galaxy S24, PlayStation 5…"
+            class="hero-search-input"
+            autocomplete="off"
+            onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; searchProducts(); }"
+            oninput="document.getElementById('search-input').value=this.value; debounceSearch(this.value)">
+          <button
+            onclick="document.getElementById('search-input').value=document.getElementById('hero-search').value; searchProducts();"
+            class="hero-search-btn">
+            Buscar
+          </button>
+        </div>
 
-          <!-- Barra de busca — CTA principal -->
-          <div class="hero-search-wrap">
-            <svg class="hero-search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-            </svg>
-            <input type="text" id="hero-search"
-              placeholder="iPhone 15, Galaxy S24, PlayStation 5…"
-              class="hero-search-input"
-              autocomplete="off"
-              onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; searchProducts(); }"
-              oninput="document.getElementById('search-input').value=this.value; debounceSearch(this.value)">
-            <button
-              onclick="document.getElementById('search-input').value=document.getElementById('hero-search').value; searchProducts();"
-              class="hero-search-btn">
-              Buscar
-            </button>
-          </div>
-
-          <!-- Sugestões populares — mesma largura da search bar -->
-          <div class="flex flex-wrap items-center gap-2 mt-3">
-            <span class="text-blue-300/50 text-xs font-medium whitespace-nowrap">Populares:</span>
-            ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV'].map(t =>
-              `<button onclick="quickSearch('${t}')" class="quick-tag">${t}</button>`
-            ).join('')}
-          </div>
-
-        </div><!-- /hero-content-block -->
+        <!-- Populares — mesma largura, alinhado à esquerda -->
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem;margin-top:0.75rem;">
+          <span style="color:rgba(147,197,253,0.5);font-size:0.75rem;font-weight:500;white-space:nowrap;">Populares:</span>
+          ${['iPhone 15', 'Galaxy S24', 'PS5', 'Notebook', 'AirPods', 'Smart TV'].map(t =>
+            `<button onclick="quickSearch('${t}')" class="quick-tag">${t}</button>`
+          ).join('')}
+        </div>
 
       </div>
     </section>
