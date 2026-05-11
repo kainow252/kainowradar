@@ -267,7 +267,7 @@ pages.get('/produto/:slug', async (c) => {
           </div>
         </div>
         <a href="${trackUrl}" target="_blank" rel="noopener sponsored"
-           onclick="trackClick(${o.id},${product!.id},${o.store_id})"
+           onclick="return requireLoginToBuy(event,'${trackUrl}',${o.id},${product!.id},${o.store_id})"
            class="btn-buy flex-shrink-0 ${ isBest ? 'bg-green-600 hover:bg-green-700' : '' }">
           Comprar →
         </a>
@@ -1258,8 +1258,15 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
       });
       var data = await r.json();
       if (!r.ok) { showAuthError(data.error || 'Erro ao fazer login.'); return; }
-      showAuthSuccess('Login efetuado! Redirecionando…');
-      setTimeout(function() { window.location.href = data.redirect || '/'; }, 900);
+      // Se tem oferta pendente, redireciona para ela após login
+      if (typeof afterLoginRedirect === 'function' && window._pendingBuyUrl) {
+        showAuthSuccess('Login efetuado! Abrindo oferta…');
+        closeAuthModal();
+        setTimeout(function() { afterLoginRedirect(); }, 500);
+      } else {
+        showAuthSuccess('Login efetuado! Redirecionando…');
+        setTimeout(function() { window.location.href = data.redirect || '/'; }, 900);
+      }
     } catch(err) {
       showAuthError('Erro de conexão. Tente novamente.');
     } finally {
@@ -1288,8 +1295,15 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
       });
       var data = await r.json();
       if (!r.ok) { showAuthError(data.error || 'Erro ao criar conta.'); return; }
-      showAuthSuccess('Conta criada! Redirecionando…');
-      setTimeout(function() { window.location.href = data.redirect || '/'; }, 900);
+      // Se tem oferta pendente, redireciona para ela após cadastro
+      if (typeof afterLoginRedirect === 'function' && window._pendingBuyUrl) {
+        showAuthSuccess('Conta criada! Abrindo oferta…');
+        closeAuthModal();
+        setTimeout(function() { afterLoginRedirect(); }, 500);
+      } else {
+        showAuthSuccess('Conta criada! Redirecionando…');
+        setTimeout(function() { window.location.href = data.redirect || '/'; }, 900);
+      }
     } catch(err) {
       showAuthError('Erro de conexão. Tente novamente.');
     } finally {

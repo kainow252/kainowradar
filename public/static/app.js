@@ -587,6 +587,59 @@ async function trackClick(offerId, productId, storeId) {
   } catch (e) { /* Silencioso */ }
 }
 
+// ── Gate de Login para Compra ─────────────────────────────
+// Chamado pelo onclick do botão "Comprar →"
+// Se não logado: bloqueia redirect, abre modal, redireciona após login
+
+function requireLoginToBuy(event, url, offerId, productId, storeId) {
+  // Se já está logado, deixa o link funcionar normalmente
+  if (State.user) {
+    trackClick(offerId, productId, storeId)
+    return true
+  }
+
+  // Bloqueia o link
+  event.preventDefault()
+
+  // Salva destino globalmente para afterLoginRedirect acessar
+  window._pendingBuyUrl    = url
+  window._pendingOfferId   = offerId
+  window._pendingProductId = productId
+  window._pendingStoreId   = storeId
+
+  // Abre modal de login
+  openAuthModal('login')
+
+  // Mostra dica contextual no modal
+  const subtitle = document.getElementById('auth-modal-subtitle')
+  if (subtitle) {
+    subtitle.textContent = '✅ Entre ou crie uma conta grátis para ver a oferta'
+    subtitle.className = 'text-sm text-blue-600 font-semibold mt-1'
+  }
+
+  return false
+}
+
+// Chamada após login/cadastro bem-sucedido — abre oferta pendente
+function afterLoginRedirect() {
+  const url = window._pendingBuyUrl
+  const oId = window._pendingOfferId
+  const pId = window._pendingProductId
+  const sId = window._pendingStoreId
+
+  if (!url) return
+
+  // Limpa estado
+  window._pendingBuyUrl    = null
+  window._pendingOfferId   = null
+  window._pendingProductId = null
+  window._pendingStoreId   = null
+
+  // Registra clique e abre a oferta
+  trackClick(oId, pId, sId)
+  setTimeout(() => window.open(url, '_blank', 'noopener,noreferrer'), 300)
+}
+
 // ── Compartilhar ──────────────────────────────────────────
 
 function shareProduct() {
