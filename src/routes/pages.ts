@@ -545,6 +545,114 @@ pages.get('/categoria/:slug', async (c) => {
   return c.html(renderLayout(`${catName} — Melhores Preços | KainowRadar`, content, { navCategories: navCatsCategoria, footerConfig: footerCfgCategoria }))
 })
 
+// ── Página de busca (/busca?q=...) ───────────────────────
+pages.get('/busca', async (c) => {
+  const q = (c.req.query('q') || '').trim()
+  const page = parseInt(c.req.query('page') || '1')
+  const sort = c.req.query('sort') || 'relevance'
+  const { DB } = c.env
+
+  const offset = (page - 1) * 24
+  const orderBy = sort === 'price_asc'
+    ? 'p.best_price ASC'
+    : sort === 'price_desc'
+      ? 'p.best_price DESC'
+      : 'p.offer_count DESC, p.best_price ASC'
+
+  const [{ results: products }, { results: navCatsBusca }, totalRow] = await Promise.all([
+    q
+      ? DB.prepare(`
+          SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
+          FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
+          WHERE p.is_active = 1 AND p.best_price IS NOT NULL
+            AND (p.name LIKE ? OR p.category LIKE ?)
+          ORDER BY ${orderBy} LIMIT 24 OFFSET ?
+        `).bind(`%${q}%`, `%${q}%`, offset).all<Product>()
+      : DB.prepare(`
+          SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
+          FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
+          WHERE p.is_active = 1 AND p.best_price IS NOT NULL
+          ORDER BY ${orderBy} LIMIT 24 OFFSET ?
+        `).bind(offset).all<Product>(),
+    DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>(),
+    q
+      ? DB.prepare(`SELECT COUNT(*) as total FROM products WHERE is_active = 1 AND best_price IS NOT NULL AND (name LIKE ? OR category LIKE ?)`).bind(`%${q}%`, `%${q}%`).first<{ total: number }>()
+      : DB.prepare(`SELECT COUNT(*) as total FROM products WHERE is_active = 1 AND best_price IS NOT NULL`).first<{ total: number }>(),
+  ])
+
+  const total = totalRow?.total || 0
+  const totalPages = Math.ceil(total / 24)
+
+  const paginationHTML = totalPages > 1 ? `
+    <div class="flex justify-center gap-2 mt-8">
+      ${page > 1 ? `<a href="/busca?q=${encodeURIComponent(q)}&page=${page - 1}&sort=${sort}" class="px-4 py-2 rounded-lg border border-gray-300 text-sm hover:bg-gray-50">← Anterior</a>` : ''}
+      <span class="px-4 py-2 text-sm text-gray-500">Página ${page} de ${totalPages}</span>
+      ${page < totalPages ? `<a href="/busca?q=${encodeURIComponent(q)}&page=${page + 1}&sort=${sort}" class="px-4 py-2 rounded-lg border border-gray-300 text-sm hover:bg-gray-50">Próxima →</a>` : ''}
+    </div>
+  ` : ''
+
+  const noResultsHTML = `
+    <div class="text-center py-20">
+      <div class="text-6xl mb-4">🔍</div>
+      <h2 class="text-xl font-semibold text-gray-700 mb-2">Nenhum produto encontrado</h2>
+      <p class="text-gray-500 mb-6">Tente outros termos ou navegue pelas categorias</p>
+      <a href="/" class="btn-primary inline-block">Ver todos os produtos</a>
+    </div>
+  `
+
+  const content = `
+    <div class="max-w-7xl mx-auto px-4 py-8">
+      <!-- Barra de busca no topo da página -->
+      <form action="/busca" method="GET" class="mb-6">
+        <div class="flex gap-2">
+          <input
+            type="text"
+            name="q"
+            value="${q.replace(/"/g, '&quot;')}"
+            placeholder="Buscar produtos, marcas..."
+            class="flex-1 border border-gray-300 rounded-xl px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"
+            autofocus
+          />
+          <button type="submit" class="btn-primary px-6 py-3 rounded-xl">🔍 Buscar</button>
+        </div>
+      </form>
+
+      <!-- Cabeçalho com resultado -->
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          ${q
+            ? `<h1 class="text-xl font-bold text-gray-900">Resultados para "<span class="text-blue-600">${q}</span>"</h1>
+               <p class="text-sm text-gray-500 mt-0.5">${total} produto${total !== 1 ? 's' : ''} encontrado${total !== 1 ? 's' : ''}</p>`
+            : `<h1 class="text-xl font-bold text-gray-900">Todos os produtos</h1>
+               <p class="text-sm text-gray-500 mt-0.5">${total} produto${total !== 1 ? 's' : ''}</p>`
+          }
+        </div>
+        <select onchange="location.href='/busca?q=${encodeURIComponent(q)}&sort='+this.value" class="sort-select">
+          <option value="relevance" ${sort === 'relevance' ? 'selected' : ''}>Relevância</option>
+          <option value="price_asc" ${sort === 'price_asc' ? 'selected' : ''}>Menor Preço</option>
+          <option value="price_desc" ${sort === 'price_desc' ? 'selected' : ''}>Maior Preço</option>
+        </select>
+      </div>
+
+      <!-- Grid de produtos -->
+      ${products.length > 0
+        ? `<div class="product-grid">${products.map(renderProductCard).join('')}</div>${paginationHTML}`
+        : noResultsHTML
+      }
+    </div>
+  `
+
+  const footerCfgBusca = await loadFooterConfig(DB)
+  const pageTitle = q
+    ? `"${q}" — Busca | KainowRadar`
+    : 'Buscar Produtos | KainowRadar'
+
+  return c.html(renderLayout(pageTitle, content, {
+    navCategories: navCatsBusca,
+    footerConfig: footerCfgBusca,
+  }))
+})
+
 // ── Helpers ───────────────────────────────────────────────
 function formatCurrency(v: number | undefined): string {
   if (v === undefined || v === null) return 'N/A'
