@@ -4967,7 +4967,7 @@ async function saveAdminUser(id) {
   const isEdit = !!id
   const method = isEdit ? 'PATCH' : 'POST'
   const url    = isEdit ? \`/admin/api/admin-users/\${id}\` : '/admin/api/admin-users'
-  const body: any = { name, email, role, permissions }
+  const body = { name, email, role, permissions }
   if (status)                body.status   = status
   if (password?.length >= 6) body.password = password
   if (!isEdit && !password)  { err.textContent='Senha obrigatória.'; err.classList.remove('hidden'); return }
@@ -5119,7 +5119,7 @@ async function renderSocialAccounts(area) {
               <div class="flex items-center gap-1">
                 <button onclick="testSocialAccount('\${acc.id}', this)" class="text-xs text-blue-600 hover:bg-blue-50 px-2 py-1 rounded-lg transition-colors font-medium">Testar</button>
                 <button onclick="openSocialAccountModal('\${acc.id}')" class="text-xs text-slate-500 hover:bg-slate-100 px-2 py-1 rounded-lg transition-colors">Editar</button>
-                <button onclick="deleteSocialAccount('\${acc.id}', '\${acc.account_name.replace(/'/g,'\\\\'')}') " class="text-xs text-red-400 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors">Remover</button>
+                <button onclick="deleteSocialAccount('\${acc.id}', this.dataset.name)" data-name="\${acc.account_name}" class="text-xs text-red-400 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors">Remover</button>
               </div>
             </div>
 
@@ -5304,7 +5304,7 @@ async function saveSocialAccount(id) {
 
   const get = (sel) => document.getElementById(sel)?.value?.trim() || ''
 
-  const payload: any = {
+  const payload = {
     account_name,
     token_expires_at: get('soc-expires') || null,
   }
@@ -5474,7 +5474,7 @@ function updatePostPreview() {
 
   const platform = accountSel?.options[accountSel?.selectedIndex]?.dataset?.platform || ''
   const meta = PLATFORM_META[platform] || {}
-  const fullText = [text, hashtags].filter(Boolean).join('\n\n')
+  const fullText = [text, hashtags].filter(Boolean).join(String.fromCharCode(10,10))
   const limit = meta.textLimit || Infinity
   const over = fullText.length > limit
 
@@ -5552,7 +5552,7 @@ async function submitSocialPost(action) {
   if (!content_text) { toast('O texto do post não pode estar vazio', 'error'); return }
   if (action === 'scheduled' && !scheduled_at) { toast('Defina a data/hora de agendamento', 'error'); return }
 
-  const payload: any = {
+  const payload = {
     account_id, platform, content_text,
     hashtags: hashtags || null,
     image_url: image_url || null,
@@ -5728,13 +5728,13 @@ async function saveEditPost(id) {
 
 // ── ABA: Histórico ────────────────────────────────────────
 async function renderSocialHistory(area) {
-  const statusFilter = (area as any)._statusFilter || ''
-  const platformFilter = (area as any)._platFilter || ''
+  const statusFilter = area._statusFilter || ''
+  const platformFilter = area._platFilter || ''
 
   const params = new URLSearchParams()
   if (statusFilter) params.set('status', statusFilter)
   if (platformFilter) params.set('platform', platformFilter)
-  params.set('page', (area as any)._page || '1')
+  params.set('page', area._page || '1')
 
   const data = await api('GET', \`/admin/api/social-posts?\${params}\`)
   const posts = data?.posts || []
@@ -5821,8 +5821,8 @@ async function renderSocialHistory(area) {
 
 function setHistoryFilter(type, value, container) {
   if (!container) container = document.getElementById('social-tab-content')
-  if (type === 'status') (container as any)._statusFilter = value
-  if (type === 'platform') (container as any)._platFilter = value
+  if (type === 'status') container._statusFilter = value
+  if (type === 'platform') container._platFilter = value
   renderSocialHistory(container)
 }
 
