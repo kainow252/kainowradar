@@ -1658,19 +1658,73 @@ admin.post('/api/affiliate-bot/apply', async (c) => {
   return c.json({ ok: true })
 })
 
-// ── POST /admin/api/affiliate-bot/run-all — Bot em lote
-// Fase 1: produtos COM ml_item_id -> /items/{id} -> permalink real
-// Fase 2: produtos SEM ml_item_id -> search ML -> melhor match
-// Link afiliado: permalink?matt_word={PUBLISHER_ID}&matt_tool=61674414&forceInApp=true
+// -- POST /admin/api/affiliate-bot/run-all -- Bot em lote
+// Estrategia de token:
+//   1) client_credentials (ML_APP_ID + ML_SECRET) -- nao depende de OAuth do usuario
+//      O ML exige Bearer token mesmo para /items/{id}. client_credentials usa apenas
+//      app credentials (Cloudflare secrets) e nunca expira de forma silenciosa.
+//      Token dura 6h, cacheado no KV (ml_app_token) por 5h.
+//   2) Fallback: ml_access_token do KV (OAuth usuario) se client_credentials falhar
+//   3) Sem token: apenas fallback de busca (lista.mercadolivre.com.br)
+// Fases:
+//   Fase 1: produtos COM ml_item_id -> GET /items/{id} -> permalink real
+//   Fase 2: produtos SEM ml_item_id -> GET /sites/MLB/search -> 1o match -> permalink
+//   Fallback: lista.mercadolivre.com.br/BUSCA?matt_word=... (rastreavel, sem produto especifico)
+// Link final: permalink?matt_word=PUBLISHER_ID&matt_tool=61674414&forceInApp=true
 admin.post('/api/affiliate-bot/run-all', async (c) => {
   const { DB, CACHE } = c.env
   const PUBLISHER_ID = 'cfegdhabc31955'
   const MATT_TOOL    = '61674414'
+  const ML_API       = 'https://api.mercadolibre.com'
   const body: any = await c.req.json().catch(() => ({}))
   const LIMIT = Math.min(Math.max(parseInt(body.limit) || 50, 1), 100)
 
-  // Token OAuth ML (opcional -- melhora Fase 1)
-  const token = await CACHE?.get('ml_access_token').catch(() => null)
+  // -- Passo 1: token via client_credentials (ML_APP_ID + ML_SECRET) ------
+  // Nao precisa de reautorizacao do usuario -- usa apenas secrets do Cloudflare.
+  let token: string | null = null
+  let token_source = 'none'
+  const appId  = (c.env as any).ML_APP_ID  || '3098423019766450'
+  const secret = (c.env as any).ML_SECRET  || ''
+
+  if (secret) {
+    try {
+      // Tenta cache KV primeiro -- evita chamar /oauth/token a cada run
+      const cached = await CACHE?.get('ml_app_token').catch(() => null)
+      if (cached) {
+        token = cached
+        token_source = 'cache'
+      } else {
+        // Gera novo token de app via client_credentials
+        const tokenRes = await fetch(ML_API + '/oauth/token', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
+          },
+          body: new URLSearchParams({
+            grant_type:    'client_credentials',
+            client_id:     appId,
+            client_secret: secret,
+          }),
+        })
+        if (tokenRes.ok) {
+          const td: any = await tokenRes.json()
+          if (td.access_token) {
+            token = td.access_token
+            token_source = 'client_credentials'
+            // Cache por 5h (token ML dura 6h -- margem de seguranca)
+            await CACHE?.put('ml_app_token', token!, { expirationTtl: 18000 }).catch(() => {})
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // -- Passo 2: fallback token OAuth do usuario (KV) se client_credentials falhar --
+  if (!token) {
+    token = await CACHE?.get('ml_access_token').catch(() => null)
+    if (token) token_source = 'oauth_kv'
+  }
 
   // ── Fase 1: produtos COM ml_item_id ─────────────────
   const { results: phase1 } = await DB.prepare(`
@@ -6243,10 +6297,16 @@ async function runBotAll() {
   }
 
   const _total = (res.refreshed || 0) + (res.linked || 0) + (res.fallback || 0)
-  const _warn  = res.no_token ? '⚠️ Sem token OAuth ML — acesse Admin → Integrações → ML OAuth.' : ''
+  // token_source: 'client_credentials' | 'cache' | 'oauth_kv' | 'none'
+  const _tokenLabel = {
+    client_credentials: '🔑 Token: client_credentials (ML_SECRET)',
+    cache:              '📦 Token: cache KV (client_credentials)',
+    oauth_kv:           '🔑 Token: OAuth usuario (KV)',
+    none:               '⚠️ Sem token -- configure ML_SECRET no Cloudflare',
+  }[res.token_source || 'none'] || ''
   logText.textContent = [
     '✅ Bot finalizado!',
-    _warn,
+    _tokenLabel,
     '📦 Total processados : ' + _total,
     '🔄 Preços atualizados: ' + (res.refreshed || 0) + '  (COM ml_item_id → /items/{id})',
     '🔗 Novos links       : ' + (res.linked   || 0) + '   (SEM id → search ML)',
@@ -6259,7 +6319,8 @@ async function runBotAll() {
   btn.innerHTML = '<span>▶</span> Rodar Bot (próximos 30 pendentes)'
 
   // Recarrega stats
-  toast('Bot: ' + _total + ' processados' + (res.no_token ? ' (sem token OAuth)' : ''), res.no_token ? 'info' : 'success')
+  const _toastType = res.no_token ? 'warning' : 'success'
+  toast('Bot: ' + _total + ' processados (' + (res.token_source || 'sem token') + ')', _toastType)
   setTimeout(() => loadSection('affiliate-bot'), 2000)
 }
 
