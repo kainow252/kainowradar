@@ -12,6 +12,8 @@ export type Bindings = {
   LOMADEE_SOURCE_ID?: string
   AWIN_PUBLISHER_ID?: string
   MELI_ACCESS_TOKEN?: string
+  ML_APP_ID?: string
+  ML_SECRET?: string
   ADMIN_SECRET?: string
   // Google OAuth
   GOOGLE_CLIENT_ID?: string

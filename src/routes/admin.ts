@@ -1730,6 +1730,9 @@ function renderAdminSPA(): string {
       <div onclick="showSection('affiliate-bot')" class="sidebar-link" data-section="affiliate-bot">
         <span class="text-lg">🤝</span> Bot Afiliados ML
       </div>
+      <div onclick="showSection('ml-import')" class="sidebar-link" data-section="ml-import">
+        <span class="text-lg">🟡</span> Importar do ML
+      </div>
       <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Análise</div>
       <div onclick="showSection('analytics')" class="sidebar-link" data-section="analytics">
         <span class="text-lg">📈</span> Analytics
@@ -1885,6 +1888,7 @@ async function loadSection(name) {
     users: ['Usuários', 'Gerenciar clientes e membros'],
     social: ['📣 Social Media', 'Gerencie contas e publique nas redes sociais'],
     'affiliate-bot': ['🤝 Bot Afiliados ML', 'Gera links de afiliado do Mercado Livre automaticamente'],
+    'ml-import': ['🟡 Importar do ML', 'Importa produtos reais do Mercado Livre para o banco de dados'],
   }
   const [title, subtitle] = titles[name] || ['Admin', '']
   document.getElementById('page-title').textContent = title
@@ -1904,6 +1908,7 @@ async function loadSection(name) {
     users: renderUsers,
     social: renderSocial,
     'affiliate-bot': renderAffiliateBot,
+    'ml-import': renderMLImport,
   }
   if (sections[name]) await sections[name](area)
 }
@@ -6137,6 +6142,184 @@ async function clearAffiliate(id) {
     toast('Link removido', 'info')
     loadAffiliateTable('done')
   }
+}
+
+// ── IMPORTAR DO MERCADO LIVRE ─────────────────────────────
+async function renderMLImport(area) {
+  const status = await api('GET', '/admin/api/ml/status')
+
+  const cats = [
+    { id: 'all',              label: '🌐 Todas as Categorias' },
+    { id: 'smartphones',      label: '📱 Smartphones'         },
+    { id: 'notebooks',        label: '💻 Notebooks'           },
+    { id: 'tv',               label: '📺 TVs & Smart TVs'     },
+    { id: 'games',            label: '🎮 Games & Consoles'    },
+    { id: 'audio',            label: '🎧 Áudio & Fones'       },
+    { id: 'cameras',          label: '📷 Câmeras & Drones'    },
+    { id: 'eletrodomesticos', label: '🏠 Eletrodomésticos'    },
+    { id: 'tablets',          label: '📟 Tablets & iPads'     },
+    { id: 'informatica',      label: '🖥️ Informática'         },
+    { id: 'moda-calcados',    label: '👟 Moda & Calçados'     },
+  ]
+
+  area.innerHTML = \`
+    <div class="section space-y-6">
+
+      <!-- Status da conexão -->
+      <div class="stat-card">
+        <div class="flex items-center gap-4">
+          <div class="w-14 h-14 bg-yellow-400 rounded-2xl flex items-center justify-center text-2xl shadow-md">🟡</div>
+          <div class="flex-1">
+            <h3 class="font-bold text-slate-800 text-lg">Mercado Livre API</h3>
+            <p class="text-sm text-slate-500">APP ID: <code class="bg-slate-100 px-1.5 py-0.5 rounded font-mono text-xs">\${status?.app_id || '3098423019766450'}</code></p>
+            <p class="text-sm text-slate-500">Publisher ID: <code class="bg-slate-100 px-1.5 py-0.5 rounded font-mono text-xs">cfegdhabc31955</code></p>
+          </div>
+          <div class="text-right">
+            \${status?.connected
+              ? \`<span class="badge-green text-sm px-3 py-1.5">✅ Conectado</span>\`
+              : \`<span class="badge-yellow text-sm px-3 py-1.5">⚡ Client Credentials</span>\`
+            }
+            <p class="text-xs text-slate-400 mt-1">OAuth2 automático</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Como funciona -->
+      <div class="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-800">
+        <p class="font-semibold mb-1">💡 Como funciona:</p>
+        <p>1. Seleciona a categoria → 2. Bot busca produtos reais no ML via API → 3. Salva no banco D1 com nome, imagem, preço e EAN → 4. Gera <code class="bg-blue-100 px-1 rounded">affiliate_url</code> com seu Publisher ID automaticamente ✅</p>
+      </div>
+
+      <!-- Importação por categoria -->
+      <div class="stat-card">
+        <h3 class="font-bold text-slate-800 mb-4">📥 Importar Produtos</h3>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5">Categoria</label>
+            <select id="ml-cat" class="input">
+              \${cats.map(c => \`<option value="\${c.id}">\${c.label}</option>\`).join('')}
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5">Quantidade (máx 50)</label>
+            <input id="ml-limit" type="number" value="50" min="5" max="50" class="input"/>
+          </div>
+          <div class="flex items-end">
+            <button onclick="runMLImport()" id="btn-ml-import"
+              class="btn-primary w-full flex items-center justify-center gap-2">
+              <span>▶</span> Importar Agora
+            </button>
+          </div>
+        </div>
+
+        <!-- Log de resultado -->
+        <div id="ml-import-log" class="hidden">
+          <div class="bg-slate-900 text-green-400 rounded-xl p-4 font-mono text-sm min-h-[80px] whitespace-pre-wrap" id="ml-import-log-text">
+            Aguardando...
+          </div>
+        </div>
+      </div>
+
+      <!-- Importar item específico por ID ML -->
+      <div class="stat-card">
+        <h3 class="font-bold text-slate-800 mb-4">🔍 Importar Item Específico</h3>
+        <p class="text-xs text-slate-500 mb-3">Cole o ID de um produto do ML (ex: <code class="bg-slate-100 px-1 rounded">MLB3456789012</code>) para importar direto.</p>
+        <div class="flex gap-3">
+          <input id="ml-item-id" type="text" placeholder="MLB3456789012"
+            class="input flex-1 font-mono" onkeydown="if(event.key==='Enter') importMLItem()"/>
+          <button onclick="importMLItem()" class="btn-primary whitespace-nowrap">
+            📥 Importar Item
+          </button>
+        </div>
+        <div id="ml-item-result" class="mt-3"></div>
+      </div>
+
+      <!-- Categorias disponíveis -->
+      <div class="stat-card">
+        <h3 class="font-bold text-slate-800 mb-4">📂 Categorias Disponíveis</h3>
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+          \${cats.filter(c => c.id !== 'all').map(c => \`
+            <button onclick="document.getElementById('ml-cat').value='\${c.id}'; runMLImport()"
+              class="flex flex-col items-center gap-1 p-3 rounded-xl border border-slate-200 hover:border-yellow-400 hover:bg-yellow-50 transition-all cursor-pointer">
+              <span class="text-2xl">\${c.label.split(' ')[0]}</span>
+              <span class="text-xs font-medium text-slate-600 text-center">\${c.label.split(' ').slice(1).join(' ')}</span>
+            </button>
+          \`).join('')}
+        </div>
+      </div>
+
+    </div>
+  \`
+}
+
+async function runMLImport() {
+  const cat = document.getElementById('ml-cat')?.value
+  const limit = parseInt(document.getElementById('ml-limit')?.value || '50')
+  const btn = document.getElementById('btn-ml-import')
+  const log = document.getElementById('ml-import-log')
+  const logText = document.getElementById('ml-import-log-text')
+  if (!btn || !log || !logText) return
+
+  btn.disabled = true
+  btn.innerHTML = '⏳ Importando...'
+  log.classList.remove('hidden')
+  logText.textContent = \`🟡 Buscando produtos na categoria "\${cat}" no ML...\\nAguarde, isso pode levar alguns segundos.\`
+
+  const res = await api('POST', '/admin/api/ml/import', { category: cat, limit })
+
+  if (!res) {
+    logText.textContent = '❌ Erro ao conectar com a API do ML'
+    btn.disabled = false
+    btn.innerHTML = '<span>▶</span> Importar Agora'
+    return
+  }
+
+  if (res.error) {
+    logText.textContent = \`❌ Erro: \${res.error}\`
+    btn.disabled = false
+    btn.innerHTML = '<span>▶</span> Importar Agora'
+    return
+  }
+
+  logText.textContent = \`✅ Importação concluída!
+→ Novos produtos criados: \${res.created}
+→ Produtos atualizados:   \${res.updated}
+→ Ignorados (duplicados): \${res.skipped}
+\${res.errors?.length ? '⚠ Erros: ' + res.errors.join(' | ') : ''}
+
+Acesse a seção "Produtos" para ver os itens importados.\`
+
+  toast(\`✅ \${res.created} produtos importados do ML!\`, 'success')
+  btn.disabled = false
+  btn.innerHTML = '<span>▶</span> Importar Agora'
+}
+
+async function importMLItem() {
+  const mlId = document.getElementById('ml-item-id')?.value?.trim()
+  const result = document.getElementById('ml-item-result')
+  if (!mlId || !result) return
+
+  result.innerHTML = \`<p class="text-sm text-slate-500 animate-pulse">🔍 Buscando \${mlId} no ML...</p>\`
+
+  const res = await api('POST', '/admin/api/ml/import-item', { ml_id: mlId })
+
+  if (!res || res.error) {
+    result.innerHTML = \`<p class="text-sm text-red-500">❌ \${res?.error || 'Erro ao importar'}</p>\`
+    return
+  }
+
+  result.innerHTML = \`
+    <div class="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-xl">
+      <span class="text-2xl">✅</span>
+      <div>
+        <p class="font-semibold text-green-800">\${res.action === 'created' ? 'Produto criado!' : 'Produto atualizado!'}</p>
+        <p class="text-sm text-green-700">\${res.name}</p>
+        <p class="text-sm text-green-600 font-bold">R$ \${(res.price || 0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</p>
+        <a href="\${res.affiliate_url}" target="_blank" class="text-xs text-blue-500 hover:underline">🔗 Ver link afiliado</a>
+      </div>
+    </div>
+  \`
+  document.getElementById('ml-item-id').value = ''
 }
 
 // ── Boot ──────────────────────────────────────────────────

@@ -12,6 +12,7 @@ import auth from './routes/auth'
 import onboarding from './routes/onboarding'
 import pages, { renderLayout, renderProductCard, formatCurrency, loadFooterConfig } from './routes/pages'
 import editorial from './routes/editorial'
+import ml from './routes/ml'
 import { CacheManager } from './lib/cache'
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -49,6 +50,12 @@ app.route('/admin', admin)
 
 // ── Editorial AI Routes ───────────────────────────────────
 app.route('/api/editorial', editorial)
+
+// ── Mercado Livre — OAuth2, Webhook, Import ───────────────
+app.route('/api/ml', ml)
+app.route('/api/ml-callback', ml)
+app.route('/api/ml-webhook', ml)
+app.route('/admin/api/ml', ml)
 
 // ── Page Routes ───────────────────────────────────────────
 app.route('/', pages)
