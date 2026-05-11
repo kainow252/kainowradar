@@ -562,51 +562,183 @@ ml.get('/token-debug', async (c) => {
 // ── GET /admin/api/ml/search-debug — Testa busca diretamente do Worker ─
 ml.get('/search-debug', async (c) => {
   const q     = (c.req.query('q') || 'Samsung Galaxy').trim()
-  const token = await c.env.CACHE?.get('ml_access_token').catch(() => null)
+  const token = await getStoredToken(c.env).catch(() => null)
   const headers: Record<string, string> = { 'User-Agent': 'KainowRadar/1.0', 'Accept': 'application/json' }
   if (token) headers['Authorization'] = `Bearer ${token}`
+  const noAuthHeaders: Record<string, string> = { 'User-Agent': 'KainowRadar/1.0', 'Accept': 'application/json' }
 
-  const results: Record<string, any> = {}
+  const results: Record<string, any> = { _token_type: token ? 'oauth' : 'none' }
 
-  // Teste 1: /products/search — pega IDs
-  let searchIds: string[] = []
+  // ── Teste 1: /products/search — pega catalog_product_ids ──────────────
+  let searchItems: Array<{ id: string; status: string; children_ids: string[]; name: string }> = []
   try {
-    const r = await fetch(`${ML_API}/products/search?site_id=MLB&q=${encodeURIComponent(q)}&limit=3`, { headers })
+    const r = await fetch(`${ML_API}/products/search?site_id=MLB&q=${encodeURIComponent(q)}&limit=5`, { headers })
     const body: any = await r.json().catch(() => ({}))
-    const items = body?.results || []
-    searchIds = items.map((x: any) => x.id).filter(Boolean)
-    results.products_search = {
-      status: r.status, count: items.length,
-      ids: searchIds,
-      statuses: items.map((x: any) => `${x.id}:${x.status}`),
+    searchItems = (body?.results || []).map((x: any) => ({
+      id: x.id, status: x.status,
+      children_ids: x.children_ids || [],
+      name: x.name || '',
+    }))
+    results.T1_products_search = {
+      http_status: r.status,
+      count: searchItems.length,
+      items: searchItems.map(x => ({ id: x.id, status: x.status, children_count: x.children_ids.length, name: x.name.slice(0, 60) })),
       error: body?.error ?? null,
     }
-  } catch (e: any) { results.products_search = { error: e?.message } }
+  } catch (e: any) { results.T1_products_search = { error: e?.message } }
 
-  // Teste 2: /products/{id}/items para cada ID do search
-  results.items_by_search_id = {}
-  for (const sid of searchIds.slice(0, 3)) {
+  const firstActive = searchItems.find(x => x.status === 'active') || searchItems[0]
+  const firstId     = firstActive?.id ?? null
+  const firstChildId = firstActive?.children_ids?.[0] ?? null
+
+  // ── Teste 2: /products/{catalog_id}/items — com token ────────────────
+  if (firstId) {
     try {
-      const r = await fetch(`${ML_API}/products/${sid}/items?limit=3`, { headers })
+      const r = await fetch(`${ML_API}/products/${firstId}/items?limit=3`, { headers })
       const body: any = await r.json().catch(() => ({}))
       const items: any[] = body?.results || body?.items || []
-      results.items_by_search_id[sid] = {
-        http_status: r.status,
-        count: items.length,
+      results.T2_products_items = {
+        id: firstId, http_status: r.status, count: items.length,
         prices: items.map((x: any) => x.price),
         statuses: items.map((x: any) => x.status),
-        error: body?.error ?? null,
+        permalinks: items.slice(0, 2).map((x: any) => x.permalink),
+        raw_error: body?.error ?? null,
+        raw_message: body?.message ?? null,
       }
-    } catch (e: any) { results.items_by_search_id[sid] = { error: (e as any)?.message } }
+    } catch (e: any) { results.T2_products_items = { error: e?.message } }
   }
 
-  // Teste 3: /products/{id}/items com ID fixo que funciona no cron
+  // ── Teste 3: /items/{children_id} com token ───────────────────────────
+  if (firstChildId) {
+    try {
+      const r = await fetch(`${ML_API}/items/${firstChildId}?attributes=id,title,price,status,permalink,catalog_product_id`, { headers })
+      const body: any = await r.json().catch(() => ({}))
+      results.T3_child_item_with_token = {
+        child_id: firstChildId, http_status: r.status,
+        price: body?.price ?? null, status: body?.status ?? null,
+        title: body?.title?.slice(0, 60) ?? null,
+        permalink: body?.permalink ?? null,
+        error: body?.error ?? null,
+      }
+    } catch (e: any) { results.T3_child_item_with_token = { error: e?.message } }
+  }
+
+  // ── Teste 4: /items/{children_id} SEM token ───────────────────────────
+  if (firstChildId) {
+    try {
+      const r = await fetch(`${ML_API}/items/${firstChildId}?attributes=id,title,price,status,permalink`, { headers: noAuthHeaders })
+      const body: any = await r.json().catch(() => ({}))
+      results.T4_child_item_no_token = {
+        child_id: firstChildId, http_status: r.status,
+        price: body?.price ?? null, status: body?.status ?? null,
+        error: body?.error ?? null, blocked_by: body?.blocked_by ?? null,
+      }
+    } catch (e: any) { results.T4_child_item_no_token = { error: e?.message } }
+  }
+
+  // ── Teste 5: /sites/MLB/search?q= com token ───────────────────────────
   try {
-    const r3 = await fetch(`${ML_API}/products/MLB24045332/items?limit=3`, { headers })
-    const body3: any = await r3.json().catch(() => ({}))
-    const items: any[] = body3?.results || body3?.items || []
-    results.catalog_items_known = { status: r3.status, count: items.length, first_price: items[0]?.price ?? null }
-  } catch (e: any) { results.catalog_items_known = { error: e?.message } }
+    const r = await fetch(`${ML_API}/sites/MLB/search?q=${encodeURIComponent(q)}&limit=3&attributes=id,title,price,status,permalink`, { headers })
+    const body: any = await r.json().catch(() => ({}))
+    const items: any[] = body?.results || []
+    results.T5_sites_search_with_token = {
+      http_status: r.status, count: items.length,
+      prices: items.map((x: any) => x.price),
+      error: body?.error ?? null, blocked_by: body?.blocked_by ?? null,
+      first: items[0] ? { id: items[0].id, title: String(items[0].title || '').slice(0, 60), price: items[0].price } : null,
+    }
+  } catch (e: any) { results.T5_sites_search_with_token = { error: e?.message } }
+
+  // ── Teste 6: /sites/MLB/search?catalog_product_id= com token ─────────
+  if (firstId) {
+    try {
+      const r = await fetch(`${ML_API}/sites/MLB/search?catalog_product_id=${firstId}&limit=3&attributes=id,title,price,status,permalink`, { headers })
+      const body: any = await r.json().catch(() => ({}))
+      const items: any[] = body?.results || []
+      results.T6_sites_search_catalog_id = {
+        catalog_id: firstId, http_status: r.status, count: items.length,
+        prices: items.map((x: any) => x.price),
+        error: body?.error ?? null, blocked_by: body?.blocked_by ?? null,
+        first: items[0] ? { id: items[0].id, price: items[0].price, status: items[0].status } : null,
+      }
+    } catch (e: any) { results.T6_sites_search_catalog_id = { error: e?.message } }
+  }
+
+  // ── Teste 7: /products/MLB24045332/items (ID fixo que funciona no cron) ─
+  try {
+    const r = await fetch(`${ML_API}/products/MLB24045332/items?limit=3`, { headers })
+    const body: any = await r.json().catch(() => ({}))
+    const items: any[] = body?.results || body?.items || []
+    results.T7_known_working_id = {
+      http_status: r.status, count: items.length,
+      first_price: items[0]?.price ?? null, first_status: items[0]?.status ?? null,
+      error: body?.error ?? null,
+    }
+  } catch (e: any) { results.T7_known_working_id = { error: e?.message } }
+
+  // ── Teste 8: /items/{id} multi-get com children_ids de todos os results ─
+  const allChildIds = searchItems.flatMap(x => x.children_ids).slice(0, 6)
+  if (allChildIds.length > 0) {
+    try {
+      const r = await fetch(`${ML_API}/items?ids=${allChildIds.join(',')}&attributes=id,title,price,status,permalink`, { headers })
+      const body: any = await r.json().catch(() => ({}))
+      const fetched: any[] = Array.isArray(body) ? body : []
+      results.T8_multiget_children = {
+        http_status: r.status,
+        ids_requested: allChildIds,
+        count: fetched.length,
+        results: fetched.map((x: any) => ({
+          code: x.code,
+          id: x.body?.id,
+          price: x.body?.price,
+          status: x.body?.status,
+          error: x.body?.error,
+        })),
+      }
+    } catch (e: any) { results.T8_multiget_children = { error: e?.message } }
+  }
+
+  // ── Teste 9: /products/{id}?attributes=id,name,buy_box_winner,status ──
+  // Estratégia do mlScraper — buy_box_winner tem preço do catálogo
+  results.T9_buy_box_winner = {}
+  for (const item of searchItems.slice(0, 3)) {
+    try {
+      const r = await fetch(
+        `${ML_API}/products/${item.id}?attributes=id,name,status,buy_box_winner,suggested_price`,
+        { headers }
+      )
+      const body: any = await r.json().catch(() => ({}))
+      results.T9_buy_box_winner[item.id] = {
+        http_status: r.status,
+        name: body?.name?.slice(0, 60) ?? null,
+        status: body?.status ?? null,
+        buy_box_price: body?.buy_box_winner?.price ?? null,
+        buy_box_item_id: body?.buy_box_winner?.item_id ?? null,
+        buy_box_permalink: body?.buy_box_winner?.permalink ?? null,
+        suggested_price: body?.suggested_price ?? null,
+        error: body?.error ?? null,
+        message: body?.message ?? null,
+      }
+    } catch (e: any) { results.T9_buy_box_winner[item.id] = { error: (e as any)?.message } }
+  }
+
+  // ── Teste 10: /products/{id} para o ID fixo que funciona (MLB24045332) ─
+  try {
+    const r = await fetch(
+      `${ML_API}/products/MLB24045332?attributes=id,name,status,buy_box_winner,suggested_price`,
+      { headers }
+    )
+    const body: any = await r.json().catch(() => ({}))
+    results.T10_known_buy_box = {
+      http_status: r.status,
+      name: body?.name?.slice(0, 60) ?? null,
+      status: body?.status ?? null,
+      buy_box_price: body?.buy_box_winner?.price ?? null,
+      buy_box_item_id: body?.buy_box_winner?.item_id ?? null,
+      suggested_price: body?.suggested_price ?? null,
+      error: body?.error ?? null,
+    }
+  } catch (e: any) { results.T10_known_buy_box = { error: e?.message } }
 
   return c.json({ q, has_token: !!token, results })
 })

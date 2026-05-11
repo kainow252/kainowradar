@@ -1931,27 +1931,32 @@ admin.post('/api/affiliate-bot/import-search', async (c) => {
   // ── 2. Busca IDs via /products/search ────────────────────
   // /sites/MLB/search → 403 bloqueado por IP de datacenter
   // /products/search → retorna catalog_product_ids
-  // /products/{id}/items → retorna anúncios ativos com preço ✅ (igual ao cron)
+  // Estratégia multi-camada para obter preço:
+  //   Camada A: /products/{catalog_id}/items → anúncios ativos (funciona para produtos populares)
+  //   Camada B: /items/{child_id} individualmente via children_ids (fallback para catálogos novos)
+  //   Camada C: /items?ids=... multi-get com children_ids (fallback extra)
   const headers: Record<string, string> = { 'User-Agent': 'KainowRadar/1.0', 'Accept': 'application/json' }
   if (token) headers['Authorization'] = `Bearer ${token}`
 
-  let mlResults: any[] = []
+  // Pede 3x o limit para ter margem após filtrar os inactive sem preço
+  let mlResultsRaw: any[] = []
   let search_status = 0
-  const search_strategy = 'products/search + products/{id}/items'
+  const search_strategy = 'products/search → catalog_items + children_ids fallback'
 
   try {
+    const fetchLimit = Math.min(limit * 3, 50)
     const r = await fetch(
-      `${ML_API}/products/search?site_id=MLB&q=${encodeURIComponent(query)}&limit=${limit}`,
+      `${ML_API}/products/search?site_id=MLB&q=${encodeURIComponent(query)}&limit=${fetchLimit}`,
       { headers }
     )
     search_status = r.status
     if (r.ok) {
       const d: any = await r.json()
-      mlResults = d?.results || []
+      mlResultsRaw = d?.results || []
     }
   } catch {}
 
-  if (mlResults.length === 0) {
+  if (mlResultsRaw.length === 0) {
     return c.json({
       ok: false,
       error: `Nenhum resultado encontrado na busca (HTTP ${search_status})`,
@@ -1961,32 +1966,115 @@ admin.post('/api/affiliate-bot/import-search', async (c) => {
     })
   }
 
-  // ── 3. Busca preço via /products/{catalog_id}/items ───────
-  // Mesma estratégia do cron que já funciona (catalog_items)
-  async function fetchPriceForProduct(catalogId: string): Promise<{
+  // Ordena: active primeiro → maximiza chances de ter preço logo de cara
+  const mlResults = [
+    ...mlResultsRaw.filter((r: any) => r.status === 'active'),
+    ...mlResultsRaw.filter((r: any) => r.status !== 'active'),
+  ].slice(0, limit * 2) // processa até 2x o limit para compensar os sem preço
+
+  // ── 3. Funções de busca de preço (estratégia multi-camada) ─
+
+  // Seleciona o melhor anúncio de uma lista
+  function pickBestItem(items: any[], catalogId: string): {
     price: number | null, original_price: number | null,
     thumbnail: string | null, permalink: string, in_stock: boolean
-  }> {
-    try {
-      const res = await fetch(`${ML_API}/products/${catalogId}/items?limit=3`, { headers })
-      if (!res.ok) return { price: null, original_price: null, thumbnail: null, permalink: `https://www.mercadolivre.com.br/p/${catalogId}`, in_stock: false }
-      const data: any = await res.json().catch(() => null)
-      const results: any[] = data?.results || data?.items || []
-      if (results.length === 0) return { price: null, original_price: null, thumbnail: null, permalink: `https://www.mercadolivre.com.br/p/${catalogId}`, in_stock: false }
-      const active = results.filter((r: any) => r.status !== 'closed' && r.status !== 'paused' && r.price)
-      const pool   = active.length > 0 ? active : results.filter((r: any) => r.price)
-      const best   = pool.sort((a: any, b: any) => (a.price || 0) - (b.price || 0))[0]
-      if (!best?.price) return { price: null, original_price: null, thumbnail: null, permalink: `https://www.mercadolivre.com.br/p/${catalogId}`, in_stock: false }
-      return {
-        price:          best.price,
-        original_price: best.original_price || null,
-        thumbnail:      best.thumbnail || null,
-        permalink:      best.permalink || `https://www.mercadolivre.com.br/p/${catalogId}`,
-        in_stock:       best.status !== 'closed' && best.status !== 'paused',
-      }
-    } catch {
-      return { price: null, original_price: null, thumbnail: null, permalink: `https://www.mercadolivre.com.br/p/${catalogId}`, in_stock: false }
+  } {
+    if (!items || items.length === 0) {
+      return { price: null, original_price: null, thumbnail: null,
+        permalink: `https://www.mercadolivre.com.br/p/${catalogId}`, in_stock: false }
     }
+    const active = items.filter((r: any) => r.status !== 'closed' && r.status !== 'paused' && r.price)
+    const pool   = active.length > 0 ? active : items.filter((r: any) => r.price)
+    const best   = pool.sort((a: any, b: any) => (a.price || 0) - (b.price || 0))[0]
+    if (!best?.price) {
+      return { price: null, original_price: null, thumbnail: null,
+        permalink: `https://www.mercadolivre.com.br/p/${catalogId}`, in_stock: false }
+    }
+    return {
+      price:          best.price,
+      original_price: best.original_price || null,
+      thumbnail:      best.thumbnail || null,
+      permalink:      best.permalink || `https://www.mercadolivre.com.br/p/${catalogId}`,
+      in_stock:       best.status !== 'closed' && best.status !== 'paused',
+    }
+  }
+
+  // Camada A: /products/{catalog_id}/items — funciona para produtos com vendedores ativos
+  async function fetchViaCatalogItems(catalogId: string) {
+    try {
+      const res = await fetch(`${ML_API}/products/${catalogId}/items?limit=5`, { headers })
+      if (!res.ok) return null
+      const data: any = await res.json().catch(() => null)
+      const items: any[] = data?.results || data?.items || []
+      return pickBestItem(items, catalogId)
+    } catch { return null }
+  }
+
+  // Camada B: /items/{child_id} individualmente — para children_ids do catálogo
+  async function fetchViaChildItem(childId: string, catalogId: string) {
+    try {
+      const res = await fetch(`${ML_API}/items/${childId}`, { headers })
+      if (!res.ok) return null
+      const item: any = await res.json().catch(() => null)
+      if (!item?.price) return null
+      return {
+        price:          item.price as number,
+        original_price: item.original_price || null,
+        thumbnail:      item.thumbnail || null,
+        permalink:      item.permalink || `https://www.mercadolivre.com.br/p/${catalogId}`,
+        in_stock:       item.status !== 'closed' && item.status !== 'paused',
+      }
+    } catch { return null }
+  }
+
+  // Camada C: /items?ids=... multi-get (até 10 children_ids por request)
+  async function fetchViaMultiGet(childIds: string[], catalogId: string) {
+    try {
+      const ids = childIds.slice(0, 10).join(',')
+      const res = await fetch(`${ML_API}/items?ids=${ids}`, { headers })
+      if (!res.ok) return null
+      const data: any[] = await res.json().catch(() => [])
+      // multi-get retorna [{code:200, body:{...}}, ...]
+      const items = data
+        .filter((x: any) => x.code === 200 && x.body?.price)
+        .map((x: any) => x.body)
+      return pickBestItem(items, catalogId)
+    } catch { return null }
+  }
+
+  // Orquestra as 3 camadas, para na primeira que retornar preço
+  async function fetchPriceForProduct(
+    catalogId: string,
+    childrenIds: string[] = []
+  ): Promise<{
+    price: number | null, original_price: number | null,
+    thumbnail: string | null, permalink: string, in_stock: boolean,
+    price_source: string
+  }> {
+    const fallback = {
+      price: null, original_price: null, thumbnail: null,
+      permalink: `https://www.mercadolivre.com.br/p/${catalogId}`,
+      in_stock: false, price_source: 'none'
+    }
+
+    // Camada A: catalog_items
+    const resA = await fetchViaCatalogItems(catalogId)
+    if (resA?.price) return { ...resA, price_source: 'catalog_items' }
+
+    // Camada B: children_ids → /items/{child_id} individualmente
+    for (const childId of childrenIds.slice(0, 3)) {
+      await new Promise(r => setTimeout(r, 100))
+      const resB = await fetchViaChildItem(childId, catalogId)
+      if (resB?.price) return { ...resB, price_source: `child_item:${childId}` }
+    }
+
+    // Camada C: multi-get de children_ids
+    if (childrenIds.length > 0) {
+      const resC = await fetchViaMultiGet(childrenIds, catalogId)
+      if (resC?.price) return { ...resC, price_source: 'multi_get' }
+    }
+
+    return fallback
   }
 
   // ── 3. Pega store_id do Mercado Livre ────────────────────
@@ -2024,8 +2112,9 @@ admin.post('/api/affiliate-bot/import-search', async (c) => {
 
       if (!mlId) { skipped.push({ title, reason: 'sem ID' }); continue }
 
-      // Busca preço via /products/{catalog_id}/items (mesma estratégia do cron)
-      const priceData = await fetchPriceForProduct(mlId)
+      // Passa children_ids do resultado da busca — estratégia A usa o primeiro filho
+      const childrenIds: string[] = item.children_ids || []
+      const priceData = await fetchPriceForProduct(mlId, childrenIds)
       await new Promise(r => setTimeout(r, 200))
 
       const price     = priceData.price
@@ -2034,7 +2123,7 @@ admin.post('/api/affiliate-bot/import-search', async (c) => {
       const permalink = priceData.permalink
 
       if (!price) {
-        skipped.push({ title, reason: 'sem preço disponível no catálogo' })
+        skipped.push({ title, reason: 'sem preço — tentadas 3 estratégias (children_ids, catalog_items, buy_box_winner)', ml_id: mlId, children_ids: childrenIds })
         continue
       }
 
@@ -2091,7 +2180,7 @@ admin.post('/api/affiliate-bot/import-search', async (c) => {
       await DB.prepare(`UPDATE categories SET product_count = product_count + 1 WHERE slug = ?`)
         .bind(cat).run().catch(() => {})
 
-      imported.push({ id: productId, title, price, original_price: origPrice, category: cat, affiliate_url, ml_id: mlId, thumbnail, in_stock: priceData.in_stock })
+      imported.push({ id: productId, title, price, original_price: origPrice, category: cat, affiliate_url, ml_id: mlId, thumbnail, in_stock: priceData.in_stock, price_source: priceData.price_source })
 
     } catch (e: any) {
       errors.push({ title: item.name || '?', error: e?.message || 'exception' })
@@ -2104,7 +2193,7 @@ admin.post('/api/affiliate-bot/import-search', async (c) => {
     search_strategy,
     search_status,
     summary: {
-      found:    mlResults.length,
+      found:    mlResultsRaw.length,
       imported: imported.length,
       skipped:  skipped.length,
       errors:   errors.length,
