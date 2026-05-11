@@ -1658,56 +1658,137 @@ admin.post('/api/affiliate-bot/apply', async (c) => {
   return c.json({ ok: true })
 })
 
-// ── POST /admin/api/affiliate-bot/run-all — Bot automático ─
-// Percorre todos os produtos sem affiliate_url e tenta preencher automaticamente
+// ── POST /admin/api/affiliate-bot/run-all — Bot em lote
+// Fase 1: produtos COM ml_item_id -> /items/{id} -> permalink real
+// Fase 2: produtos SEM ml_item_id -> search ML -> melhor match
+// Link afiliado: permalink?matt_word={PUBLISHER_ID}&matt_tool=61674414&forceInApp=true
 admin.post('/api/affiliate-bot/run-all', async (c) => {
-  const { DB } = c.env
+  const { DB, CACHE } = c.env
   const PUBLISHER_ID = 'cfegdhabc31955'
+  const MATT_TOOL    = '61674414'
+  const body: any = await c.req.json().catch(() => ({}))
+  const LIMIT = Math.min(Math.max(parseInt(body.limit) || 50, 1), 100)
 
-  // Pega até 30 produtos sem affiliate_url
-  const { results: products } = await DB.prepare(`
-    SELECT id, name, brand FROM products
-    WHERE is_active = 1 AND (affiliate_url IS NULL OR affiliate_url = '')
+  // Token OAuth ML (opcional -- melhora Fase 1)
+  const token = await CACHE?.get('ml_access_token').catch(() => null)
+
+  // ── Fase 1: produtos COM ml_item_id ─────────────────
+  const { results: phase1 } = await DB.prepare(`
+    SELECT id, name, ml_item_id FROM products
+    WHERE is_active = 1
+      AND ml_item_id IS NOT NULL AND ml_item_id != ''
+      AND (affiliate_url IS NULL OR affiliate_url = ''
+           OR affiliate_url NOT LIKE '%matt_word%')
     ORDER BY id ASC
-    LIMIT 30
-  `).all<any>()
+    LIMIT ?
+  `).bind(LIMIT).all<any>()
 
-  if (!products.length) return c.json({ ok: true, processed: 0, message: 'Todos os produtos já têm link de afiliado!' })
+  // ── Fase 2: produtos SEM ml_item_id ─────────────────
+  const remaining = LIMIT - phase1.length
+  const { results: phase2 } = remaining > 0
+    ? await DB.prepare(`
+        SELECT id, name, brand FROM products
+        WHERE is_active = 1
+          AND (ml_item_id IS NULL OR ml_item_id = '')
+          AND (affiliate_url IS NULL OR affiliate_url = '')
+        ORDER BY id ASC
+        LIMIT ?
+      `).bind(remaining).all<any>()
+    : { results: [] as any[] }
 
-  let processed = 0
-  let failed = 0
+  const total = phase1.length + phase2.length
+  if (!total) {
+    return c.json({ ok: true, refreshed: 0, linked: 0, fallback: 0,
+      no_token: !token, message: 'Todos os produtos já têm link de afiliado!' })
+  }
+
+  let refreshed = 0, linked = 0, fallback = 0
   const errors: string[] = []
 
-  for (const product of products) {
+  // Helper: monta link afiliado com rastreamento real
+  const buildLink = (permalink: string) =>
+    `${permalink}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+
+  // ── Processar Fase 1 ──────────────────────────
+  for (const p of phase1) {
     try {
-      const query = `${product.brand || ''} ${product.name}`.trim()
-      const url = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query)}&limit=1`
-      const res = await fetch(url, { headers: { 'User-Agent': 'KainowRadar/1.0' } })
-      if (!res.ok) { failed++; continue }
+      const headers: Record<string, string> = { 'User-Agent': 'KainowRadar/1.0' }
+      if (token) headers['Authorization'] = `Bearer ${token}`
+
+      const res = await fetch(
+        `https://api.mercadolibre.com/items/${p.ml_item_id}?attributes=id,permalink`,
+        { headers }
+      )
+      if (!res.ok) {
+        errors.push(`#${p.id} ${p.ml_item_id}: HTTP ${res.status}`)
+        continue
+      }
+      const item: any = await res.json()
+      if (!item?.permalink) { errors.push(`#${p.id}: sem permalink`); continue }
+
+      const affiliate_url = buildLink(item.permalink)
+      await DB.prepare(`
+        UPDATE products
+        SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(affiliate_url, p.id).run()
+      refreshed++
+      await new Promise(r => setTimeout(r, 100))
+    } catch (e: any) {
+      errors.push(`#${p.id}: ${e.message}`)
+    }
+  }
+
+  // ── Processar Fase 2 ──────────────────────────
+  for (const p of phase2) {
+    try {
+      const query = `${p.brand || ''} ${p.name}`.trim()
+      const searchUrl = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query)}&limit=1`
+      const headers: Record<string, string> = { 'User-Agent': 'KainowRadar/1.0' }
+      if (token) headers['Authorization'] = `Bearer ${token}`
+
+      const res = await fetch(searchUrl, { headers })
+      if (!res.ok) {
+        // Search bloqueado -- fallback: link de busca afiliado
+        const searchAff = `https://lista.mercadolivre.com.br/${encodeURIComponent(query)}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}`
+        await DB.prepare(`UPDATE products SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+          .bind(searchAff, p.id).run()
+        fallback++
+        continue
+      }
 
       const data: any = await res.json()
       const item = data.results?.[0]
-      if (!item) { failed++; continue }
+      if (!item?.permalink) {
+        // Sem resultado -- fallback: link de busca afiliado
+        const searchAff = `https://lista.mercadolivre.com.br/${encodeURIComponent(query)}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}`
+        await DB.prepare(`UPDATE products SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+          .bind(searchAff, p.id).run()
+        fallback++
+        continue
+      }
 
-      const affiliate_url = `${item.permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`
-
+      const affiliate_url = buildLink(item.permalink)
       await DB.prepare(`
         UPDATE products
         SET ml_item_id = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      `).bind(item.id, affiliate_url, product.id).run()
-
-      processed++
-
-      // Pausa pequena para não sobrecarregar a API do ML
-      await new Promise(r => setTimeout(r, 150))
+      `).bind(item.id, affiliate_url, p.id).run()
+      linked++
+      await new Promise(r => setTimeout(r, 120))
     } catch (e: any) {
-      failed++
-      errors.push(`Produto ${product.id}: ${e.message}`)
+      errors.push(`#${p.id}: ${e.message}`)
     }
   }
 
-  return c.json({ ok: true, processed, failed, errors: errors.slice(0, 5) })
+  const message = [
+    `🔗 Fase 1: ${refreshed} atualizados (COM ml_item_id → /items/{id})`,
+    `🔍 Fase 2: ${linked} novos + ${fallback} fallbacks (SEM ml_item_id)`,
+    errors.length ? `⚠ ${errors.length} erros` : '',
+  ].filter(Boolean).join(' | ')
+
+  return c.json({ ok: true, refreshed, linked, fallback, no_token: !token,
+    errors: errors.slice(0, 10), message })
 })
 
 // ── DELETE /admin/api/affiliate-bot/clear/:id — Remove link ─
