@@ -97,9 +97,17 @@ function toggleMobCats() {
   const chevron = el('mob-cats-chevron')
   if (!grid) return
   const isOpen = grid.style.display !== 'none'
-  grid.style.display    = isOpen ? 'none' : ''
+  grid.style.display = isOpen ? 'none' : ''
   if (chevron) chevron.style.transform = isOpen ? 'rotate(-90deg)' : 'rotate(0deg)'
-  grid.style.transition = 'all 0.2s ease'
+}
+
+function toggleMobStores() {
+  const list    = el('mob-stores-list')
+  const chevron = el('mob-stores-chevron')
+  if (!list) return
+  const isOpen = list.style.display !== 'none'
+  list.style.display = isOpen ? 'none' : ''
+  if (chevron) chevron.style.transform = isOpen ? 'rotate(-90deg)' : 'rotate(0deg)'
 }
 
 // Sincroniza estado do usuário no drawer (após loadUser)

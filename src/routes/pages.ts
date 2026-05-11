@@ -753,29 +753,41 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
       <!-- Divisor -->
       <div class="h-px bg-gray-100 mx-4 my-3"></div>
 
-      <!-- Lojas parceiras -->
+      <!-- Lojas parceiras — colapsável igual categorias -->
       <div class="px-3 pb-2">
-        <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-3 mb-2">Lojas Parceiras</p>
-        <div class="flex flex-col gap-0.5 px-1">
-          ${[
-            { name:'Amazon',     color:'#FF9900', textColor:'#fff', initial:'A',  slug:'amazon'    },
-            { name:'Magalu',     color:'#0086FF', textColor:'#fff', initial:'M',  slug:'magalu'    },
-            { name:'Mercado Livre', color:'#FFE600', textColor:'#333', initial:'ML', slug:'mercado' },
-            { name:'Americanas', color:'#E60014', textColor:'#fff', initial:'Am', slug:'americana' },
-            { name:'Casas Bahia',color:'#0057A8', textColor:'#fff', initial:'CB', slug:'cbahia'    },
-            { name:'KaBuM!',     color:'#F47920', textColor:'#fff', initial:'K',  slug:'kabum'     },
-            { name:'FastShop',   color:'#00843D', textColor:'#fff', initial:'FS', slug:'fastshop'  },
-            { name:'Ponto Frio', color:'#00AAFF', textColor:'#fff', initial:'PF', slug:'pontofrio' },
-          ].map(s => `
-            <a href="/categoria/smartphones?loja=${s.slug}" onclick="closeHamburger()"
-              class="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-gray-50 transition-colors group">
-              <div class="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm" style="background:${s.color}">
-                <span class="font-black text-[11px] leading-none" style="color:${s.textColor}">${s.initial}</span>
-              </div>
-              <span class="text-sm font-semibold text-gray-700 group-hover:text-blue-700">${s.name}</span>
-              <svg class="w-3.5 h-3.5 text-gray-300 ml-auto group-hover:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>
-            </a>
-          `).join('')}
+        <button onclick="toggleMobStores()" id="mob-stores-toggle"
+          class="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-gray-50 transition-colors group">
+          <div class="flex items-center gap-2">
+            <div class="w-1 h-5 bg-gradient-to-b from-orange-400 to-orange-600 rounded-full"></div>
+            <span class="text-xs font-black text-gray-700 uppercase tracking-wider">Lojas Parceiras</span>
+          </div>
+          <svg id="mob-stores-chevron" class="w-4 h-4 text-gray-400 transition-transform duration-200" style="transform:rotate(-90deg)"
+               fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
+        <div id="mob-stores-list" class="mt-1 pb-1" style="display:none">
+          <div class="flex flex-col gap-0.5 px-1">
+            ${[
+              { name:'Amazon',      color:'#FF9900', textColor:'#fff', initial:'A',  slug:'amazon'    },
+              { name:'Magalu',      color:'#0086FF', textColor:'#fff', initial:'M',  slug:'magalu'    },
+              { name:'Mercado Livre', color:'#FFE600', textColor:'#333', initial:'ML', slug:'mercado' },
+              { name:'Americanas',  color:'#E60014', textColor:'#fff', initial:'Am', slug:'americana' },
+              { name:'Casas Bahia', color:'#0057A8', textColor:'#fff', initial:'CB', slug:'cbahia'   },
+              { name:'KaBuM!',      color:'#F47920', textColor:'#fff', initial:'K',  slug:'kabum'     },
+              { name:'FastShop',    color:'#00843D', textColor:'#fff', initial:'FS', slug:'fastshop'  },
+              { name:'Ponto Frio',  color:'#00AAFF', textColor:'#fff', initial:'PF', slug:'pontofrio' },
+            ].map(s => `
+              <a href="/categoria/smartphones?loja=${s.slug}" onclick="closeHamburger()"
+                class="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-blue-50 transition-colors group">
+                <div class="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm" style="background:${s.color}">
+                  <span class="font-black text-[11px] leading-none" style="color:${s.textColor}">${s.initial}</span>
+                </div>
+                <span class="text-sm font-semibold text-gray-700 group-hover:text-blue-700">${s.name}</span>
+                <svg class="w-3.5 h-3.5 text-gray-300 ml-auto group-hover:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>
+              </a>
+            `).join('')}
+          </div>
         </div>
       </div>
 
