@@ -860,6 +860,9 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
           oninput="debounceSearch(this.value)">
         <div id="suggestions" class="hidden absolute top-16 left-1/2 -translate-x-1/2 w-[600px] mt-1 bg-white rounded-2xl shadow-xl border border-gray-100 z-50 max-h-80 overflow-auto"></div>
 
+        <!-- Spacer: empurra alertas/entrar para a direita -->
+        <div class="flex-1"></div>
+
         <!-- Alertas (ícone) — só desktop -->
         <a href="/meus-alertas" title="Meus Alertas"
            class="hidden md:flex items-center gap-1.5 text-gray-500 hover:text-blue-600 transition-colors px-2 shrink-0">
