@@ -740,6 +740,35 @@ ml.get('/search-debug', async (c) => {
     }
   } catch (e: any) { results.T10_known_buy_box = { error: e?.message } }
 
+  // ── Teste 11: scraping HTML lista.mercadolivre.com.br — extrai item IDs ─
+  // Estratégia: o Worker tem IPs de edge (não datacenter) — pode passar bot check
+  try {
+    const mlUrl = `https://lista.mercadolivre.com.br/${encodeURIComponent(q.replace(/\s+/g, '-'))}`
+    const r = await fetch(mlUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+      },
+    })
+    const html = await r.text().catch(() => '')
+    // Extrai IDs de item reais (MLB + 10+ dígitos)
+    const itemIdRegex = /\b(MLB\d{10,})\b/gi
+    const foundIds = [...new Set([...html.matchAll(itemIdRegex)].map(m => m[1].toUpperCase()))]
+    // Extrai também preços visíveis no HTML (padrão R$\s*1.234)
+    const priceRegex = /R\$[\s]*[\d]{1,4}(?:[.,]\d{3})*(?:[.,]\d{2})?/g
+    const prices = [...html.matchAll(priceRegex)].map(m => m[0]).slice(0, 5)
+    results.T11_html_scrape = {
+      url: mlUrl,
+      http_status: r.status,
+      html_bytes: html.length,
+      is_bot_challenge: html.includes('_bmstate') || html.includes('micro-landing') || html.length < 10000,
+      item_ids_found: foundIds.slice(0, 10),
+      prices_found: prices,
+    }
+  } catch (e: any) { results.T11_html_scrape = { error: e?.message } }
+
   return c.json({ q, has_token: !!token, results })
 })
 
