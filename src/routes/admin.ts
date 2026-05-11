@@ -6454,7 +6454,7 @@ async function importMLByUrl() {
   }
 
   // Divide por quebra de linha ou vírgula, filtra vazios
-  const urls = raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+  const urls = raw.split(new RegExp('[\\n,]+')).map(s => s.trim()).filter(Boolean)
 
   btn.disabled = true
   btn.innerHTML = '⏳ Importando...'
