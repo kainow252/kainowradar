@@ -154,33 +154,64 @@ function extractMLBId(input: string): string | null {
 async function getStoredToken(env: MLBindings): Promise<string | null> {
   if (!env.CACHE) return null
   try {
-    const token = await env.CACHE.get('ml_access_token')
-    if (token) return token
-
-    const refreshToken = await env.CACHE.get('ml_refresh_token')
-    if (!refreshToken) return null
+    // 1) Token OAuth do usuario (mais permissoes)
+    const oauthToken = await env.CACHE.get('ml_access_token')
+    if (oauthToken) return oauthToken
 
     const appId  = env.ML_APP_ID  || APP_ID
     const secret = env.ML_SECRET  || ''
 
-    const res = await fetch(`${ML_API}/oauth/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
-      body: new URLSearchParams({
-        grant_type:    'refresh_token',
-        client_id:     appId,
-        client_secret: secret,
-        refresh_token: refreshToken,
-      }),
-    })
-    if (!res.ok) return null
-    const data: any = await res.json()
-    if (!data.access_token) return null
+    // 2) Tenta renovar OAuth via refresh_token
+    const refreshToken = await env.CACHE.get('ml_refresh_token')
+    if (refreshToken && secret) {
+      const res = await fetch(ML_API + '/oauth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+        body: new URLSearchParams({
+          grant_type:    'refresh_token',
+          client_id:     appId,
+          client_secret: secret,
+          refresh_token: refreshToken,
+        }),
+      })
+      if (res.ok) {
+        const data: any = await res.json()
+        if (data.access_token) {
+          await env.CACHE.put('ml_access_token',  data.access_token,          { expirationTtl: data.expires_in || 21600 })
+          await env.CACHE.put('ml_refresh_token', data.refresh_token || '',   { expirationTtl: 86400 * 30 })
+          await env.CACHE.put('ml_user_id',       String(data.user_id || ''), { expirationTtl: 86400 * 30 })
+          return data.access_token
+        }
+      }
+    }
 
-    await env.CACHE.put('ml_access_token',  data.access_token,          { expirationTtl: data.expires_in || 21600 })
-    await env.CACHE.put('ml_refresh_token', data.refresh_token || '',   { expirationTtl: 86400 * 30 })
-    await env.CACHE.put('ml_user_id',       String(data.user_id || ''), { expirationTtl: 86400 * 30 })
-    return data.access_token
+    // 3) Fallback: client_credentials (ML_APP_ID + ML_SECRET)
+    //    Nao precisa de OAuth do usuario. Funciona para:
+    //    GET /items/{id}, GET /items?ids=..., GET /sites/MLB/search
+    //    Token dura 6h, cacheado em ml_app_token por 5h.
+    if (secret) {
+      const appToken = await env.CACHE.get('ml_app_token')
+      if (appToken) return appToken
+
+      const tokenRes = await fetch(ML_API + '/oauth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+        body: new URLSearchParams({
+          grant_type:    'client_credentials',
+          client_id:     appId,
+          client_secret: secret,
+        }),
+      })
+      if (tokenRes.ok) {
+        const td: any = await tokenRes.json()
+        if (td.access_token) {
+          await env.CACHE.put('ml_app_token', td.access_token, { expirationTtl: 18000 })
+          return td.access_token
+        }
+      }
+    }
+
+    return null
   } catch {
     return null
   }
@@ -407,6 +438,46 @@ ml.get('/status', async (c) => {
   })
 })
 
+// ── GET /admin/api/ml/token-debug — Diagnóstico de token ─
+ml.get('/token-debug', async (c) => {
+  const appId  = (c.env as any).ML_APP_ID  || APP_ID
+  const secret = (c.env as any).ML_SECRET  || ''
+  const oauthKV  = await c.env.CACHE?.get('ml_access_token').catch(() => null)
+  const appToken = await c.env.CACHE?.get('ml_app_token').catch(() => null)
+  const refreshKV = await c.env.CACHE?.get('ml_refresh_token').catch(() => null)
+
+  // Tenta client_credentials ao vivo
+  let ccResult: any = null
+  if (secret) {
+    const r = await fetch(ML_API + '/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'client_credentials', client_id: appId, client_secret: secret }),
+    })
+    ccResult = { status: r.status, body: await r.json().catch(() => null) }
+  }
+
+  // Tenta GET /items/{id} com o melhor token disponível
+  const token = appToken || oauthKV || ccResult?.body?.access_token
+  let itemTest: any = null
+  if (token) {
+    const r = await fetch(ML_API + '/items/MLB3990393083?attributes=id,title,price', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    })
+    itemTest = { status: r.status, body: await r.json().catch(() => null) }
+  }
+
+  return c.json({
+    has_secret:      !!secret,
+    has_oauth_kv:    !!oauthKV,
+    has_app_token_kv: !!appToken,
+    has_refresh_kv:  !!refreshKV,
+    app_id:          appId,
+    cc_result:       ccResult,
+    item_test:       itemTest,
+  })
+})
+
 // ── POST /admin/api/ml/import-url ────────────────────────
 // Importa produtos a partir de URLs do ML (ou IDs diretos)
 // Body: { urls: string[], category?: string }
@@ -424,10 +495,12 @@ ml.post('/import-url', async (c) => {
     return c.json({ error: 'Envie pelo menos uma URL ou ID no campo "urls".' }, 400)
   }
 
+  // getStoredToken tenta: OAuth KV → refresh_token → client_credentials
+  // client_credentials usa ML_SECRET (Cloudflare secret) — sem OAuth do usuario
   const token = await getStoredToken(c.env)
   if (!token) {
     return c.json({
-      error: 'Token ML não encontrado. Conecte ao ML primeiro.',
+      error: 'Sem token ML. Configure ML_SECRET no Cloudflare ou reconecte via /api/ml/auth.',
       auth_url: '/api/ml/auth',
     }, 401)
   }
