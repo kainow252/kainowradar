@@ -90,6 +90,33 @@ function slugify(text: string): string {
     .substring(0, 80)
 }
 
+// ── Helper: Detecta se URL é de encurtador ML ───────────
+// meli.la/xxxxx, mercadol.iv/xxxxx, etc.
+function isShortUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname
+    return host === 'meli.la' || host === 'mercadol.iv' || host === 'm.me'
+  } catch {
+    return false
+  }
+}
+
+// ── Helper: Resolve URL encurtada → URL final (segue redirects) ──
+// Usa fetch com redirect:'follow' — o Cloudflare Worker suporta isso
+async function resolveShortUrl(url: string): Promise<string> {
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; KainowRadar/1.0)' },
+    })
+    // Após seguir todos os redirects, res.url é a URL final
+    return res.url || url
+  } catch {
+    return url
+  }
+}
+
 // ── Helper: Extrai MLB ID de uma URL do Mercado Livre ─────
 // Suporta formatos:
 //   https://www.mercadolivre.com.br/produto/p/MLB12345678  (product page)
@@ -404,18 +431,33 @@ ml.post('/import-url', async (c) => {
 
   const { DB } = c.env
 
-  // Extrai IDs únicos das URLs
+  // Extrai IDs únicos das URLs (resolve encurtadores antes de parsear)
   const ids: string[] = []
   const parseErrors: string[] = []
+
+  // Expande todas as entradas em linhas individuais
+  const allLines: string[] = []
   for (const raw of urls) {
-    const lines = raw.split(/[\n,]+/).map(l => l.trim()).filter(Boolean)
-    for (const line of lines) {
-      const id = extractMLBId(line)
-      if (id && !ids.includes(id)) {
-        ids.push(id)
-      } else if (!id) {
-        parseErrors.push(`Não foi possível extrair ID de: ${line.substring(0, 60)}`)
+    const lines = raw.split(new RegExp('[\n,]+')).map((l: string) => l.trim()).filter(Boolean)
+    allLines.push(...lines)
+  }
+
+  // Resolve encurtadores em paralelo (meli.la/xxx → URL real)
+  const resolvedLines = await Promise.all(
+    allLines.map(async (line) => {
+      if (line.startsWith('http') && isShortUrl(line)) {
+        return await resolveShortUrl(line)
       }
+      return line
+    })
+  )
+
+  for (const line of resolvedLines) {
+    const id = extractMLBId(line)
+    if (id && !ids.includes(id)) {
+      ids.push(id)
+    } else if (!id) {
+      parseErrors.push(`Não foi possível extrair ID de: ${line.substring(0, 60)}`)
     }
   }
 
