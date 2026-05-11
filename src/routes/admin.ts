@@ -6253,7 +6253,7 @@ async function runBotAll() {
     '🔍 Link de busca     : ' + (res.fallback  || 0) + '  (fallback — search bloqueou)',
     res.errors && res.errors.length ? '⚠ Erros: ' + res.errors.join(' | ') : '',
     res.message || '',
-  ].filter(Boolean).join('\n')
+  ].filter(Boolean).join(String.fromCharCode(10))
 
   btn.disabled = false
   btn.innerHTML = '<span>▶</span> Rodar Bot (próximos 30 pendentes)'
