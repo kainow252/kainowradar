@@ -2937,18 +2937,46 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
   }
 
   // ─────────────────────────────────────────────────────────
+  // HELPER: GeckoAPI /v1/extract — encapsula auth, retry e erro
+  // ─────────────────────────────────────────────────────────
+  const GECKO_BASE = 'https://api.geckoapi.com.br'
+  const geckoKey   = (c.env as any).GECKO_API_KEY as string | undefined
+
+  async function geckoExtract(payload: Record<string, unknown>): Promise<any> {
+    if (!geckoKey) return null
+    try {
+      const r = await fetch(`${GECKO_BASE}/v1/extract`, {
+        method:  'POST',
+        headers: {
+          'Authorization': `Bearer ${geckoKey}`,
+          'Content-Type':  'application/json',
+        },
+        body: JSON.stringify(payload),
+      })
+      if (!r.ok) return null
+      const json: any = await r.json()
+      if (json.errorCode) return null
+      return json.data ?? null
+    } catch {
+      return null
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────
   // ETAPA 2 — Busca por nome via GeckoAPI PLP (1 crédito/busca)
-  // Produtos sem ml_item_id → busca keyword → pega 1º match
-  // relevante → salva ml_item_id + permalink + preço
+  // Produtos sem ml_item_id → keyword → 1º match → url+sku+preço
+  // Link afiliado = URL limpa do produto + parâmetros afiliado
   // ─────────────────────────────────────────────────────────
   if (steps.includes('search')) {
-    const srch: any = { status: 'ok', found: 0, skipped: 0, errors: 0, credits_used: 0, products: [] }
+    const srch: any = {
+      status: 'ok', found: 0, skipped: 0, errors: 0,
+      no_gecko_key: !geckoKey, products: [],
+    }
     report.search = srch
 
-    const GECKO_KEY = (c.env as any).GECKO_API_KEY as string | undefined
-    if (!GECKO_KEY) {
-      srch.status = 'error'
-      srch.error  = 'GECKO_API_KEY não configurada — adicione o secret no Cloudflare'
+    if (!geckoKey) {
+      srch.status = 'skipped'
+      srch.error  = 'GECKO_API_KEY não configurada — defina o secret no Cloudflare Pages'
     } else {
       try {
         const noLink = await DB.prepare(`
@@ -2960,83 +2988,46 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
 
         for (const prod of noLink.results ?? []) {
           try {
-            // Normaliza a query: remove caracteres especiais, limita a 80 chars
-            const keyword = prod.name
-              .replace(/['"()\[\]]/g, '')
-              .replace(/\s+/g, ' ')
-              .trim()
-              .slice(0, 80)
+            const keyword = prod.name.replace(/['"()\[\]]/g, '').trim()
 
-            // GeckoAPI PLP — 1 crédito → retorna ~48 resultados
-            const geckoRes = await fetch('https://api.geckoapi.com.br/v1/extract', {
-              method:  'POST',
-              headers: {
-                'Authorization': `Bearer ${GECKO_KEY}`,
-                'Content-Type':  'application/json',
-              },
-              body: JSON.stringify({
-                target:  'mercadolivre.com.br',
-                type:    'plp',
-                keyword,
-              }),
+            // GeckoAPI PLP: busca produtos no ML por keyword
+            // Resposta: { data: { items: [{ url, sku, name, price, ... }] } }
+            const data = await geckoExtract({
+              target:  'mercadolivre.com.br',
+              type:    'plp',
+              keyword,
             })
 
-            srch.credits_used++
+            const items: any[] = data?.items ?? []
+            // Pega o 1º item com URL válida, SKU e preço positivo
+            const first = items.find((it: any) =>
+              it?.url?.startsWith('http') && it?.sku && it?.price > 0
+            )
 
-            if (!geckoRes.ok) {
-              const errBody: any = await geckoRes.json().catch(() => ({}))
-              // 402 = sem créditos — para imediatamente
-              if (geckoRes.status === 402) {
-                srch.status = 'error'
-                srch.error  = 'Créditos GeckoAPI insuficientes'
-                break
-              }
-              srch.errors++
-              continue
-            }
+            if (!first) { srch.skipped++; continue }
 
-            const geckoData: any = await geckoRes.json()
-            const items: any[]   = geckoData?.data?.items ?? []
-
-            if (!items.length) { srch.skipped++; continue }
-
-            // Pega o melhor match: primeiro item com SKU tipo MLB[0-9]{10,}
-            // e nome parecido (pelo menos 1 palavra-chave principal em comum)
-            const mainWords = keyword.toLowerCase().split(' ').filter(w => w.length > 3)
-            const match = items.find((it: any) => {
-              const sku  = (it.sku || '').toUpperCase()
-              const name = (it.name || '').toLowerCase()
-              if (!/^MLB\d{10,}$/.test(sku)) return false
-              // Pelo menos 2 palavras-chave do produto aparecem no resultado
-              const hits = mainWords.filter(w => name.includes(w))
-              return hits.length >= Math.min(2, mainWords.length)
-            }) ?? items.find((it: any) => /^MLB\d{10,}$/.test((it.sku || '').toUpperCase()))
-
-            if (!match) { srch.skipped++; continue }
-
-            const mlId     = match.sku.toUpperCase()
-            const permalink = (match.url || '').split('?')[0].split('#')[0]
-            const price    = typeof match.price === 'number' && match.price > 0
-              ? match.price
-              : (prod.best_price ?? null)
-
-            const newAffUrl = affLink(permalink || `https://www.mercadolivre.com.br/p/${mlId}`)
+            // sku = "MLB4410983832" — é o ml_item_id
+            const mlId      = (first.sku as string).toUpperCase()
+            const permalink = (first.url as string).split('?')[0].split('#')[0]
+            const price     = (first.price as number) ?? (prod.best_price ?? null)
+            const newAffUrl = affLink(permalink)
 
             srch.products.push({
-              product_id: prod.id,
-              name:       prod.name.slice(0, 60),
-              ml_id:      mlId,
+              product_id:    prod.id,
+              name:          prod.name.slice(0, 60),
+              ml_id:         mlId,
               permalink,
               affiliate_url: newAffUrl,
               price,
-              gecko_match: match.name?.slice(0, 60),
             })
 
             if (!dryRun) {
               await DB.prepare(`
                 UPDATE products SET
-                  ml_item_id = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP,
-                  best_price = COALESCE(NULLIF(?, 0), best_price), updated_at = CURRENT_TIMESTAMP
+                  ml_item_id = ?, affiliate_url = ?,
+                  affiliate_updated_at = CURRENT_TIMESTAMP,
+                  best_price  = COALESCE(NULLIF(?, 0), best_price),
+                  updated_at  = CURRENT_TIMESTAMP
                 WHERE id = ?
               `).bind(mlId, newAffUrl, price ?? 0, prod.id).run()
 
@@ -3048,8 +3039,11 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
               if (offExist) {
                 await DB.prepare(`
                   UPDATE offers SET
-                    external_id = ?, price = COALESCE(NULLIF(?, 0), price),
-                    product_url = ?, affiliate_url = ?, last_updated = CURRENT_TIMESTAMP
+                    external_id   = ?,
+                    price         = COALESCE(NULLIF(?, 0), price),
+                    product_url   = ?,
+                    affiliate_url = ?,
+                    last_updated  = CURRENT_TIMESTAMP
                   WHERE id = ?
                 `).bind(mlId, price ?? 0, newAffUrl, newAffUrl, offExist.id).run()
               } else {
@@ -3058,7 +3052,8 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
                     (product_id, store_id, external_id, title, price,
                      free_shipping, in_stock, product_url, affiliate_url)
                   VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?)
-                `).bind(prod.id, storeId, mlId, prod.name, price ?? 0, newAffUrl, newAffUrl).run()
+                `).bind(prod.id, storeId, mlId, prod.name,
+                         price ?? 0, newAffUrl, newAffUrl).run()
               }
             }
             srch.found++
@@ -3072,20 +3067,22 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
 
   // ─────────────────────────────────────────────────────────
   // ETAPA 3 — Atualização de preço via GeckoAPI PDP (1 crédito/produto)
-  // Produtos com affiliate_url → GeckoAPI PDP → preço atual
-  // Processa os 10 mais antigos (menor affiliate_updated_at)
-  // Front-end usa a URL do banco + concatena token afiliado
+  // Produtos com ml_item_id → PDP → cashPrice ou price → atualiza BD
+  // Link afiliado = canonicalUrl da GeckoAPI + parâmetros afiliado
   // ─────────────────────────────────────────────────────────
   if (steps.includes('prices')) {
-    const prcs: any = { status: 'ok', updated: 0, unchanged: 0, errors: 0, skipped: 0, credits_used: 0 }
+    const prcs: any = {
+      status: 'ok', updated: 0, unchanged: 0, errors: 0, skipped: 0,
+      no_gecko_key: !geckoKey,
+    }
     report.prices = prcs
 
-    const GECKO_KEY = (c.env as any).GECKO_API_KEY as string | undefined
-    if (!GECKO_KEY) {
-      prcs.status = 'error'
-      prcs.error  = 'GECKO_API_KEY não configurada — adicione o secret no Cloudflare'
+    if (!geckoKey) {
+      prcs.status = 'skipped'
+      prcs.error  = 'GECKO_API_KEY não configurada — defina o secret no Cloudflare Pages'
     } else {
       try {
+        // 10 produtos com ml_item_id mais desatualizados
         const withId = await DB.prepare(`
           SELECT p.id, p.ml_item_id, p.affiliate_url, p.best_price,
                  o.product_url, o.id as offer_id
@@ -3093,91 +3090,70 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
           LEFT JOIN offers o ON o.product_id = p.id AND o.store_id = ?
           WHERE p.is_active = 1
             AND p.ml_item_id IS NOT NULL AND p.ml_item_id != ''
-            AND p.affiliate_url IS NOT NULL AND p.affiliate_url != ''
           ORDER BY p.affiliate_updated_at ASC NULLS FIRST
           LIMIT 10
         `).bind(storeId).all<any>()
 
         for (const prod of withId.results ?? []) {
           try {
-            // URL limpa do produto (sem parâmetros de afiliado)
-            const productUrl = (prod.product_url || prod.affiliate_url || '')
+            // Monta URL canônica a partir do que temos no banco
+            const baseUrl = (prod.product_url || prod.affiliate_url || '')
               .split('?')[0].split('#')[0]
+            const productUrl = baseUrl.startsWith('http')
+              ? baseUrl
+              : `https://www.mercadolivre.com.br/p/${prod.ml_item_id.toLowerCase()}`
 
-            if (!productUrl.startsWith('http')) { prcs.skipped++; continue }
-
-            // GeckoAPI PDP — 1 crédito → retorna preço, estoque, imagens
-            const geckoRes = await fetch('https://api.geckoapi.com.br/v1/extract', {
-              method:  'POST',
-              headers: {
-                'Authorization': `Bearer ${GECKO_KEY}`,
-                'Content-Type':  'application/json',
-              },
-              body: JSON.stringify({
-                target: 'mercadolivre.com.br',
-                type:   'pdp',
-                url:    productUrl,
-              }),
+            // GeckoAPI PDP: retorna { price, cashPrice, canonicalUrl, availability, ... }
+            const data = await geckoExtract({
+              target: 'mercadolivre.com.br',
+              type:   'pdp',
+              url:    productUrl,
             })
 
-            prcs.credits_used++
+            if (!data) { prcs.skipped++; continue }
 
-            if (!geckoRes.ok) {
-              if (geckoRes.status === 402) {
-                prcs.status = 'error'
-                prcs.error  = 'Créditos GeckoAPI insuficientes'
-                break
-              }
-              prcs.errors++
-              continue
-            }
-
-            const geckoData: any = await geckoRes.json()
-
-            // notFound: true — URL inválida ou produto removido
-            if (geckoData?.notFound || !geckoData?.data) { prcs.skipped++; continue }
-
-            const d = geckoData.data
-
-            // Extrai preço atual — campos possíveis do PDP do ML
+            // Preferência: cashPrice (à vista) > price (exibido)
             const newPrice: number | null =
-              d?.price          ??  // campo direto
-              d?.offers?.[0]?.price ??  // primeiro seller
-              d?.priceAmount    ??
-              null
+              (data.cashPrice && data.cashPrice > 0) ? data.cashPrice
+                : (data.price && data.price > 0)    ? data.price
+                : null
 
             if (!newPrice || newPrice <= 0) { prcs.skipped++; continue }
 
-            // Reconstrói link afiliado com a URL canônica retornada pelo Gecko
-            const canonicalUrl = (d?.url || d?.canonicalUrl || productUrl)
+            // URL canônica limpa retornada pela GeckoAPI (mais confiável)
+            const cleanUrl = (data.canonicalUrl || productUrl)
               .split('?')[0].split('#')[0]
-            const newAffUrl = affLink(canonicalUrl)
+            const newAffUrl = affLink(cleanUrl)
 
             if (!dryRun) {
               await DB.prepare(`
                 UPDATE products SET
-                  best_price = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP,
-                  updated_at = CURRENT_TIMESTAMP
+                  best_price            = ?,
+                  affiliate_url         = ?,
+                  affiliate_updated_at  = CURRENT_TIMESTAMP,
+                  updated_at            = CURRENT_TIMESTAMP
                 WHERE id = ?
               `).bind(newPrice, newAffUrl, prod.id).run()
 
               if (prod.offer_id) {
                 await DB.prepare(`
                   UPDATE offers SET
-                    price = ?, affiliate_url = ?, product_url = ?,
-                    last_updated = CURRENT_TIMESTAMP
+                    price         = ?,
+                    affiliate_url = ?,
+                    last_updated  = CURRENT_TIMESTAMP
                   WHERE id = ?
-                `).bind(newPrice, newAffUrl, canonicalUrl, prod.offer_id).run()
+                `).bind(newPrice, newAffUrl, prod.offer_id).run()
               }
 
               // Histórico de preços
               await DB.prepare(`
-                INSERT OR IGNORE INTO price_history (product_id, store_id, price, recorded_at)
+                INSERT OR IGNORE INTO price_history
+                  (product_id, store_id, price, recorded_at)
                 VALUES (?, ?, ?, CURRENT_TIMESTAMP)
               `).bind(prod.id, storeId, newPrice).run().catch(() => {})
             }
 
-            const changed = prod.best_price !== newPrice
+            const changed = Math.abs((prod.best_price ?? 0) - newPrice) > 0.01
             if (changed) prcs.updated++; else prcs.unchanged++
 
           } catch { prcs.errors++ }
