@@ -4507,25 +4507,42 @@ async function renderAffiliateCodes(area) {
 
       <!-- Ações globais -->
       <div class="stat-card">
-        <h3 class="font-bold text-slate-800 mb-4">⚡ Ações Globais</h3>
+        <h3 class="font-bold text-slate-800 mb-4">🤖 Bot Automático ML</h3>
         <div class="flex flex-wrap gap-3 items-center">
-          <button onclick="generateAllLinks()" id="btn-gen-all"
-            class="btn-primary flex items-center gap-2"
-            style="background:linear-gradient(135deg,#7c3aed,#4f46e5)">
-            <span>🔗</span> Gerar/Atualizar TODOS os Links
+          <button onclick="runAutoSync()" id="btn-auto-sync"
+            class="btn-primary flex items-center gap-2 text-base px-5 py-2.5"
+            style="background:linear-gradient(135deg,#16a34a,#15803d)">
+            <span>🚀</span> Rodar Bot Completo
           </button>
-          <button onclick="importAllOffers()" id="btn-import-all"
+          <button onclick="runAutoSync({steps:['import']})" id="btn-only-import"
             class="btn-primary flex items-center gap-2"
             style="background:linear-gradient(135deg,#f59e0b,#d97706)">
-            <span>🛒</span> Importar 54 Ofertas ML
+            <span>🛒</span> Só Importar (54 ofertas)
+          </button>
+          <button onclick="runAutoSync({steps:['search']})" id="btn-only-search"
+            class="btn-primary flex items-center gap-2"
+            style="background:linear-gradient(135deg,#0ea5e9,#0284c7)">
+            <span>🔍</span> Só Buscar por Nome
+          </button>
+          <button onclick="runAutoSync({steps:['prices']})" id="btn-only-prices"
+            class="btn-primary flex items-center gap-2"
+            style="background:linear-gradient(135deg,#8b5cf6,#7c3aed)">
+            <span>💰</span> Só Atualizar Preços
           </button>
           <button onclick="renderAffiliateCodes(document.getElementById('content-area'))"
             class="btn-secondary">↻ Atualizar</button>
         </div>
+
+        <!-- Terminal de log -->
         <div id="aff-codes-log" class="mt-4 hidden">
-          <div class="bg-slate-900 text-green-400 rounded-xl p-4 font-mono text-sm min-h-[80px] whitespace-pre-wrap"
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">📟 Log do Bot</span>
+            <span id="sync-timer" class="text-xs text-slate-400 font-mono"></span>
+          </div>
+          <div class="bg-slate-950 text-green-400 rounded-xl p-4 font-mono text-xs leading-relaxed min-h-[140px] max-h-80 overflow-y-auto whitespace-pre-wrap border border-slate-800"
                id="aff-codes-log-text">Aguardando...</div>
         </div>
+
       </div>
 
       <!-- Cards por rede -->
@@ -4683,103 +4700,150 @@ async function generateLinks(network, label) {
   }
 }
 
-async function generateAllLinks() {
-  const btn = document.getElementById('btn-gen-all')
+async function runAutoSync(opts) {
+  const steps = (opts && opts.steps) ? opts.steps : ['import', 'search', 'prices']
   const log     = document.getElementById('aff-codes-log')
   const logText = document.getElementById('aff-codes-log-text')
-  if (!btn) return
+  const timer   = document.getElementById('sync-timer')
 
-  btn.disabled = true
-  btn.innerHTML = '<span>⏳</span> Gerando...'
+  // Desabilita todos os botões do bot
+  const btns = ['btn-auto-sync','btn-only-import','btn-only-search','btn-only-prices']
+  btns.forEach(id => { const b = document.getElementById(id); if (b) { b.disabled = true } })
+  document.getElementById('btn-auto-sync').innerHTML = '<span>⏳</span> Rodando...'
+
+  log.classList.remove('hidden')
+
+  // Cronômetro
+  const t0 = Date.now()
+  const timerInt = setInterval(() => {
+    const s = ((Date.now() - t0) / 1000).toFixed(1)
+    if (timer) timer.textContent = s + 's'
+  }, 200)
+
+  // Log incremental — vai printando enquanto espera
+  const LF = String.fromCharCode(10)
+  const stepsLabel = {
+    import: '🛒 Etapa 1 — Importar 54 ofertas de /ofertas',
+    search: '🔍 Etapa 2 — Buscar no ML (produtos sem ID)',
+    prices: '💰 Etapa 3 — Atualizar preços (produtos com ID)',
+  }
+  const running = steps.map(s => stepsLabel[s] || s).join(LF)
+  logText.textContent = '🚀 Iniciando Bot Automático ML...' + LF + '────────────────────────────────' + LF + running + LF + LF + '⏳ Aguardando resposta...'
+
+  const res = await api('POST', '/admin/api/affiliate-bot/auto-sync', { steps })
+
+  clearInterval(timerInt)
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(1)
+  if (timer) timer.textContent = elapsed + 's'
+
+  // Restaura botões
+  btns.forEach(id => { const b = document.getElementById(id); if (b) b.disabled = false })
+  document.getElementById('btn-auto-sync').innerHTML = '<span>🚀</span> Rodar Bot Completo'
+
+  if (!res) {
+    logText.textContent = '❌ Erro de rede ao chamar o bot'
+    toast('Erro de rede', 'error')
+    return
+  }
+  if (!res.ok && !res.report) {
+    logText.textContent = '❌ ' + (res.error || 'Erro desconhecido')
+    toast('Erro: ' + (res.error || ''), 'error')
+    return
+  }
+
+  // Monta log completo
+  const r = res.report || {}
+  const lines = [
+    '✅ Bot finalizado em ' + elapsed + 's',
+    '════════════════════════════════',
+  ]
+
+  // Etapa import
+  if (r.import) {
+    const i = r.import
+    lines.push('', '🛒 IMPORTAR /ofertas')
+    lines.push('  Status     : ' + (i.status === 'blocked' ? '⛔ Bot challenge!' : i.status === 'error' ? '❌ ' + (i.error||'erro') : '✅ OK'))
+    if (i.html_kb)      lines.push('  HTML       : ' + i.html_kb + ' KB')
+    if (i.total_found)  lines.push('  Itens JSON : ' + i.total_found)
+    lines.push('  📦 Novos   : ' + (i.imported || 0))
+    lines.push('  🔄 Atualiz.: ' + (i.updated  || 0))
+    lines.push('  ⏭  Skipped : ' + (i.skipped  || 0))
+    if (i.errors)       lines.push('  ⚠  Erros   : ' + i.errors)
+  }
+
+  // Etapa search
+  if (r.search) {
+    const s = r.search
+    lines.push('', '🔍 BUSCA POR NOME')
+    lines.push('  Status     : ' + (s.status === 'error' ? '❌ ' + (s.error||'erro') : '✅ OK'))
+    lines.push('  Encontrados: ' + (s.found   || 0))
+    lines.push('  ⏭  Skipped : ' + (s.skipped || 0))
+    if (s.errors)       lines.push('  ⚠  Erros   : ' + s.errors)
+    if (s.products && s.products.length > 0) {
+      lines.push('  Vinculados :')
+      s.products.slice(0, 5).forEach(p => {
+        lines.push('    • ' + p.name + ' → ' + p.ml_id + (p.price ? ' R$' + p.price : ''))
+      })
+      if (s.products.length > 5) lines.push('    ... e mais ' + (s.products.length - 5))
+    }
+  }
+
+  // Etapa prices
+  if (r.prices) {
+    const p = r.prices
+    lines.push('', '💰 ATUALIZAÇÃO DE PREÇOS')
+    lines.push('  Status      : ' + (p.status === 'error' ? '❌ ' + (p.error||'erro') : '✅ OK'))
+    lines.push('  💹 Alterados: ' + (p.updated   || 0))
+    lines.push('  ═  Iguais   : ' + (p.unchanged || 0))
+    lines.push('  ⏭  Skipped  : ' + (p.skipped  || 0))
+    if (p.errors)       lines.push('  ⚠  Erros    : ' + p.errors)
+  }
+
+  lines.push('', '════════════════════════════════')
+  lines.push('🏁 Total de ações: ' + (res.total_actions || 0))
+  if (res.dry_run) lines.push('🧪 DRY RUN — nada foi salvo no banco')
+  if (res.tip)     lines.push('💡 ' + res.tip)
+
+  logText.textContent = lines.filter(l => l !== null && l !== undefined).join(LF)
+
+  // Scroll automático pro fim do log
+  logText.scrollTop = logText.scrollHeight
+
+  const total = res.total_actions || 0
+  toast('🤖 Bot: ' + total + ' ações executadas', total > 0 ? 'success' : 'info')
+
+  if (total > 0) {
+    setTimeout(() => renderAffiliateCodes(document.getElementById('content-area')), 2000)
+  }
+}
+
+async function generateAllLinks() {
+  const log     = document.getElementById('aff-codes-log')
+  const logText = document.getElementById('aff-codes-log-text')
   log.classList.remove('hidden')
   logText.textContent = '🔗 Regenerando TODOS os links afiliados...'
 
   const res = await api('POST', '/admin/api/affiliate-rules/generate', {})
-
-  btn.disabled = false
-  btn.innerHTML = '<span>🔗</span> Gerar/Atualizar TODOS os Links'
-
   if (!res || !res.ok) {
     logText.textContent = '❌ Erro: ' + (res?.error || 'desconhecido')
     toast('Erro ao gerar links', 'error')
     return
   }
-
-  const lines = [
-    '✅ Geração concluída!',
-    '────────────────────',
-    'Total atualizado: ' + res.total_updated,
-    '',
-    '📋 Por rede:',
-  ]
+  const LF = String.fromCharCode(10)
+  const lines = ['✅ Links gerados!', '────────────────────', 'Total: ' + res.total_updated, '']
   if (res.summary) {
     Object.values(res.summary).forEach(s => {
-      const icon = s.updated > 0 ? '✅' : '⏭'
-      lines.push('  ' + icon + ' ' + s.label + ': ' + s.updated + ' links')
+      lines.push('  ' + (s.updated > 0 ? '✅' : '⏭') + ' ' + s.label + ': ' + s.updated)
     })
   }
   if (res.tip) lines.push('', '💡 ' + res.tip)
-
-  logText.textContent = lines.filter(Boolean).join(String.fromCharCode(10))
+  logText.textContent = lines.join(LF)
   toast('🔗 ' + res.total_updated + ' links gerados!', res.total_updated > 0 ? 'success' : 'warning')
-
-  if (res.total_updated > 0) {
-    setTimeout(() => renderAffiliateCodes(document.getElementById('content-area')), 1500)
-  }
+  if (res.total_updated > 0) setTimeout(() => renderAffiliateCodes(document.getElementById('content-area')), 1500)
 }
 
 async function importAllOffers() {
-  const btn = document.getElementById('btn-import-all')
-  const log     = document.getElementById('aff-codes-log')
-  const logText = document.getElementById('aff-codes-log-text')
-  if (!btn) return
-
-  btn.disabled = true
-  btn.innerHTML = '<span>⏳</span> Importando...'
-  log.classList.remove('hidden')
-  logText.textContent = '🛒 Buscando todas as ofertas em mercadolivre.com.br/ofertas...'
-
-  const res = await api('POST', '/admin/api/affiliate-bot/import-offers', { limit: 54 })
-
-  btn.disabled = false
-  btn.innerHTML = '<span>🛒</span> Importar 54 Ofertas ML'
-
-  if (!res) {
-    logText.textContent = '❌ Erro ao chamar import-offers'
-    toast('Falha na importação', 'error')
-    return
-  }
-
-  if (!res.ok) {
-    logText.textContent = '❌ ' + (res.error || 'Erro desconhecido') + (res.tip ? String.fromCharCode(10) + '💡 ' + res.tip : '')
-    toast('Falha: ' + (res.error || ''), 'error')
-    return
-  }
-
-  const sc = res.scrape || {}
-  const sm = res.summary || {}
-  const total = (sm.imported || 0) + (sm.updated || 0)
-
-  const lines = [
-    '✅ Importação concluída!',
-    '────────────────────────',
-    'HTML scrapeado  : ' + (sc.bytes ? (sc.bytes / 1024).toFixed(1) + ' KB' : '-'),
-    'Itens no JSON   : ' + (sc.total_found || 0),
-    'Processados     : ' + (sc.processed  || 0),
-    '',
-    '📦 Novos        : ' + (sm.imported || 0),
-    '🔄 Atualizados  : ' + (sm.updated  || 0),
-    '⏭  Skipped      : ' + (sm.skipped  || 0),
-    sm.errors ? '⚠  Erros        : ' + sm.errors : '',
-    res.tip ? String.fromCharCode(10) + '💡 ' + res.tip : '',
-  ]
-
-  logText.textContent = lines.filter(Boolean).join(String.fromCharCode(10))
-  toast('🛒 ' + total + ' produtos importados/atualizados', total > 0 ? 'success' : 'warning')
-
-  if (total > 0) {
-    setTimeout(() => renderAffiliateCodes(document.getElementById('content-area')), 2000)
-  }
+  runAutoSync({ steps: ['import'] })
 }
 
 // ── IMPORTAR DO MERCADO LIVRE ─────────────────────────────

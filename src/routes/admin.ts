@@ -2742,6 +2742,415 @@ admin.post('/api/affiliate-bot/import-ids', async (c) => {
 admin.route('/api/ml', ml)
 
 // ============================================================
+// AUTO-SYNC BOT — Scraping completo ML + geração de links
+// POST /admin/api/affiliate-bot/auto-sync
+//
+// Faz 3 etapas em sequência:
+//  1. Scraping de /ofertas  → importa até 54 produtos novos com link afiliado
+//  2. Busca por nome        → para produtos sem ml_item_id, busca no ML pelo título
+//  3. Atualização de preço  → re-scrapa permalink dos produtos com ml_item_id
+// ============================================================
+admin.post('/api/affiliate-bot/auto-sync', async (c) => {
+  const { DB } = c.env
+  const body: any = await c.req.json().catch(() => ({}))
+  const dryRun    = !!body.dry_run
+  const steps     = (body.steps as string[] | undefined) ?? ['import', 'search', 'prices']
+
+  const PUBLISHER_ID = 'cfegdhabc31955'
+  const MATT_TOOL    = '38524122'
+
+  const affLink = (url: string) =>
+    `${url}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+
+  const report: Record<string, any> = { dry_run: dryRun, steps_run: steps }
+
+  // ─────────────────────────────────────────────────────────
+  // HELPERS compartilhados
+  // ─────────────────────────────────────────────────────────
+  function detectCat(title: string): string {
+    const t = title.toLowerCase()
+    if (/iphone|galaxy|smartphone|celular|motorola|xiaomi|redmi/.test(t))      return 'smartphones'
+    if (/notebook|macbook|laptop|ultrabook/.test(t))                            return 'notebooks'
+    if (/smart tv|televisor|\btv\b|qled|oled|led [0-9]/.test(t))               return 'tv'
+    if (/fone|headphone|airpods|speaker|caixa de som|headset/.test(t))         return 'audio'
+    if (/playstation|xbox|nintendo|\bgame\b|console/.test(t))                   return 'games'
+    if (/camera|drone|gopro/.test(t))                                           return 'cameras'
+    if (/tablet|\bipad\b/.test(t))                                              return 'tablets'
+    if (/geladeira|fogao|maquina de lavar|microondas|ar condicionado/.test(t))  return 'eletrodomesticos'
+    if (/perfume|eau de|colonia/.test(t))                                       return 'perfumes'
+    if (/relogio|smartwatch|\bwatch\b/.test(t))                                 return 'smartwatches'
+    if (/cadeira|sofa|mesa|cama|movel/.test(t))                                 return 'moveis'
+    if (/tenis|camisa|calcado|roupa|jaqueta/.test(t))                           return 'moda'
+    if (/creatina|suplemento|whey|protein|vitamina/.test(t))                    return 'saude'
+    if (/escada|ferramenta|parafuso|furadeira/.test(t))                         return 'ferramentas'
+    return 'outros'
+  }
+
+  function makeSlug(title: string, mlId: string): string {
+    return title.toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+      .substring(0, 70) + '-' + mlId.toLowerCase()
+  }
+
+  const mlStore = await DB.prepare(
+    `SELECT id FROM stores WHERE slug = 'mercadolivre' AND is_active = 1 LIMIT 1`
+  ).first<{ id: number }>()
+  const storeId = mlStore?.id ?? 3
+
+  // ─────────────────────────────────────────────────────────
+  // ETAPA 1 — Scraping /ofertas (importa produtos novos)
+  // ─────────────────────────────────────────────────────────
+  if (steps.includes('import')) {
+    const imp: any = { status: 'ok', imported: 0, updated: 0, skipped: 0, errors: 0 }
+    report.import = imp
+
+    try {
+      const res = await fetch('https://www.mercadolivre.com.br/ofertas', {
+        headers: {
+          'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+          'Referer':         'https://www.mercadolivre.com.br/',
+        },
+      })
+      imp.http_status = res.status
+
+      if (!res.ok) { imp.status = 'error'; imp.error = `HTTP ${res.status}`; }
+      else {
+        const html = await res.text()
+        imp.html_kb = Math.round(html.length / 1024)
+
+        if (html.includes('_bmstate') || html.includes('PoW') || html.length < 20000) {
+          imp.status = 'blocked'; imp.error = 'Bot challenge detectado'
+        } else {
+          // Extrai _n.ctx.r — parse incremental
+          const ctxMatch = html.match(/_n\.ctx\.r\s*=\s*(\{)/)
+          if (!ctxMatch || ctxMatch.index === undefined) {
+            imp.status = 'error'; imp.error = '_n.ctx.r não encontrado no HTML'
+          } else {
+            const jsonStart = ctxMatch.index + ctxMatch[0].length - 1
+            const rawJson   = html.slice(jsonStart)
+            let depth = 0, end = 0, inStr = false, esc = false
+            for (let i = 0; i < rawJson.length; i++) {
+              const ch = rawJson[i]
+              if (esc)         { esc = false; continue }
+              if (ch === '\\') { esc = true;  continue }
+              if (ch === '"')  { inStr = !inStr; continue }
+              if (inStr)       { continue }
+              if (ch === '{')  { depth++; continue }
+              if (ch === '}')  { depth--; if (depth === 0) { end = i + 1; break } }
+            }
+            const ctx: any   = end ? JSON.parse(rawJson.slice(0, end)) : {}
+            const rawItems: any[] = ctx?.appProps?.pageProps?.data?.items ?? []
+            imp.total_found = rawItems.length
+
+            for (const raw of rawItems) {
+              try {
+                const card  = raw?.card ?? {}
+                const meta  = card?.metadata ?? {}
+                const comps: Record<string, any> = {}
+                for (const comp of (card?.components ?? [])) comps[comp.type] = comp
+
+                const mlId = (meta.id || '').toUpperCase()
+                if (!mlId || !/^MLB\d{10,}$/.test(mlId)) { imp.skipped++; continue }
+
+                const title = comps.title?.title?.text?.trim() || ''
+                if (!title) { imp.skipped++; continue }
+
+                const priceBlk  = comps.price?.price ?? {}
+                const price     = priceBlk?.current_price?.value as number | undefined
+                const origPrice = priceBlk?.previous_price?.value as number | undefined
+                const discPct   = (priceBlk?.discount?.value as number) ?? 0
+                if (!price || price <= 0) { imp.skipped++; continue }
+
+                const rawUrl    = meta.url || ''
+                const permalink = rawUrl
+                  ? 'https://' + rawUrl.split('?')[0].split('#')[0]
+                  : `https://www.mercadolivre.com.br/p/${mlId}`
+                const affUrl    = affLink(permalink)
+                const picId     = (card?.pictures?.pictures ?? [])[0]?.id ?? ''
+                const imgUrl    = picId ? `https://http2.mlstatic.com/D_${picId}-O.jpg` : null
+                const cat       = detectCat(title)
+                const disc      = discPct > 0
+                  ? discPct
+                  : (origPrice && origPrice > price ? Math.round(((origPrice - price) / origPrice) * 100) : 0)
+
+                if (dryRun) { imp.imported++; continue }
+
+                const existing = await DB.prepare(
+                  `SELECT id FROM products WHERE ml_item_id = ? LIMIT 1`
+                ).bind(mlId).first<{ id: number }>()
+
+                if (existing) {
+                  await DB.prepare(`
+                    UPDATE products SET
+                      best_price = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP,
+                      image_url  = COALESCE(NULLIF(image_url,''), ?), updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                  `).bind(price, affUrl, imgUrl, existing.id).run()
+                  // Atualiza oferta
+                  await DB.prepare(`
+                    UPDATE offers SET price = ?, affiliate_url = ?, last_updated = CURRENT_TIMESTAMP
+                    WHERE product_id = ? AND store_id = ?
+                  `).bind(price, affUrl, existing.id, storeId).run()
+                  imp.updated++
+                } else {
+                  const slug = makeSlug(title, mlId)
+                  const ins  = await DB.prepare(`
+                    INSERT OR IGNORE INTO products
+                      (name, slug, brand, category, description, image_url,
+                       ml_item_id, affiliate_url, affiliate_updated_at,
+                       best_price, best_store_id, offer_count, is_active,
+                       created_at, updated_at)
+                    VALUES (?, ?, NULL, ?, '', ?, ?, ?, CURRENT_TIMESTAMP,
+                            ?, ?, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                  `).bind(title, slug, cat, imgUrl, mlId, affUrl, price, storeId).run()
+
+                  if (ins.meta.last_row_id) {
+                    const pid = ins.meta.last_row_id as number
+                    const exp = new Date(Date.now() + 6 * 3600_000).toISOString()
+                    await DB.prepare(`
+                      INSERT OR IGNORE INTO offers
+                        (product_id, store_id, external_id, title, price, original_price,
+                         discount_percent, free_shipping, in_stock,
+                         product_url, affiliate_url, image_url, cache_expires_at)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?)
+                    `).bind(pid, storeId, mlId, title, price, origPrice ?? null,
+                             disc, affUrl, affUrl, imgUrl, exp).run()
+                    await DB.prepare(`UPDATE categories SET product_count = product_count + 1 WHERE slug = ?`)
+                      .bind(cat).run().catch(() => {})
+                    imp.imported++
+                  } else {
+                    imp.skipped++ // slug duplicado
+                  }
+                }
+              } catch { imp.errors++ }
+            }
+          }
+        }
+      }
+    } catch (e: any) {
+      report.import = { status: 'error', error: e?.message || 'exception' }
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // ETAPA 2 — Busca por nome (produtos sem ml_item_id)
+  // Scrapa lista.mercadolivre.com.br/{query} e extrai o
+  // primeiro resultado real (permalink + preço)
+  // ─────────────────────────────────────────────────────────
+  if (steps.includes('search')) {
+    const srch: any = { status: 'ok', found: 0, skipped: 0, errors: 0, products: [] }
+    report.search = srch
+
+    try {
+      const noLink = await DB.prepare(`
+        SELECT id, name, brand, best_price FROM products
+        WHERE is_active = 1
+          AND (ml_item_id IS NULL OR ml_item_id = '')
+        ORDER BY id LIMIT 20
+      `).all<any>()
+
+      for (const prod of noLink.results ?? []) {
+        try {
+          const query   = encodeURIComponent(prod.name.replace(/['"]/g, ''))
+          const listUrl = `https://lista.mercadolivre.com.br/${query}`
+
+          const r = await fetch(listUrl, {
+            headers: {
+              'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'pt-BR,pt;q=0.9',
+              'Referer':         'https://www.mercadolivre.com.br/',
+            },
+          })
+          if (!r.ok) { srch.errors++; continue }
+
+          const html = await r.text()
+
+          // Extrai primeiro ml_item_id real (MLBxxxxxxxxxx)
+          const idMatch = html.match(/MLB[0-9]{10,}/g)
+          const mlId    = idMatch ? idMatch[0].toUpperCase() : null
+          if (!mlId) { srch.skipped++; continue }
+
+          // Extrai permalink do primeiro resultado
+          const permMatch = html.match(/href="(https:\/\/www\.mercadolivre\.com\.br\/[^"?#]+)"/i)
+            ?? html.match(/href="(https:\/\/[a-z]+\.mercadolivre\.com\.br\/[^"?#]+)"/i)
+          const permalink = permMatch
+            ? permMatch[1].split('?')[0].split('#')[0]
+            : `https://www.mercadolivre.com.br/p/${mlId}`
+
+          // Extrai preço do HTML (data-price ou itemprop=price)
+          const priceMatch = html.match(/class="andes-money-amount__fraction"[^>]*>([0-9.,]+)</)
+            ?? html.match(/"price":([0-9]+(?:\.[0-9]+)?)/)
+          const price = priceMatch
+            ? parseFloat(priceMatch[1].replace(/\./g, '').replace(',', '.'))
+            : (prod.best_price ?? null)
+
+          const newAffUrl = affLink(permalink)
+
+          srch.products.push({
+            product_id: prod.id, name: prod.name.slice(0, 60),
+            ml_id: mlId, permalink, affiliate_url: newAffUrl, price,
+          })
+
+          if (!dryRun) {
+            await DB.prepare(`
+              UPDATE products SET
+                ml_item_id = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP,
+                best_price = COALESCE(NULLIF(?, 0), best_price), updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).bind(mlId, newAffUrl, price ?? 0, prod.id).run()
+
+            // Atualiza ou insere oferta
+            const offExist = await DB.prepare(
+              `SELECT id FROM offers WHERE product_id = ? AND store_id = ? LIMIT 1`
+            ).bind(prod.id, storeId).first<{ id: number }>()
+
+            if (offExist) {
+              await DB.prepare(`
+                UPDATE offers SET
+                  external_id = ?, price = COALESCE(NULLIF(?, 0), price),
+                  product_url = ?, affiliate_url = ?, last_updated = CURRENT_TIMESTAMP
+                WHERE id = ?
+              `).bind(mlId, price ?? 0, newAffUrl, newAffUrl, offExist.id).run()
+            } else {
+              await DB.prepare(`
+                INSERT OR IGNORE INTO offers
+                  (product_id, store_id, external_id, title, price,
+                   free_shipping, in_stock, product_url, affiliate_url)
+                VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?)
+              `).bind(prod.id, storeId, mlId, prod.name, price ?? 0, newAffUrl, newAffUrl).run()
+            }
+          }
+          srch.found++
+        } catch { srch.errors++ }
+      }
+    } catch (e: any) {
+      srch.status = 'error'; srch.error = e?.message || 'exception'
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // ETAPA 3 — Atualização de preço (produtos com ml_item_id)
+  // Re-scrapa o permalink de cada produto para pegar preço atual
+  // Processa em lotes de 10 para não estourar o tempo do Worker
+  // ─────────────────────────────────────────────────────────
+  if (steps.includes('prices')) {
+    const prcs: any = { status: 'ok', updated: 0, unchanged: 0, errors: 0, skipped: 0 }
+    report.prices = prcs
+
+    try {
+      const withId = await DB.prepare(`
+        SELECT p.id, p.ml_item_id, p.affiliate_url, p.best_price,
+               o.product_url, o.id as offer_id
+        FROM products p
+        LEFT JOIN offers o ON o.product_id = p.id AND o.store_id = ?
+        WHERE p.is_active = 1
+          AND p.ml_item_id IS NOT NULL AND p.ml_item_id != ''
+        ORDER BY p.affiliate_updated_at ASC NULLS FIRST
+        LIMIT 15
+      `).bind(storeId).all<any>()
+
+      for (const prod of withId.results ?? []) {
+        try {
+          // Monta URL do produto a partir do affiliate_url ou product_url
+          const baseUrl = (prod.product_url || prod.affiliate_url || '')
+            .split('?')[0].split('#')[0]
+
+          const fetchUrl = baseUrl.startsWith('http')
+            ? baseUrl
+            : `https://www.mercadolivre.com.br/p/${prod.ml_item_id.toLowerCase()}`
+
+          const r = await fetch(fetchUrl, {
+            headers: {
+              'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'pt-BR,pt;q=0.9',
+              'Referer':         'https://www.mercadolivre.com.br/',
+            },
+          })
+          if (!r.ok) { prcs.errors++; continue }
+
+          const html = await r.text()
+
+          // Extrai preço atual — tenta várias formas
+          let newPrice: number | null = null
+
+          // 1. JSON embutido __PRELOADED_STATE__ ou pdp_context
+          const jsonPriceMatch = html.match(/"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)/)
+          if (jsonPriceMatch) newPrice = parseFloat(jsonPriceMatch[1])
+
+          // 2. itemprop=price
+          if (!newPrice) {
+            const itemMatch = html.match(/itemprop="price"\s+content="([0-9.]+)"/)
+            if (itemMatch) newPrice = parseFloat(itemMatch[1])
+          }
+
+          // 3. andes-money-amount__fraction (mais confiável visualmente)
+          if (!newPrice) {
+            const andMatch = html.match(/class="andes-money-amount__fraction"[^>]*>([0-9.,]+)</)
+            if (andMatch) newPrice = parseFloat(andMatch[1].replace(/\./g, '').replace(',', '.'))
+          }
+
+          if (!newPrice || newPrice <= 0) { prcs.skipped++; continue }
+
+          // Reconstrói link afiliado limpo
+          const newAffUrl = affLink(fetchUrl)
+
+          if (!dryRun) {
+            await DB.prepare(`
+              UPDATE products SET
+                best_price = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).bind(newPrice, newAffUrl, prod.id).run()
+
+            if (prod.offer_id) {
+              await DB.prepare(`
+                UPDATE offers SET price = ?, affiliate_url = ?, last_updated = CURRENT_TIMESTAMP
+                WHERE id = ?
+              `).bind(newPrice, newAffUrl, prod.offer_id).run()
+            }
+
+            // Registra no histórico de preços (se tabela existir)
+            await DB.prepare(`
+              INSERT OR IGNORE INTO price_history (product_id, store_id, price, recorded_at)
+              VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            `).bind(prod.id, storeId, newPrice).run().catch(() => {})
+          }
+
+          const changed = prod.best_price !== newPrice
+          if (changed) prcs.updated++; else prcs.unchanged++
+
+        } catch { prcs.errors++ }
+      }
+    } catch (e: any) {
+      prcs.status = 'error'; prcs.error = e?.message || 'exception'
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Resultado final
+  // ─────────────────────────────────────────────────────────
+  const totalActions =
+    ((report.import?.imported ?? 0) + (report.import?.updated ?? 0)) +
+    (report.search?.found ?? 0) +
+    (report.prices?.updated ?? 0)
+
+  return c.json({
+    ok: true,
+    dry_run: dryRun,
+    total_actions: totalActions,
+    report,
+    tip: totalActions > 0
+      ? `${totalActions} ação(ões) executada(s) com sucesso!`
+      : 'Nada novo encontrado — todos os produtos já estão atualizados.',
+  })
+})
+
+// ============================================================
 // AFFILIATE RULES — Códigos de afiliado por rede
 // ============================================================
 
