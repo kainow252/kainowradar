@@ -1023,12 +1023,12 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
   <!-- ═══════════════════════════════════════════════════════
        MODAL DE AUTENTICAÇÃO — Entrar / Criar Conta
   ════════════════════════════════════════════════════════════ -->
-  <div id="auth-modal" class="hidden fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-4">
+  <div id="auth-modal" class="hidden fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-2 sm:p-4">
     <!-- Backdrop -->
     <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick="closeAuthModal()"></div>
 
     <!-- Card -->
-    <div class="relative bg-white rounded-3xl shadow-2xl w-full max-w-[400px] overflow-hidden">
+    <div class="relative bg-white rounded-3xl shadow-2xl w-full max-w-[400px] overflow-hidden max-h-[92dvh] flex flex-col">
 
       <!-- Fechar -->
       <button onclick="closeAuthModal()"
@@ -1039,26 +1039,26 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
       </button>
 
       <!-- Topo colorido -->
-      <div class="bg-gradient-to-br from-blue-600 to-blue-700 px-6 pt-7 pb-8 text-center">
-        <div class="text-3xl mb-2">🛒</div>
-        <h2 id="auth-modal-title" class="text-xl font-black text-white">Bem-vindo ao KainowRadar</h2>
-        <p id="auth-modal-subtitle" class="text-blue-100 text-sm mt-1">Rastreie preços e receba as melhores ofertas</p>
+      <div class="bg-gradient-to-br from-blue-600 to-blue-700 px-6 pt-4 pb-5 text-center shrink-0">
+        <div class="text-2xl mb-1">🛒</div>
+        <h2 id="auth-modal-title" class="text-base font-black text-white">Bem-vindo ao KainowRadar</h2>
+        <p id="auth-modal-subtitle" class="text-blue-100 text-xs mt-0.5">Rastreie preços e receba as melhores ofertas</p>
       </div>
 
       <!-- Abas -->
-      <div class="flex border-b border-gray-100">
+      <div class="flex border-b border-gray-100 shrink-0">
         <button id="tab-login" onclick="switchAuthTab('login')"
-          class="auth-tab flex-1 py-3.5 text-sm font-bold text-blue-600 border-b-2 border-blue-600 transition-all">
+          class="auth-tab flex-1 py-2.5 text-sm font-bold text-blue-600 border-b-2 border-blue-600 transition-all">
           Entrar
         </button>
         <button id="tab-register" onclick="switchAuthTab('register')"
-          class="auth-tab flex-1 py-3.5 text-sm font-bold text-gray-400 border-b-2 border-transparent hover:text-gray-600 transition-all">
+          class="auth-tab flex-1 py-2.5 text-sm font-bold text-gray-400 border-b-2 border-transparent hover:text-gray-600 transition-all">
           Criar Conta
         </button>
       </div>
 
       <!-- Corpo -->
-      <div class="px-6 py-5">
+      <div class="px-5 py-4 overflow-y-auto">
 
         <!-- Mensagem de erro -->
         <div id="auth-error" class="hidden mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 flex items-start gap-2">
@@ -1074,7 +1074,7 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
 
         <!-- Botão Google (sempre visível) -->
         <a id="auth-google-btn" href="/auth/google"
-          class="flex items-center justify-center gap-3 w-full border-2 border-gray-200 hover:border-blue-400 hover:bg-blue-50 text-gray-700 font-bold py-3 rounded-2xl transition-all text-sm mb-4">
+          class="flex items-center justify-center gap-3 w-full border-2 border-gray-200 hover:border-blue-400 hover:bg-blue-50 text-gray-700 font-bold py-2.5 rounded-2xl transition-all text-sm mb-3">
           <svg class="w-5 h-5 shrink-0" viewBox="0 0 24 24">
             <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
             <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
@@ -1085,24 +1085,24 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
         </a>
 
         <!-- Divisor -->
-        <div class="flex items-center gap-3 mb-4">
+        <div class="flex items-center gap-3 mb-3">
           <div class="flex-1 h-px bg-gray-200"></div>
           <span class="text-xs text-gray-400 font-medium">ou continue com email</span>
           <div class="flex-1 h-px bg-gray-200"></div>
         </div>
 
         <!-- Formulário LOGIN -->
-        <form id="form-login" onsubmit="submitLogin(event)" class="flex flex-col gap-3">
+        <form id="form-login" onsubmit="submitLogin(event)" class="flex flex-col gap-2.5">
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">Email</label>
             <input type="email" id="login-email" placeholder="seu@email.com" required autocomplete="email"
-              class="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900 transition-all">
+              class="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900 transition-all">
           </div>
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">Senha</label>
             <div class="relative">
               <input type="password" id="login-password" placeholder="••••••••" required autocomplete="current-password"
-                class="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900 transition-all pr-11">
+                class="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900 transition-all pr-11">
               <button type="button" onclick="togglePwd('login-password',this)"
                 class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1113,28 +1113,28 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
             </div>
           </div>
           <button type="submit" id="btn-login"
-            class="w-full bg-blue-600 hover:bg-blue-700 active:scale-[.98] text-white font-bold py-3.5 rounded-2xl text-sm transition-all mt-1">
+            class="w-full bg-blue-600 hover:bg-blue-700 active:scale-[.98] text-white font-bold py-3 rounded-2xl text-sm transition-all mt-0.5">
             Entrar
           </button>
         </form>
 
         <!-- Formulário CADASTRO -->
-        <form id="form-register" onsubmit="submitRegister(event)" class="hidden flex-col gap-3">
+        <form id="form-register" onsubmit="submitRegister(event)" class="hidden flex-col gap-2.5">
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">Seu nome</label>
             <input type="text" id="reg-name" placeholder="Como podemos te chamar?" required autocomplete="name"
-              class="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900 transition-all">
+              class="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900 transition-all">
           </div>
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">Email</label>
             <input type="email" id="reg-email" placeholder="seu@email.com" required autocomplete="email"
-              class="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900 transition-all">
+              class="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900 transition-all">
           </div>
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">Senha</label>
             <div class="relative">
               <input type="password" id="reg-password" placeholder="Mínimo 6 caracteres" required autocomplete="new-password"
-                class="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900 transition-all pr-11">
+                class="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm text-gray-900 transition-all pr-11">
               <button type="button" onclick="togglePwd('reg-password',this)"
                 class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1146,8 +1146,8 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
           </div>
 
           <!-- Checkbox ofertas -->
-          <label class="flex items-start gap-3 cursor-pointer bg-blue-50 border border-blue-100 rounded-xl p-3.5 hover:bg-blue-100 transition-colors">
-            <div class="relative shrink-0 mt-0.5">
+          <label class="flex items-center gap-2.5 cursor-pointer bg-blue-50 border border-blue-100 rounded-xl p-2.5 hover:bg-blue-100 transition-colors">
+            <div class="relative shrink-0">
               <input type="checkbox" id="reg-offers" checked class="peer sr-only">
               <div class="w-5 h-5 rounded-md border-2 border-blue-300 bg-white peer-checked:bg-blue-600 peer-checked:border-blue-600 transition-all flex items-center justify-center">
                 <svg class="w-3 h-3 text-white opacity-0 peer-checked:opacity-100 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1156,13 +1156,13 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
               </div>
             </div>
             <div>
-              <span class="text-sm font-semibold text-blue-800 block">📧 Quero receber ofertas por email</span>
-              <span class="text-xs text-blue-600">Promoções exclusivas, alertas de preço e as melhores ofertas do dia</span>
+              <span class="text-xs font-semibold text-blue-800 block leading-tight">📧 Quero receber ofertas por email</span>
+              <span class="text-[11px] text-blue-600 leading-tight">Promoções exclusivas e alertas de preço</span>
             </div>
           </label>
 
           <button type="submit" id="btn-register"
-            class="w-full bg-blue-600 hover:bg-blue-700 active:scale-[.98] text-white font-bold py-3.5 rounded-2xl text-sm transition-all mt-1">
+            class="w-full bg-blue-600 hover:bg-blue-700 active:scale-[.98] text-white font-bold py-3 rounded-2xl text-sm transition-all mt-0.5">
             Criar Conta Grátis
           </button>
 
