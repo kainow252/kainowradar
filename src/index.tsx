@@ -778,4 +778,41 @@ app.notFound((c) => {
   `), 404)
 })
 
-export default app
+// ── Cron Triggers (Cloudflare Scheduled Events) ─────────────
+// Executa automaticamente conforme schedule no wrangler.jsonc
+export default {
+  fetch: app.fetch.bind(app),
+
+  async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
+    const { DB, CACHE } = env
+    const appId  = (env as any).ML_APP_ID || ''
+    const secret = (env as any).ML_SECRET  || ''
+
+    console.log(`[CRON] Iniciando scraper ML — ${new Date().toISOString()} — cron: ${event.cron}`)
+
+    try {
+      const { runMLPriceScraper } = await import('./lib/mlScraper')
+      const stats = await runMLPriceScraper(DB, CACHE, appId, secret)
+
+      console.log(
+        `[CRON] Scraper concluído — total: ${stats.total} | ` +
+        `atualizados: ${stats.updated} | pulados: ${stats.skipped} | ` +
+        `erros: ${stats.errors} | ${stats.duration_ms}ms`
+      )
+
+      // Salva log do último cron no KV
+      await CACHE.put('cron_last_run', JSON.stringify({
+        ran_at: new Date().toISOString(),
+        cron:   event.cron,
+        stats,
+      }), { expirationTtl: 86400 * 7 }).catch(() => {})
+
+    } catch (e: any) {
+      console.error('[CRON] Erro no scraper ML:', e?.message || e)
+      await CACHE.put('cron_last_error', JSON.stringify({
+        error_at: new Date().toISOString(),
+        message:  e?.message || String(e),
+      }), { expirationTtl: 86400 }).catch(() => {})
+    }
+  },
+}

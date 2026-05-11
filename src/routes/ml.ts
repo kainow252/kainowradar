@@ -449,33 +449,52 @@ ml.get('/token-debug', async (c) => {
   // Limpa ml_app_token cacheado para forçar uso do OAuth
   if (appToken) await c.env.CACHE?.delete('ml_app_token').catch(() => {})
 
-  // Testa OAUTH token diretamente (prioridade real)
+  // Testa OAUTH token: /items/{id} + /sites/MLB/search
   let oauthTest: any = null
   if (oauthKV) {
-    const r = await fetch(ML_API + '/items/MLB3990393083?attributes=id,title,price,permalink', {
-      headers: { 'Authorization': 'Bearer ' + oauthKV }
-    })
-    const body = await r.json().catch(() => null)
-    oauthTest = { status: r.status, title: (body as any)?.title?.substring(0,50), permalink: (body as any)?.permalink?.substring(0,80) }
+    const headers = { 'Authorization': 'Bearer ' + oauthKV }
+    // Teste 1: item direto (costuma dar 403)
+    const r1 = await fetch(ML_API + '/items/MLB3990393083?attributes=id,title,price', { headers })
+    const b1: any = await r1.json().catch(() => null)
+    // Teste 2: search por nome (deve funcionar com OAuth)
+    const r2 = await fetch(ML_API + '/sites/MLB/search?q=Riiffs+Imperial+Blue+100ml&limit=1', { headers })
+    const b2: any = await r2.json().catch(() => null)
+    const searchResult = b2?.results?.[0]
+    oauthTest = {
+      item_status:   r1.status,
+      item_title:    b1?.title?.substring(0, 50),
+      search_status: r2.status,
+      search_total:  b2?.paging?.total,
+      search_price:  searchResult?.price,
+      search_title:  searchResult?.title?.substring(0, 50),
+    }
   }
 
-  // Testa client_credentials ao vivo
+  // Testa client_credentials: token + search
   let ccTest: any = null
   if (secret) {
-    const r = await fetch(ML_API + '/oauth/token', {
+    const tr = await fetch(ML_API + '/oauth/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ grant_type: 'client_credentials', client_id: appId, client_secret: secret }),
     })
-    const body: any = await r.json().catch(() => null)
-    if (body?.access_token) {
-      const r2 = await fetch(ML_API + '/items/MLB3990393083?attributes=id,title,price,permalink', {
-        headers: { 'Authorization': 'Bearer ' + body.access_token }
-      })
-      const body2 = await r2.json().catch(() => null)
-      ccTest = { token_status: r.status, item_status: r2.status, title: (body2 as any)?.title?.substring(0,50) }
+    const td: any = await tr.json().catch(() => null)
+    if (td?.access_token) {
+      const headers = { 'Authorization': 'Bearer ' + td.access_token }
+      const r1 = await fetch(ML_API + '/items/MLB3990393083?attributes=id,title,price', { headers })
+      const r2 = await fetch(ML_API + '/sites/MLB/search?q=Riiffs+Imperial+Blue+100ml&limit=1', { headers })
+      const b2: any = await r2.json().catch(() => null)
+      const searchResult = b2?.results?.[0]
+      ccTest = {
+        token_status:  tr.status,
+        item_status:   r1.status,
+        search_status: r2.status,
+        search_total:  b2?.paging?.total,
+        search_price:  searchResult?.price,
+        search_title:  searchResult?.title?.substring(0, 50),
+      }
     } else {
-      ccTest = { token_status: r.status, error: body }
+      ccTest = { token_status: tr.status, error: td }
     }
   }
 

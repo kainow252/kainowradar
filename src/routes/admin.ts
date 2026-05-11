@@ -1658,6 +1658,31 @@ admin.post('/api/affiliate-bot/apply', async (c) => {
   return c.json({ ok: true })
 })
 
+// ── POST /admin/api/cron/run — Executa scraper ML manualmente ──
+admin.post('/api/cron/run', async (c) => {
+  const { DB, CACHE } = c.env
+  const appId  = (c.env as any).ML_APP_ID || ''
+  const secret = (c.env as any).ML_SECRET  || ''
+
+  try {
+    const { runMLPriceScraper } = await import('../lib/mlScraper')
+    const stats = await runMLPriceScraper(DB, CACHE, appId, secret)
+    return c.json({ ok: true, stats, ran_at: new Date().toISOString() })
+  } catch (e: any) {
+    return c.json({ ok: false, error: e?.message || String(e) }, 500)
+  }
+})
+
+// ── GET /admin/api/cron/status — Último log do cron ────────────
+admin.get('/api/cron/status', async (c) => {
+  const { CACHE } = c.env
+  const [lastRun, lastError] = await Promise.all([
+    CACHE.get('cron_last_run',   'json').catch(() => null),
+    CACHE.get('cron_last_error', 'json').catch(() => null),
+  ])
+  return c.json({ last_run: lastRun, last_error: lastError })
+})
+
 // -- POST /admin/api/affiliate-bot/run-all -- Bot em lote
 // Estrategia de token:
 //   1) client_credentials (ML_APP_ID + ML_SECRET) -- nao depende de OAuth do usuario
