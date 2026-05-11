@@ -1727,6 +1727,9 @@ function renderAdminSPA(): string {
       <div onclick="showSection('social')" class="sidebar-link" data-section="social">
         <span class="text-lg">📣</span> Social Media
       </div>
+      <div onclick="showSection('affiliate-bot')" class="sidebar-link" data-section="affiliate-bot">
+        <span class="text-lg">🤝</span> Bot Afiliados ML
+      </div>
       <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Análise</div>
       <div onclick="showSection('analytics')" class="sidebar-link" data-section="analytics">
         <span class="text-lg">📈</span> Analytics
@@ -1881,6 +1884,7 @@ async function loadSection(name) {
     analytics: ['Analytics', 'Cliques, conversões e performance'],
     users: ['Usuários', 'Gerenciar clientes e membros'],
     social: ['📣 Social Media', 'Gerencie contas e publique nas redes sociais'],
+    'affiliate-bot': ['🤝 Bot Afiliados ML', 'Gera links de afiliado do Mercado Livre automaticamente'],
   }
   const [title, subtitle] = titles[name] || ['Admin', '']
   document.getElementById('page-title').textContent = title
@@ -1899,6 +1903,7 @@ async function loadSection(name) {
     analytics: renderAnalytics,
     users: renderUsers,
     social: renderSocial,
+    'affiliate-bot': renderAffiliateBot,
   }
   if (sections[name]) await sections[name](area)
 }
@@ -5899,6 +5904,241 @@ async function deleteHistoryPost(id) {
   await loadSocialTab('history')
 }
 
+// ── BOT AFILIADOS ML ──────────────────────────────────────
+async function renderAffiliateBot(area) {
+  const status = await api('GET', '/admin/api/affiliate-bot/status')
+  if (!status) return
+
+  const pct = status.total > 0 ? Math.round((status.with_affiliate / status.total) * 100) : 0
+
+  area.innerHTML = \`
+    <div class="section space-y-6">
+
+      <!-- Stats -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        \${statCard('📦', 'Total Produtos', status.total, 'ativos no catálogo', 'blue')}
+        \${statCard('🤝', 'Com Link ML', status.with_affiliate, 'links gerados', 'green')}
+        \${statCard('⏳', 'Pendentes', status.pending, 'sem link afiliado', 'orange')}
+        \${statCard('📊', 'Cobertura', pct + '%', 'do catálogo linkado', 'purple')}
+      </div>
+
+      <!-- Barra de progresso -->
+      <div class="stat-card">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="font-bold text-slate-800">📈 Progresso Geral</h3>
+          <span class="text-sm font-semibold text-slate-600">\${status.with_affiliate} / \${status.total}</span>
+        </div>
+        <div class="w-full bg-slate-100 rounded-full h-4 overflow-hidden">
+          <div class="h-4 rounded-full transition-all duration-500" style="width:\${pct}%;background:linear-gradient(90deg,#22c55e,#16a34a)"></div>
+        </div>
+        <p class="text-xs text-slate-500 mt-2">Publisher ID: <code class="bg-slate-100 px-1.5 py-0.5 rounded font-mono">cfegdhabc31955</code> · Comissão 5-12%</p>
+      </div>
+
+      <!-- Ações rápidas -->
+      <div class="stat-card">
+        <h3 class="font-bold text-slate-800 mb-4">🤖 Automação</h3>
+        <div class="flex flex-wrap gap-3">
+          <button onclick="runBotAll()" id="btn-run-all"
+            class="btn-primary flex items-center gap-2">
+            <span>▶</span> Rodar Bot (próximos 30 pendentes)
+          </button>
+          <button onclick="loadAffiliateTable('missing')"
+            class="btn-secondary">📋 Ver Pendentes</button>
+          <button onclick="loadAffiliateTable('done')"
+            class="btn-secondary">✅ Ver Concluídos</button>
+          <button onclick="loadAffiliateTable('all')"
+            class="btn-secondary">🔍 Ver Todos</button>
+        </div>
+        <div id="bot-log" class="mt-4 hidden">
+          <div class="bg-slate-900 text-green-400 rounded-xl p-4 font-mono text-sm min-h-[80px]" id="bot-log-text">
+            Aguardando...
+          </div>
+        </div>
+      </div>
+
+      <!-- Busca manual -->
+      <div class="stat-card">
+        <h3 class="font-bold text-slate-800 mb-4">🔍 Busca Manual por Produto</h3>
+        <div class="flex gap-3 mb-4">
+          <input id="aff-search-input" type="text" placeholder="Ex: iPhone 15 128GB Apple"
+            class="input flex-1" onkeydown="if(event.key==='Enter') searchML()"/>
+          <input id="aff-product-id" type="number" placeholder="ID produto"
+            class="input w-32"/>
+          <button onclick="searchML()" class="btn-primary">Buscar no ML</button>
+        </div>
+        <div id="aff-results" class="space-y-2"></div>
+      </div>
+
+      <!-- Tabela de produtos -->
+      <div class="stat-card" id="aff-table-wrap" style="display:none">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-bold text-slate-800" id="aff-table-title">Produtos</h3>
+        </div>
+        <div id="aff-table-content"></div>
+      </div>
+
+    </div>
+  \`
+}
+
+async function runBotAll() {
+  const btn = document.getElementById('btn-run-all')
+  const log = document.getElementById('bot-log')
+  const logText = document.getElementById('bot-log-text')
+  if (!btn || !log || !logText) return
+
+  btn.disabled = true
+  btn.textContent = '⏳ Rodando...'
+  log.classList.remove('hidden')
+  logText.textContent = '🤖 Iniciando bot...'
+
+  const res = await api('POST', '/admin/api/affiliate-bot/run-all')
+  if (!res) {
+    logText.textContent = '❌ Erro ao rodar bot'
+    btn.disabled = false
+    btn.innerHTML = '<span>▶</span> Rodar Bot (próximos 30 pendentes)'
+    return
+  }
+
+  logText.textContent = \`✅ Bot finalizado!
+→ Processados: \${res.processed}
+→ Falhos: \${res.failed}
+\${res.errors?.length ? '⚠ Erros: ' + res.errors.join(' | ') : ''}
+\${res.message || ''}\`
+
+  btn.disabled = false
+  btn.innerHTML = '<span>▶</span> Rodar Bot (próximos 30 pendentes)'
+
+  // Recarrega stats
+  toast(\`Bot concluído: \${res.processed} links gerados!\`, 'success')
+  setTimeout(() => loadSection('affiliate-bot'), 2000)
+}
+
+async function searchML() {
+  const q = document.getElementById('aff-search-input')?.value?.trim()
+  const pid = document.getElementById('aff-product-id')?.value?.trim()
+  const resultsEl = document.getElementById('aff-results')
+  if (!q || !resultsEl) return
+
+  resultsEl.innerHTML = \`<p class="text-sm text-slate-500 animate-pulse">🔍 Buscando no Mercado Livre...</p>\`
+
+  const res = await api('POST', '/admin/api/affiliate-bot/search', { query: q, product_id: pid ? parseInt(pid) : null })
+  if (!res || !res.items?.length) {
+    resultsEl.innerHTML = \`<p class="text-sm text-red-500">❌ Nenhum resultado encontrado para "<b>\${q}</b>"</p>\`
+    return
+  }
+
+  resultsEl.innerHTML = res.items.map((item, i) => \`
+    <div class="flex items-start gap-3 p-3 border border-slate-200 rounded-xl hover:border-yellow-400 transition-all">
+      <img src="\${item.thumbnail}" class="w-14 h-14 object-contain rounded-lg border border-slate-100 bg-white flex-shrink-0" onerror="this.src='https://via.placeholder.com/56'"/>
+      <div class="flex-1 min-w-0">
+        <p class="text-sm font-medium text-slate-800 truncate">\${item.title}</p>
+        <p class="text-sm font-bold text-green-600">R$ \${item.price?.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+        <p class="text-xs text-slate-500 font-mono truncate">ID: \${item.ml_id}</p>
+        <a href="\${item.affiliate_url}" target="_blank" class="text-xs text-blue-500 hover:underline truncate block">🔗 \${item.affiliate_url.substring(0,70)}...</a>
+      </div>
+      \${pid ? \`
+        <button onclick="applyAffiliate(\${pid}, '\${item.ml_id}', '\${item.affiliate_url.replace(/'/g, '&#39;')}')"
+          class="btn-primary text-xs px-3 py-1.5 flex-shrink-0">✓ Aplicar</button>
+      \` : \`<span class="text-xs text-slate-400 flex-shrink-0">Informe ID</span>\`}
+    </div>
+  \`).join('')
+}
+
+async function applyAffiliate(product_id, ml_item_id, affiliate_url) {
+  const res = await api('POST', '/admin/api/affiliate-bot/apply', { product_id, ml_item_id, affiliate_url })
+  if (res?.ok) {
+    toast('✅ Link de afiliado salvo!', 'success')
+    document.getElementById('aff-results').innerHTML = ''
+    document.getElementById('aff-search-input').value = ''
+    document.getElementById('aff-product-id').value = ''
+  } else {
+    toast('❌ Erro ao salvar link', 'error')
+  }
+}
+
+async function loadAffiliateTable(filter) {
+  const wrap = document.getElementById('aff-table-wrap')
+  const content = document.getElementById('aff-table-content')
+  const title = document.getElementById('aff-table-title')
+  if (!wrap || !content) return
+
+  wrap.style.display = ''
+  content.innerHTML = \`<p class="text-sm text-slate-500 animate-pulse">Carregando...</p>\`
+
+  const labels = { all: 'Todos os Produtos', missing: '⏳ Pendentes (sem link)', done: '✅ Com Link de Afiliado' }
+  if (title) title.textContent = labels[filter] || 'Produtos'
+
+  const res = await api('GET', \`/admin/api/affiliate-bot/products?filter=\${filter}\`)
+  if (!res || !res.results?.length) {
+    content.innerHTML = \`<p class="text-sm text-slate-500">Nenhum produto encontrado.</p>\`
+    return
+  }
+
+  content.innerHTML = \`
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-slate-200 text-left">
+            <th class="py-2 pr-3 font-semibold text-slate-600">ID</th>
+            <th class="py-2 pr-3 font-semibold text-slate-600">Produto</th>
+            <th class="py-2 pr-3 font-semibold text-slate-600">Preço</th>
+            <th class="py-2 pr-3 font-semibold text-slate-600">ML ID</th>
+            <th class="py-2 pr-3 font-semibold text-slate-600">Link Afiliado</th>
+            <th class="py-2 font-semibold text-slate-600">Ações</th>
+          </tr>
+        </thead>
+        <tbody>
+          \${res.results.map(p => \`
+            <tr class="border-b border-slate-100 hover:bg-slate-50">
+              <td class="py-2 pr-3 text-slate-500">\${p.id}</td>
+              <td class="py-2 pr-3">
+                <p class="font-medium text-slate-800 truncate max-w-[180px]">\${p.name}</p>
+                <p class="text-xs text-slate-400">\${p.brand || ''} · \${p.category || ''}</p>
+              </td>
+              <td class="py-2 pr-3 font-bold text-green-600">R$ \${(p.best_price || 0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</td>
+              <td class="py-2 pr-3 font-mono text-xs text-slate-500">\${p.ml_item_id || '<span class="text-red-400">—</span>'}</td>
+              <td class="py-2 pr-3">
+                \${p.affiliate_url
+                  ? \`<a href="\${p.affiliate_url}" target="_blank" class="text-blue-500 hover:underline text-xs">🔗 Ver link</a>\`
+                  : \`<span class="text-xs text-red-400">Não gerado</span>\`
+                }
+              </td>
+              <td class="py-2 whitespace-nowrap">
+                <button onclick="quickSearch(\${p.id}, '\${(p.name + ' ' + (p.brand || '')).replace(/'/g, '')}', \${p.id})"
+                  class="text-xs px-2 py-1 bg-yellow-100 text-yellow-700 rounded-lg hover:bg-yellow-200 mr-1">🔍 Buscar</button>
+                \${p.affiliate_url
+                  ? \`<button onclick="clearAffiliate(\${p.id})" class="text-xs px-2 py-1 bg-red-100 text-red-600 rounded-lg hover:bg-red-200">✕</button>\`
+                  : ''}
+              </td>
+            </tr>
+          \`).join('')}
+        </tbody>
+      </table>
+      <p class="text-xs text-slate-400 mt-3">Total: \${res.total} produtos</p>
+    </div>
+  \`
+}
+
+function quickSearch(product_id, name, pid) {
+  // Preenche os campos de busca manual e faz scroll
+  const input = document.getElementById('aff-search-input')
+  const pidInput = document.getElementById('aff-product-id')
+  if (input) input.value = name
+  if (pidInput) pidInput.value = pid
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+  searchML()
+}
+
+async function clearAffiliate(id) {
+  if (!confirm('Remover link de afiliado deste produto?')) return
+  const res = await api('DELETE', \`/admin/api/affiliate-bot/clear/\${id}\`)
+  if (res?.ok) {
+    toast('Link removido', 'info')
+    loadAffiliateTable('done')
+  }
+}
+
 // ── Boot ──────────────────────────────────────────────────
 (function init() {
   // Verifica se já tem token salvo
@@ -5926,5 +6166,154 @@ async function deleteHistoryPost(id) {
 </body>
 </html>`
 }
+
+// ── GET /admin/api/affiliate-bot/status — Progresso ──────
+admin.get('/api/affiliate-bot/status', async (c) => {
+  const { DB } = c.env
+  const [total, withAffiliate, withMlId] = await Promise.all([
+    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1").first<any>(),
+    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND affiliate_url IS NOT NULL AND affiliate_url != ''").first<any>(),
+    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND ml_item_id IS NOT NULL AND ml_item_id != ''").first<any>(),
+  ])
+  return c.json({
+    total: total?.n || 0,
+    with_affiliate: withAffiliate?.n || 0,
+    with_ml_id: withMlId?.n || 0,
+    pending: (total?.n || 0) - (withAffiliate?.n || 0),
+  })
+})
+
+// ── GET /admin/api/affiliate-bot/products — Lista produtos ─
+admin.get('/api/affiliate-bot/products', async (c) => {
+  const { DB } = c.env
+  const page = parseInt(c.req.query('page') || '1')
+  const perPage = 20
+  const offset = (page - 1) * perPage
+  const filter = c.req.query('filter') || 'all' // all | missing | done
+
+  let where = 'WHERE is_active = 1'
+  if (filter === 'missing') where += " AND (affiliate_url IS NULL OR affiliate_url = '')"
+  if (filter === 'done')    where += " AND affiliate_url IS NOT NULL AND affiliate_url != ''"
+
+  const { results } = await DB.prepare(`
+    SELECT id, name, slug, brand, category, best_price, ml_item_id, affiliate_url, affiliate_updated_at
+    FROM products ${where}
+    ORDER BY id ASC
+    LIMIT ? OFFSET ?
+  `).bind(perPage, offset).all<any>()
+
+  const count = await DB.prepare(`SELECT COUNT(*) as n FROM products ${where}`).first<any>()
+
+  return c.json({ results, total: count?.n || 0, page, per_page: perPage })
+})
+
+// ── POST /admin/api/affiliate-bot/search — Busca ML ───────
+// Consulta a API pública do ML e retorna o melhor match
+admin.post('/api/affiliate-bot/search', async (c) => {
+  const { query, product_id } = await c.req.json()
+  if (!query) return c.json({ error: 'Query obrigatória' }, 400)
+
+  const PUBLISHER_ID = 'cfegdhabc31955'
+
+  try {
+    const url = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query)}&limit=5`
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'KainowRadar/1.0' }
+    })
+    if (!res.ok) return c.json({ error: `ML API error: ${res.status}` }, 502)
+
+    const data: any = await res.json()
+    const items = (data.results || []).map((item: any) => ({
+      ml_id: item.id,
+      title: item.title,
+      price: item.price,
+      permalink: item.permalink,
+      thumbnail: item.thumbnail,
+      affiliate_url: `${item.permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`,
+    }))
+
+    return c.json({ items, query })
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500)
+  }
+})
+
+// ── POST /admin/api/affiliate-bot/apply — Salva link ──────
+admin.post('/api/affiliate-bot/apply', async (c) => {
+  const { product_id, ml_item_id, affiliate_url } = await c.req.json()
+  if (!product_id || !affiliate_url) return c.json({ error: 'product_id e affiliate_url obrigatórios' }, 400)
+
+  const { DB } = c.env
+  await DB.prepare(`
+    UPDATE products
+    SET ml_item_id = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(ml_item_id || null, affiliate_url, product_id).run()
+
+  return c.json({ ok: true })
+})
+
+// ── POST /admin/api/affiliate-bot/run-all — Bot automático ─
+// Percorre todos os produtos sem affiliate_url e tenta preencher automaticamente
+admin.post('/api/affiliate-bot/run-all', async (c) => {
+  const { DB } = c.env
+  const PUBLISHER_ID = 'cfegdhabc31955'
+
+  // Pega até 30 produtos sem affiliate_url
+  const { results: products } = await DB.prepare(`
+    SELECT id, name, brand FROM products
+    WHERE is_active = 1 AND (affiliate_url IS NULL OR affiliate_url = '')
+    ORDER BY id ASC
+    LIMIT 30
+  `).all<any>()
+
+  if (!products.length) return c.json({ ok: true, processed: 0, message: 'Todos os produtos já têm link de afiliado!' })
+
+  let processed = 0
+  let failed = 0
+  const errors: string[] = []
+
+  for (const product of products) {
+    try {
+      const query = `${product.brand || ''} ${product.name}`.trim()
+      const url = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query)}&limit=1`
+      const res = await fetch(url, { headers: { 'User-Agent': 'KainowRadar/1.0' } })
+      if (!res.ok) { failed++; continue }
+
+      const data: any = await res.json()
+      const item = data.results?.[0]
+      if (!item) { failed++; continue }
+
+      const affiliate_url = `${item.permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`
+
+      await DB.prepare(`
+        UPDATE products
+        SET ml_item_id = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(item.id, affiliate_url, product.id).run()
+
+      processed++
+
+      // Pausa pequena para não sobrecarregar a API do ML
+      await new Promise(r => setTimeout(r, 150))
+    } catch (e: any) {
+      failed++
+      errors.push(`Produto ${product.id}: ${e.message}`)
+    }
+  }
+
+  return c.json({ ok: true, processed, failed, errors: errors.slice(0, 5) })
+})
+
+// ── DELETE /admin/api/affiliate-bot/clear/:id — Remove link ─
+admin.delete('/api/affiliate-bot/clear/:id', async (c) => {
+  const { DB } = c.env
+  const id = c.req.param('id')
+  await DB.prepare(`
+    UPDATE products SET ml_item_id = NULL, affiliate_url = NULL, affiliate_updated_at = NULL
+    WHERE id = ?
+  `).bind(id).run()
+  return c.json({ ok: true })
+})
 
 export default admin
