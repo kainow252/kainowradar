@@ -25,6 +25,7 @@ type MLBindings = Bindings & {
 const ml = new Hono<{ Bindings: MLBindings }>()
 
 const PUBLISHER_ID = 'cfegdhabc31955'
+const MATT_TOOL    = '61674414'
 const ML_API       = 'https://api.mercadolibre.com'
 const APP_ID       = '3098423019766450'
 
@@ -257,7 +258,7 @@ async function saveProductToDB(
     const image     = (item.thumbnail || '').replace('-I.jpg', '-O.jpg')
     const permalink = item.permalink || ''
     const aff_url   = permalink
-      ? `${permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`
+      ? `${permalink}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
       : ''
 
     // Atualiza se já existe pelo ml_item_id
@@ -372,7 +373,7 @@ ml.post('/webhook', async (c) => {
       if (token && itemId) {
         const item = await fetchMLItem(itemId, token)
         if (item) {
-          const aff_url = `${item.permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`
+          const aff_url = `${item.permalink}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
           await DB.prepare(`
             UPDATE products
             SET best_price = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
@@ -631,7 +632,7 @@ ml.post('/import-item', async (c) => {
     name:          item.title,
     price:         item.price,
     category:      catSlug,
-    affiliate_url: `${item.permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`,
+    affiliate_url: `${item.permalink}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`,
   })
 })
 
