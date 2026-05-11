@@ -545,39 +545,84 @@ pages.get('/categoria/:slug', async (c) => {
   return c.html(renderLayout(`${catName} — Melhores Preços | KainowRadar`, content, { navCategories: navCatsCategoria, footerConfig: footerCfgCategoria }))
 })
 
-// ── Página de busca (/busca?q=...) ───────────────────────
+// ── Página de busca (/busca?q=...&store=...) ─────────────
 pages.get('/busca', async (c) => {
-  const q = (c.req.query('q') || '').trim()
-  const page = parseInt(c.req.query('page') || '1')
-  const sort = c.req.query('sort') || 'relevance'
+  const q     = (c.req.query('q')     || '').trim()
+  const store = (c.req.query('store') || '').trim()   // filtro por loja
+  const page  = parseInt(c.req.query('page') || '1')
+  const sort  = c.req.query('sort') || 'relevance'
   const { DB } = c.env
 
-  const offset = (page - 1) * 24
+  const offset  = (page - 1) * 24
   const orderBy = sort === 'price_asc'
     ? 'p.best_price ASC'
     : sort === 'price_desc'
       ? 'p.best_price DESC'
       : 'p.offer_count DESC, p.best_price ASC'
 
+  // Resolve store_id a partir do slug
+  let storeId: number | null = null
+  let storeName = ''
+  if (store) {
+    const storeRow = await DB.prepare(`SELECT id, name FROM stores WHERE slug = ? LIMIT 1`).bind(store).first<{ id: number; name: string }>()
+    storeId   = storeRow?.id   ?? null
+    storeName = storeRow?.name ?? store
+  }
+
+  // Monta query dinâmica
+  let productsQuery: D1PreparedStatement
+  let countQuery:    D1PreparedStatement
+
+  if (storeId) {
+    // Filtro por loja: produtos que têm oferta nessa loja
+    const sql = `
+      SELECT DISTINCT p.*, s.name as best_store_name, s.slug as best_store_slug
+      FROM products p
+      LEFT JOIN stores s ON s.id = p.best_store_id
+      JOIN offers o ON o.product_id = p.id AND o.store_id = ?
+      WHERE p.is_active = 1 AND p.best_price IS NOT NULL
+      ${ q ? 'AND (p.name LIKE ? OR p.category LIKE ?)' : '' }
+      ORDER BY ${orderBy} LIMIT 24 OFFSET ?
+    `
+    const countSql = `
+      SELECT COUNT(DISTINCT p.id) as total
+      FROM products p
+      JOIN offers o ON o.product_id = p.id AND o.store_id = ?
+      WHERE p.is_active = 1 AND p.best_price IS NOT NULL
+      ${ q ? 'AND (p.name LIKE ? OR p.category LIKE ?)' : '' }
+    `
+    productsQuery = q
+      ? DB.prepare(sql).bind(storeId, `%${q}%`, `%${q}%`, offset)
+      : DB.prepare(sql).bind(storeId, offset)
+    countQuery = q
+      ? DB.prepare(countSql).bind(storeId, `%${q}%`, `%${q}%`)
+      : DB.prepare(countSql).bind(storeId)
+  } else if (q) {
+    productsQuery = DB.prepare(`
+      SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
+      FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
+      WHERE p.is_active = 1 AND p.best_price IS NOT NULL
+        AND (p.name LIKE ? OR p.category LIKE ?)
+      ORDER BY ${orderBy} LIMIT 24 OFFSET ?
+    `).bind(`%${q}%`, `%${q}%`, offset)
+    countQuery = DB.prepare(`
+      SELECT COUNT(*) as total FROM products
+      WHERE is_active = 1 AND best_price IS NOT NULL AND (name LIKE ? OR category LIKE ?)
+    `).bind(`%${q}%`, `%${q}%`)
+  } else {
+    productsQuery = DB.prepare(`
+      SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
+      FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
+      WHERE p.is_active = 1 AND p.best_price IS NOT NULL
+      ORDER BY ${orderBy} LIMIT 24 OFFSET ?
+    `).bind(offset)
+    countQuery = DB.prepare(`SELECT COUNT(*) as total FROM products WHERE is_active = 1 AND best_price IS NOT NULL`)
+  }
+
   const [{ results: products }, { results: navCatsBusca }, totalRow] = await Promise.all([
-    q
-      ? DB.prepare(`
-          SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
-          FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
-          WHERE p.is_active = 1 AND p.best_price IS NOT NULL
-            AND (p.name LIKE ? OR p.category LIKE ?)
-          ORDER BY ${orderBy} LIMIT 24 OFFSET ?
-        `).bind(`%${q}%`, `%${q}%`, offset).all<Product>()
-      : DB.prepare(`
-          SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
-          FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
-          WHERE p.is_active = 1 AND p.best_price IS NOT NULL
-          ORDER BY ${orderBy} LIMIT 24 OFFSET ?
-        `).bind(offset).all<Product>(),
+    productsQuery.all<Product>(),
     DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>(),
-    q
-      ? DB.prepare(`SELECT COUNT(*) as total FROM products WHERE is_active = 1 AND best_price IS NOT NULL AND (name LIKE ? OR category LIKE ?)`).bind(`%${q}%`, `%${q}%`).first<{ total: number }>()
-      : DB.prepare(`SELECT COUNT(*) as total FROM products WHERE is_active = 1 AND best_price IS NOT NULL`).first<{ total: number }>(),
+    countQuery.first<{ total: number }>(),
   ])
 
   const total = totalRow?.total || 0
@@ -620,14 +665,17 @@ pages.get('/busca', async (c) => {
       <!-- Cabeçalho com resultado -->
       <div class="flex items-center justify-between mb-6">
         <div>
-          ${q
+          ${store && storeName
+            ? `<h1 class="text-xl font-bold text-gray-900">Produtos na <span class="text-blue-600">${storeName}</span>${q ? ` com "${q}"` : ''}</h1>
+               <p class="text-sm text-gray-500 mt-0.5">${total} produto${total !== 1 ? 's' : ''} encontrado${total !== 1 ? 's' : ''} · <a href="/busca" class="text-blue-500 hover:underline">ver tudo</a></p>`
+            : q
             ? `<h1 class="text-xl font-bold text-gray-900">Resultados para "<span class="text-blue-600">${q}</span>"</h1>
                <p class="text-sm text-gray-500 mt-0.5">${total} produto${total !== 1 ? 's' : ''} encontrado${total !== 1 ? 's' : ''}</p>`
             : `<h1 class="text-xl font-bold text-gray-900">Todos os produtos</h1>
                <p class="text-sm text-gray-500 mt-0.5">${total} produto${total !== 1 ? 's' : ''}</p>`
           }
         </div>
-        <select onchange="location.href='/busca?q=${encodeURIComponent(q)}&sort='+this.value" class="sort-select">
+        <select onchange="location.href='/busca?q=${encodeURIComponent(q)}&store=${encodeURIComponent(store)}&sort='+this.value" class="sort-select">
           <option value="relevance" ${sort === 'relevance' ? 'selected' : ''}>Relevância</option>
           <option value="price_asc" ${sort === 'price_asc' ? 'selected' : ''}>Menor Preço</option>
           <option value="price_desc" ${sort === 'price_desc' ? 'selected' : ''}>Maior Preço</option>
@@ -643,7 +691,9 @@ pages.get('/busca', async (c) => {
   `
 
   const footerCfgBusca = await loadFooterConfig(DB)
-  const pageTitle = q
+  const pageTitle = store && storeName
+    ? `Produtos na ${storeName}${ q ? ` — "${q}"` : '' } | KainowRadar`
+    : q
     ? `"${q}" — Busca | KainowRadar`
     : 'Buscar Produtos | KainowRadar'
 

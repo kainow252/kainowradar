@@ -427,22 +427,35 @@ app.get('/', async (c) => {
 
   const storesHTML = `
     <section class="bg-white border-b border-gray-100 overflow-hidden">
-      <div class="max-w-7xl mx-auto px-4 pt-5 pb-1">
-        <div class="flex items-center justify-between mb-4">
+      <div class="max-w-7xl mx-auto px-4 pt-5 pb-3">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
           <div class="flex items-center gap-2.5">
             <div class="w-1 h-5 bg-gradient-to-b from-blue-500 to-blue-700 rounded-full"></div>
             <h2 class="text-base font-black text-gray-800">Lojas Parceiras</h2>
             <span class="inline-flex items-center gap-1 bg-blue-50 text-blue-600 text-xs font-bold px-2.5 py-1 rounded-full border border-blue-100">
               <span class="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse"></span>
-              ${stores.length} lojas
+              <span id="stores-count">${stores.length}</span> lojas
             </span>
           </div>
-          <span class="text-xs text-gray-400 hidden sm:block">Compare preços em todas as lojas de uma vez</span>
+          <!-- Campo de busca de loja -->
+          <div class="relative w-full sm:w-64">
+            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/></svg>
+            </span>
+            <input
+              id="store-search-input"
+              type="text"
+              placeholder="Buscar loja..."
+              autocomplete="off"
+              class="w-full pl-9 pr-8 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 bg-gray-50 transition-all"
+            />
+            <button id="store-search-clear" onclick="document.getElementById('store-search-input').value='';document.getElementById('store-search-input').dispatchEvent(new Event('input'))" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 hidden text-lg leading-none">&times;</button>
+          </div>
         </div>
       </div>
 
       <!-- Marquee — única linha, esquerda para direita -->
-      <div class="stores-marquee-wrapper relative mb-4">
+      <div id="stores-marquee-section" class="stores-marquee-wrapper relative mb-4">
         <div class="stores-marquee-fade-left"></div>
         <div class="stores-marquee-fade-right"></div>
         <div class="stores-marquee" style="animation-duration:${Math.max(30, stores.length * 1.8)}s">
@@ -451,6 +464,12 @@ app.get('/', async (c) => {
             ${storeCards(stores)}
           </div>
         </div>
+      </div>
+
+      <!-- Grid de resultados de busca (oculto por padrão) -->
+      <div id="stores-search-results" class="hidden max-w-7xl mx-auto px-4 pb-5">
+        <div id="stores-search-grid" class="flex flex-wrap gap-3"></div>
+        <p id="stores-search-empty" class="hidden text-center text-gray-400 text-sm py-6">Nenhuma loja encontrada para "<span id="stores-empty-term"></span>"</p>
       </div>
 
       <style>
@@ -467,20 +486,68 @@ app.get('/', async (c) => {
           will-change: transform;
         }
         .stores-marquee:hover { animation-play-state: paused; }
-        .stores-marquee-reverse {
-          animation-name: marquee-rtl;
-        }
         .stores-marquee-track { display: flex; gap: 1rem; }
         @keyframes marquee-ltr {
           from { transform: translateX(0); }
           to   { transform: translateX(-50%); }
         }
-        @keyframes marquee-rtl {
-          from { transform: translateX(-50%); }
-          to   { transform: translateX(0); }
-        }
         .store-pill-card:hover .store-logo-circle { transform: scale(1.12); }
+        .store-result-card {
+          display:flex; flex-direction:column; align-items:center; gap:6px;
+          width:80px; cursor:pointer; text-decoration:none;
+          padding:8px 4px; border-radius:12px;
+          transition: background 0.15s, transform 0.15s;
+        }
+        .store-result-card:hover { background:#f0f7ff; transform:scale(1.06); }
       </style>
+
+      <script>
+      (function(){
+        const storesData = ${JSON.stringify(stores.map(s => ({ name: s.name, slug: s.slug, color: s.color, bg: s.bg, initial: s.initial, text: s.text, logoSvg: s.logoSvg || '' })))};
+        const input   = document.getElementById('store-search-input');
+        const clearBtn= document.getElementById('store-search-clear');
+        const marquee = document.getElementById('stores-marquee-section');
+        const results = document.getElementById('stores-search-results');
+        const grid    = document.getElementById('stores-search-grid');
+        const empty   = document.getElementById('stores-search-empty');
+        const emptyTerm = document.getElementById('stores-empty-term');
+        const countEl = document.getElementById('stores-count');
+
+        input.addEventListener('input', function(){
+          const q = this.value.trim().toLowerCase();
+          clearBtn.classList.toggle('hidden', q === '');
+
+          if(!q){
+            marquee.classList.remove('hidden');
+            results.classList.add('hidden');
+            countEl.textContent = storesData.length;
+            return;
+          }
+
+          const filtered = storesData.filter(s => s.name.toLowerCase().includes(q));
+          countEl.textContent = filtered.length;
+          marquee.classList.add('hidden');
+          results.classList.remove('hidden');
+
+          if(filtered.length === 0){
+            grid.innerHTML = '';
+            emptyTerm.textContent = this.value.trim();
+            empty.classList.remove('hidden');
+          } else {
+            empty.classList.add('hidden');
+            grid.innerHTML = filtered.map(s => \`
+              <a href="/busca?store=\${s.slug}" class="store-result-card group" title="Ver produtos na \${s.name}">
+                <div style="width:56px;height:56px;border-radius:14px;display:flex;align-items:center;justify-content:center;background:\${s.bg};border:2px solid \${s.color};overflow:hidden;">
+                  \${s.logoSvg || '<span style="font-weight:900;font-size:1rem;color:'+s.color+'">'+s.initial+'</span>'}
+                </div>
+                <span style="font-size:11px;font-weight:700;color:#374151;text-align:center;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">\${s.name}</span>
+                <span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:99px;color:\${s.color};background:\${s.bg}">\${s.text}</span>
+              </a>
+            \`).join('');
+          }
+        });
+      })();
+      </script>
     </section>
   `
 
