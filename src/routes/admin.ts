@@ -1612,32 +1612,54 @@ admin.get('/api/affiliate-bot/products', async (c) => {
   return c.json({ results, total: count?.n || 0, page, per_page: perPage })
 })
 
-// ── POST /admin/api/affiliate-bot/search — Busca ML ───────
-// Consulta a API pública do ML e retorna o melhor match
+// ── POST /admin/api/affiliate-bot/search — Busca ML com token OAuth ──
+// /sites/MLB/search está bloqueado para apps legacy SEM token.
+// COM token Bearer funciona (política do ML libera para apps autenticados).
+// Fallback: gera affiliate_url de busca pública do ML.
 admin.post('/api/affiliate-bot/search', async (c) => {
   const { query, product_id } = await c.req.json()
   if (!query) return c.json({ error: 'Query obrigatória' }, 400)
 
   const PUBLISHER_ID = 'cfegdhabc31955'
+  const ML_API       = 'https://api.mercadolibre.com'
+
+  // Tenta com token OAuth do KV
+  const token = await c.env.CACHE?.get('ml_access_token').catch(() => null)
+
+  const headers: Record<string, string> = {
+    'User-Agent': 'KainowRadar/1.0',
+    'Accept':     'application/json',
+  }
+  if (token) headers['Authorization'] = `Bearer ${token}`
 
   try {
-    const url = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query)}&limit=5`
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'KainowRadar/1.0' }
+    const url = `${ML_API}/sites/MLB/search?q=${encodeURIComponent(query)}&limit=5`
+    const res = await fetch(url, { headers })
+
+    if (res.ok) {
+      const data: any = await res.json()
+      const items = (data.results || []).map((item: any) => ({
+        ml_id:         item.id,
+        title:         item.title,
+        price:         item.price,
+        permalink:     item.permalink,
+        thumbnail:     item.thumbnail,
+        affiliate_url: `${item.permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`,
+        source:        'api',
+      }))
+      return c.json({ items, query, source: 'api' })
+    }
+
+    // Fallback: gera um link de busca afiliado (sem resultado de item específico)
+    const searchSlug = query.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+    const searchUrl  = `https://lista.mercadolivre.com.br/${encodeURIComponent(searchSlug)}#partner_id=${PUBLISHER_ID}&source_id=kainow`
+    return c.json({
+      items:   [],
+      query,
+      source:  'fallback',
+      search_url: searchUrl,
+      message: `API bloqueada (${res.status}). Use "Importar ML" para importar produtos reais.`,
     })
-    if (!res.ok) return c.json({ error: `ML API error: ${res.status}` }, 502)
-
-    const data: any = await res.json()
-    const items = (data.results || []).map((item: any) => ({
-      ml_id: item.id,
-      title: item.title,
-      price: item.price,
-      permalink: item.permalink,
-      thumbnail: item.thumbnail,
-      affiliate_url: `${item.permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`,
-    }))
-
-    return c.json({ items, query })
   } catch (e: any) {
     return c.json({ error: e.message }, 500)
   }
@@ -1658,56 +1680,116 @@ admin.post('/api/affiliate-bot/apply', async (c) => {
   return c.json({ ok: true })
 })
 
-// ── POST /admin/api/affiliate-bot/run-all — Bot automático ─
-// Percorre todos os produtos sem affiliate_url e tenta preencher automaticamente
+// ── POST /admin/api/affiliate-bot/run-all — Bot automático ─────────
+// Dois modos:
+//  1. Produtos COM ml_item_id → busca /items/{id} com token → atualiza preço + affiliate_url
+//  2. Produtos SEM ml_item_id → tenta /sites/MLB/search COM token OAuth
+//     → se funcionar, salva ml_item_id + affiliate_url
+//     → se falhar (403 legacy), gera link de busca como affiliate_url temporário
 admin.post('/api/affiliate-bot/run-all', async (c) => {
-  const { DB } = c.env
+  const { DB }       = c.env
+  const ML_API       = 'https://api.mercadolibre.com'
   const PUBLISHER_ID = 'cfegdhabc31955'
 
-  // Pega até 30 produtos sem affiliate_url
-  const { results: products } = await DB.prepare(`
-    SELECT id, name, brand FROM products
-    WHERE is_active = 1 AND (affiliate_url IS NULL OR affiliate_url = '')
-    ORDER BY id ASC
-    LIMIT 30
+  const token = await c.env.CACHE?.get('ml_access_token').catch(() => null)
+  const authHeaders: Record<string, string> = {
+    'User-Agent': 'KainowRadar/1.0',
+    'Accept':     'application/json',
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+  }
+
+  // ── Fase 1: produtos COM ml_item_id — atualiza via /items/{id} ──────
+  const { results: withId } = await DB.prepare(`
+    SELECT id, name, ml_item_id FROM products
+    WHERE is_active = 1
+      AND ml_item_id IS NOT NULL AND ml_item_id != ''
+    ORDER BY affiliate_updated_at ASC NULLS FIRST
+    LIMIT 20
   `).all<any>()
 
-  if (!products.length) return c.json({ ok: true, processed: 0, message: 'Todos os produtos já têm link de afiliado!' })
-
-  let processed = 0
-  let failed = 0
-  const errors: string[] = []
-
-  for (const product of products) {
+  let refreshed = 0
+  for (const p of withId) {
     try {
-      const query = `${product.brand || ''} ${product.name}`.trim()
-      const url = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query)}&limit=1`
-      const res = await fetch(url, { headers: { 'User-Agent': 'KainowRadar/1.0' } })
-      if (!res.ok) { failed++; continue }
-
-      const data: any = await res.json()
-      const item = data.results?.[0]
-      if (!item) { failed++; continue }
-
-      const affiliate_url = `${item.permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`
-
+      const res = await fetch(`${ML_API}/items/${p.ml_item_id}`, { headers: authHeaders })
+      if (!res.ok) continue
+      const item: any = await res.json()
+      const aff = `${item.permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`
       await DB.prepare(`
         UPDATE products
-        SET ml_item_id = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
+        SET best_price = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      `).bind(item.id, affiliate_url, product.id).run()
+      `).bind(item.price || 0, aff, p.id).run()
+      refreshed++
+      await new Promise(r => setTimeout(r, 60))
+    } catch { /* ignora item com erro */ }
+  }
 
-      processed++
+  // ── Fase 2: produtos SEM ml_item_id — tenta search com token ────────
+  const { results: noId } = await DB.prepare(`
+    SELECT id, name, brand FROM products
+    WHERE is_active = 1
+      AND (ml_item_id IS NULL OR ml_item_id = '')
+      AND (affiliate_url IS NULL OR affiliate_url = '')
+    ORDER BY id ASC
+    LIMIT 20
+  `).all<any>()
 
-      // Pausa pequena para não sobrecarregar a API do ML
-      await new Promise(r => setTimeout(r, 150))
+  let linked = 0
+  let fallback = 0
+  const errors: string[] = []
+
+  for (const product of noId) {
+    try {
+      const query = `${product.brand || ''} ${product.name}`.trim()
+      const searchUrl = `${ML_API}/sites/MLB/search?q=${encodeURIComponent(query)}&limit=1`
+      const res = await fetch(searchUrl, { headers: authHeaders })
+
+      if (res.ok) {
+        const data: any = await res.json()
+        const item = data.results?.[0]
+        if (item) {
+          const aff = `${item.permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`
+          await DB.prepare(`
+            UPDATE products
+            SET ml_item_id = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).bind(item.id, aff, product.id).run()
+          linked++
+          await new Promise(r => setTimeout(r, 100))
+          continue
+        }
+      }
+
+      // Fallback: gera link de busca como affiliate_url temporário
+      // Útil para exibir no site enquanto o produto real não é importado
+      const slug = query.toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+      const searchAffUrl = `https://lista.mercadolivre.com.br/${slug}` +
+        `?matt_tool=61674414&matt_word=${PUBLISHER_ID}` +
+        `&partner_id=${PUBLISHER_ID}&source_id=kainow`
+      await DB.prepare(`
+        UPDATE products
+        SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(searchAffUrl, product.id).run()
+      fallback++
+      await new Promise(r => setTimeout(r, 40))
     } catch (e: any) {
-      failed++
-      errors.push(`Produto ${product.id}: ${e.message}`)
+      errors.push(`#${product.id}: ${e.message}`)
     }
   }
 
-  return c.json({ ok: true, processed, failed, errors: errors.slice(0, 5) })
+  const total = refreshed + linked + fallback
+  return c.json({
+    ok:        true,
+    refreshed,   // produtos com ml_item_id atualizados via /items/{id}
+    linked,      // produtos sem id que encontraram match no search
+    fallback,    // produtos que receberam link de busca como temporário
+    errors:    errors.slice(0, 5),
+    no_token:  !token,
+    message:   `${total} processados: ${refreshed} atualizados, ${linked} linkados, ${fallback} com link de busca temporário`,
+  })
 })
 
 // ── DELETE /admin/api/affiliate-bot/clear/:id — Remove link ─
@@ -2003,7 +2085,7 @@ async function api(method, path, body) {
 // ── Toast ────────────────────────────────────────────────
 function toast(msg, type = 'info') {
   const t = document.getElementById('toast')
-  const colors = { info:'#1e293b', success:'#166534', error:'#991b1b' }
+  const colors = { info:'#1e293b', success:'#166534', error:'#991b1b', warning:'#92400e' }
   t.style.background = colors[type] || colors.info
   t.textContent = msg
   t.classList.add('show')
@@ -6149,30 +6231,39 @@ async function runBotAll() {
   if (!btn || !log || !logText) return
 
   btn.disabled = true
-  btn.textContent = '⏳ Rodando...'
+  btn.innerHTML = '⏳ Rodando...'
   log.classList.remove('hidden')
-  logText.textContent = '🤖 Iniciando bot...'
+  logText.textContent = '🤖 Iniciando bot — aguarde...'
 
   const res = await api('POST', '/admin/api/affiliate-bot/run-all')
   if (!res) {
-    logText.textContent = '❌ Erro ao rodar bot'
+    logText.textContent = '❌ Erro ao chamar o bot. Verifique o console.'
     btn.disabled = false
     btn.innerHTML = '<span>▶</span> Rodar Bot (próximos 30 pendentes)'
     return
   }
 
-  logText.textContent = \`✅ Bot finalizado!
-→ Processados: \${res.processed}
-→ Falhos: \${res.failed}
-\${res.errors?.length ? '⚠ Erros: ' + res.errors.join(' | ') : ''}
+  const _total = (res.refreshed || 0) + (res.linked || 0) + (res.fallback || 0)
+  const _noTokenWarn = res.no_token
+    ? '⚠️ AVISO: sem token OAuth ML — preços e IDs podem estar desatualizados.\n   Acesse Admin → Integrações → ML OAuth para autenticar.\n'
+    : ''
+
+  logText.textContent = \`✅ Bot finalizado!\n\${_noTokenWarn}
+📦 Total processados : \${_total}
+🔄 Preços atualizados: \${res.refreshed || 0}  (produtos COM ml_item_id → /items/{id})
+🔗 Novos links       : \${res.linked || 0}   (produtos SEM id → encontrados no search)
+🔍 Link de busca     : \${res.fallback || 0}  (fallback — search bloqueou ou sem resultado)
+\${res.errors?.length ? '\\n⚠ Erros: ' + res.errors.join(' | ') : ''}
 \${res.message || ''}\`
 
   btn.disabled = false
   btn.innerHTML = '<span>▶</span> Rodar Bot (próximos 30 pendentes)'
 
-  // Recarrega stats
-  toast(\`Bot concluído: \${res.processed} links gerados!\`, 'success')
-  setTimeout(() => loadSection('affiliate-bot'), 2000)
+  const _toastMsg = res.no_token
+    ? \`Bot: \${_total} processados (sem token OAuth — dados limitados)\`
+    : \`Bot: \${_total} processados — \${res.refreshed} atualizados, \${res.linked} linkados\`
+  toast(_toastMsg, res.no_token ? 'warning' : 'success')
+  setTimeout(() => loadSection('affiliate-bot'), 3000)
 }
 
 async function searchML() {
@@ -6184,6 +6275,23 @@ async function searchML() {
   resultsEl.innerHTML = \`<p class="text-sm text-slate-500 animate-pulse">🔍 Buscando no Mercado Livre...</p>\`
 
   const res = await api('POST', '/admin/api/affiliate-bot/search', { query: q, product_id: pid ? parseInt(pid) : null })
+
+  // Fallback: API bloqueada — mostra link de busca afiliado
+  if (res?.source === 'fallback') {
+    resultsEl.innerHTML = \`
+      <div class="p-3 bg-orange-50 border border-orange-200 rounded-xl text-sm">
+        <p class="font-semibold text-orange-700 mb-1">⚠️ API de busca bloqueada</p>
+        <p class="text-orange-600 text-xs mb-2">\${res.message || 'Endpoint /sites/MLB/search retornou 403.'}</p>
+        <p class="text-slate-700 text-xs mb-3">Use <b>Importar ML → Importar por URL</b> para adicionar produtos reais. Ou use o link de busca afiliado abaixo como temporário:</p>
+        <a href="\${res.search_url}" target="_blank"
+          class="inline-flex items-center gap-1 text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition-colors">
+          🔗 Abrir busca afiliada para "<b>\${q}</b>"
+        </a>
+      </div>
+    \`
+    return
+  }
+
   if (!res || !res.items?.length) {
     resultsEl.innerHTML = \`<p class="text-sm text-red-500">❌ Nenhum resultado encontrado para "<b>\${q}</b>"</p>\`
     return
