@@ -559,6 +559,58 @@ ml.get('/token-debug', async (c) => {
   })
 })
 
+// ── GET /admin/api/ml/search-debug — Testa busca diretamente do Worker ─
+ml.get('/search-debug', async (c) => {
+  const q     = (c.req.query('q') || 'Samsung Galaxy').trim()
+  const token = await c.env.CACHE?.get('ml_access_token').catch(() => null)
+  const headers: Record<string, string> = { 'User-Agent': 'KainowRadar/1.0', 'Accept': 'application/json' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
+  const results: Record<string, any> = {}
+
+  // Teste 1: /products/search — pega IDs
+  let searchIds: string[] = []
+  try {
+    const r = await fetch(`${ML_API}/products/search?site_id=MLB&q=${encodeURIComponent(q)}&limit=3`, { headers })
+    const body: any = await r.json().catch(() => ({}))
+    const items = body?.results || []
+    searchIds = items.map((x: any) => x.id).filter(Boolean)
+    results.products_search = {
+      status: r.status, count: items.length,
+      ids: searchIds,
+      statuses: items.map((x: any) => `${x.id}:${x.status}`),
+      error: body?.error ?? null,
+    }
+  } catch (e: any) { results.products_search = { error: e?.message } }
+
+  // Teste 2: /products/{id}/items para cada ID do search
+  results.items_by_search_id = {}
+  for (const sid of searchIds.slice(0, 3)) {
+    try {
+      const r = await fetch(`${ML_API}/products/${sid}/items?limit=3`, { headers })
+      const body: any = await r.json().catch(() => ({}))
+      const items: any[] = body?.results || body?.items || []
+      results.items_by_search_id[sid] = {
+        http_status: r.status,
+        count: items.length,
+        prices: items.map((x: any) => x.price),
+        statuses: items.map((x: any) => x.status),
+        error: body?.error ?? null,
+      }
+    } catch (e: any) { results.items_by_search_id[sid] = { error: (e as any)?.message } }
+  }
+
+  // Teste 3: /products/{id}/items com ID fixo que funciona no cron
+  try {
+    const r3 = await fetch(`${ML_API}/products/MLB24045332/items?limit=3`, { headers })
+    const body3: any = await r3.json().catch(() => ({}))
+    const items: any[] = body3?.results || body3?.items || []
+    results.catalog_items_known = { status: r3.status, count: items.length, first_price: items[0]?.price ?? null }
+  } catch (e: any) { results.catalog_items_known = { error: e?.message } }
+
+  return c.json({ q, has_token: !!token, results })
+})
+
 // ── POST /admin/api/ml/force-refresh — Renova token via refresh_token ─
 // Útil para renovar silenciosamente sem redirecionar o usuário
 ml.post('/force-refresh', async (c) => {

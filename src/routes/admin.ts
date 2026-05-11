@@ -1881,6 +1881,240 @@ admin.delete('/api/affiliate-bot/clear/:id', async (c) => {
   return c.json({ ok: true })
 })
 
+// ── POST /admin/api/affiliate-bot/import-search ──────────
+// Busca produtos no ML por keyword, gera link afiliado e salva no banco
+admin.post('/api/affiliate-bot/import-search', async (c) => {
+  const { DB, CACHE } = c.env
+  const body: any = await c.req.json().catch(() => ({}))
+  const query    = (body.query || '').trim()
+  const category = (body.category || 'outros').trim()
+  const limit    = Math.min(Math.max(parseInt(body.limit) || 10, 1), 20)
+
+  if (!query) return c.json({ error: 'query obrigatória' }, 400)
+
+  const PUBLISHER_ID = 'cfegdhabc31955'
+  const MATT_TOOL    = '38524122'
+  const ML_API       = 'https://api.mercadolibre.com'
+  const appId        = (c.env as any).ML_APP_ID || '3098423019766450'
+  const secret       = (c.env as any).ML_SECRET  || ''
+
+  // ── 1. Pega token ────────────────────────────────────────
+  let token: string | null = null
+  let token_source = 'none'
+
+  // Tenta OAuth primeiro (tem mais permissões)
+  const oauthToken = await CACHE?.get('ml_access_token').catch(() => null)
+  if (oauthToken) { token = oauthToken; token_source = 'oauth' }
+
+  // Fallback client_credentials
+  if (!token && secret) {
+    const cached = await CACHE?.get('ml_app_token').catch(() => null)
+    if (cached) { token = cached; token_source = 'cc_cache' }
+    else {
+      try {
+        const tr = await fetch(`${ML_API}/oauth/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ grant_type: 'client_credentials', client_id: appId, client_secret: secret }),
+        })
+        if (tr.ok) {
+          const td: any = await tr.json()
+          if (td.access_token) {
+            token = td.access_token; token_source = 'cc_new'
+            await CACHE?.put('ml_app_token', token!, { expirationTtl: 18000 }).catch(() => {})
+          }
+        }
+      } catch {}
+    }
+  }
+
+  // ── 2. Busca IDs via /products/search ────────────────────
+  // /sites/MLB/search → 403 bloqueado por IP de datacenter
+  // /products/search → retorna catalog_product_ids
+  // /products/{id}/items → retorna anúncios ativos com preço ✅ (igual ao cron)
+  const headers: Record<string, string> = { 'User-Agent': 'KainowRadar/1.0', 'Accept': 'application/json' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
+  let mlResults: any[] = []
+  let search_status = 0
+  const search_strategy = 'products/search + products/{id}/items'
+
+  try {
+    const r = await fetch(
+      `${ML_API}/products/search?site_id=MLB&q=${encodeURIComponent(query)}&limit=${limit}`,
+      { headers }
+    )
+    search_status = r.status
+    if (r.ok) {
+      const d: any = await r.json()
+      mlResults = d?.results || []
+    }
+  } catch {}
+
+  if (mlResults.length === 0) {
+    return c.json({
+      ok: false,
+      error: `Nenhum resultado encontrado na busca (HTTP ${search_status})`,
+      token_source,
+      search_strategy,
+      tip: 'Tente termos mais específicos ou verifique o token OAuth em /admin → Importar ML.',
+    })
+  }
+
+  // ── 3. Busca preço via /products/{catalog_id}/items ───────
+  // Mesma estratégia do cron que já funciona (catalog_items)
+  async function fetchPriceForProduct(catalogId: string): Promise<{
+    price: number | null, original_price: number | null,
+    thumbnail: string | null, permalink: string, in_stock: boolean
+  }> {
+    try {
+      const res = await fetch(`${ML_API}/products/${catalogId}/items?limit=3`, { headers })
+      if (!res.ok) return { price: null, original_price: null, thumbnail: null, permalink: `https://www.mercadolivre.com.br/p/${catalogId}`, in_stock: false }
+      const data: any = await res.json().catch(() => null)
+      const results: any[] = data?.results || data?.items || []
+      if (results.length === 0) return { price: null, original_price: null, thumbnail: null, permalink: `https://www.mercadolivre.com.br/p/${catalogId}`, in_stock: false }
+      const active = results.filter((r: any) => r.status !== 'closed' && r.status !== 'paused' && r.price)
+      const pool   = active.length > 0 ? active : results.filter((r: any) => r.price)
+      const best   = pool.sort((a: any, b: any) => (a.price || 0) - (b.price || 0))[0]
+      if (!best?.price) return { price: null, original_price: null, thumbnail: null, permalink: `https://www.mercadolivre.com.br/p/${catalogId}`, in_stock: false }
+      return {
+        price:          best.price,
+        original_price: best.original_price || null,
+        thumbnail:      best.thumbnail || null,
+        permalink:      best.permalink || `https://www.mercadolivre.com.br/p/${catalogId}`,
+        in_stock:       best.status !== 'closed' && best.status !== 'paused',
+      }
+    } catch {
+      return { price: null, original_price: null, thumbnail: null, permalink: `https://www.mercadolivre.com.br/p/${catalogId}`, in_stock: false }
+    }
+  }
+
+  // ── 3. Pega store_id do Mercado Livre ────────────────────
+  const mlStore = await DB.prepare(`SELECT id FROM stores WHERE slug = 'mercadolivre' AND is_active = 1 LIMIT 1`).first<{ id: number }>()
+  const storeId = mlStore?.id ?? 3
+
+  // ── 4. Detecta categoria automaticamente ─────────────────
+  function detectCategory(title: string, fallback: string): string {
+    const t = title.toLowerCase()
+    if (fallback !== 'outros' && fallback) return fallback
+    if (t.includes('iphone') || t.includes('galaxy') || t.includes('smartphone') || t.includes('celular')) return 'smartphones'
+    if (t.includes('notebook') || t.includes('macbook') || t.includes('laptop')) return 'notebooks'
+    if (t.includes('smart tv') || t.includes('televisor') || t.includes(' tv ') || t.includes('qled') || t.includes('oled')) return 'tv'
+    if (t.includes('fone') || t.includes('headphone') || t.includes('airpods') || t.includes('speaker') || t.includes('caixa de som')) return 'audio'
+    if (t.includes('playstation') || t.includes('xbox') || t.includes('nintendo') || t.includes('console') || t.includes('game')) return 'games'
+    if (t.includes('câmera') || t.includes('camera') || t.includes('drone') || t.includes('gopro')) return 'cameras'
+    if (t.includes('tablet') || t.includes('ipad')) return 'tablets'
+    if (t.includes('geladeira') || t.includes('fogão') || t.includes('máquina de lavar') || t.includes('microondas') || t.includes('ar condicionado')) return 'eletrodomesticos'
+    if (t.includes('perfume') || t.includes('eau de')) return 'perfumes'
+    return 'outros'
+  }
+
+  // ── 5. Importa cada resultado ────────────────────────────
+  const imported: any[] = []
+  const skipped:  any[] = []
+  const errors:   any[] = []
+
+  for (const item of mlResults) {
+    try {
+      const mlId  = item.id || ''
+      const title = item.name || mlId
+      const brand = item.brand || ''
+      const cat   = detectCategory(title, category)
+      const staticThumb = item.pictures?.[0]?.url || null
+
+      if (!mlId) { skipped.push({ title, reason: 'sem ID' }); continue }
+
+      // Busca preço via /products/{catalog_id}/items (mesma estratégia do cron)
+      const priceData = await fetchPriceForProduct(mlId)
+      await new Promise(r => setTimeout(r, 200))
+
+      const price     = priceData.price
+      const origPrice = priceData.original_price
+      const thumbnail = priceData.thumbnail || staticThumb
+      const permalink = priceData.permalink
+
+      if (!price) {
+        skipped.push({ title, reason: 'sem preço disponível no catálogo' })
+        continue
+      }
+
+      // Link de afiliado
+      const affiliate_url = `${permalink}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+
+      // Slug único
+      const slug = title.toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+        .substring(0, 80) + '-' + mlId.toLowerCase()
+
+      // Verifica duplicata
+      const existing = await DB.prepare(
+        `SELECT id FROM products WHERE ml_item_id = ? OR slug = ? LIMIT 1`
+      ).bind(mlId, slug).first<{ id: number }>()
+
+      if (existing) {
+        await DB.prepare(`
+          UPDATE products SET
+            affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP,
+            best_price = ?, image_url = COALESCE(NULLIF(image_url,''), ?),
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(affiliate_url, price, thumbnail, existing.id).run()
+        skipped.push({ title, reason: 'já existe — preço e afiliado atualizados', id: existing.id })
+        continue
+      }
+
+      // Insere produto novo
+      const ins = await DB.prepare(`
+        INSERT INTO products
+          (name, slug, brand, category, description, image_url,
+           ml_item_id, affiliate_url, affiliate_updated_at,
+           best_price, best_store_id, offer_count, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, '', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).bind(title, slug, brand, cat, thumbnail, mlId, affiliate_url, price, storeId).run()
+
+      const productId = ins.meta.last_row_id as number
+
+      // Cria offer
+      const discount  = origPrice && origPrice > price ? Math.round(((origPrice - price) / origPrice) * 100) : 0
+      const expiresAt = new Date(Date.now() + 6 * 3600 * 1000).toISOString()
+
+      await DB.prepare(`
+        INSERT INTO offers
+          (product_id, store_id, external_id, title, price, original_price,
+           discount_percent, free_shipping, in_stock, product_url, image_url, cache_expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+      `).bind(productId, storeId, mlId, title, price, origPrice || null, discount,
+              priceData.in_stock ? 1 : 0, affiliate_url, thumbnail, expiresAt).run()
+
+      // Atualiza category count
+      await DB.prepare(`UPDATE categories SET product_count = product_count + 1 WHERE slug = ?`)
+        .bind(cat).run().catch(() => {})
+
+      imported.push({ id: productId, title, price, original_price: origPrice, category: cat, affiliate_url, ml_id: mlId, thumbnail, in_stock: priceData.in_stock })
+
+    } catch (e: any) {
+      errors.push({ title: item.name || '?', error: e?.message || 'exception' })
+    }
+  }
+
+  return c.json({
+    ok: true,
+    token_source,
+    search_strategy,
+    search_status,
+    summary: {
+      found:    mlResults.length,
+      imported: imported.length,
+      skipped:  skipped.length,
+      errors:   errors.length,
+    },
+    imported,
+    skipped,
+    errors: errors.slice(0, 10),
+  })
+})
+
 // ── Rotas ML dentro do Admin (com auth) ──────────────────
 admin.route('/api/ml', ml)
 
@@ -6532,6 +6766,68 @@ async function renderMLImport(area) {
       </div>
 
       <!-- ══════════════════════════════════════════
+           BUSCAR E IMPORTAR POR KEYWORD (NOVO)
+      ══════════════════════════════════════════ -->
+      <div class="stat-card">
+        <div class="flex items-center gap-3 mb-4">
+          <span class="text-2xl">🔎</span>
+          <div>
+            <h3 class="font-bold text-slate-800 text-base">Buscar Produtos no ML e Importar</h3>
+            <p class="text-xs text-slate-500">Digite uma keyword, escolha a categoria, selecione os produtos e importe com link de afiliado gerado automaticamente.</p>
+          </div>
+        </div>
+
+        <div class="flex gap-3 mb-3 flex-wrap">
+          <input id="ml-kw-input" type="text"
+            placeholder="Ex: iPhone 15, Samsung Galaxy S24, Perfume..."
+            class="input flex-1 min-w-[200px]"
+            onkeydown="if(event.key==='Enter') searchMLKeyword()"/>
+          <select id="ml-kw-category" class="input w-44">
+            <option value="outros">🔠 Auto-detectar</option>
+            <option value="smartphones">📱 Smartphones</option>
+            <option value="notebooks">💻 Notebooks</option>
+            <option value="tv">📺 TVs & Smart TVs</option>
+            <option value="games">🎮 Games & Consoles</option>
+            <option value="audio">🎧 Áudio & Fones</option>
+            <option value="cameras">📷 Câmeras & Drones</option>
+            <option value="eletrodomesticos">🏠 Eletrodomésticos</option>
+            <option value="tablets">📟 Tablets & iPads</option>
+            <option value="perfumes">🌸 Perfumes</option>
+            <option value="moda-calcados">👟 Moda & Calçados</option>
+            <option value="outros">🔠 Outros</option>
+          </select>
+          <select id="ml-kw-limit" class="input w-24">
+            <option value="5">5 itens</option>
+            <option value="10" selected>10 itens</option>
+            <option value="20">20 itens</option>
+          </select>
+          <button onclick="searchMLKeyword()" id="btn-ml-kw" class="btn-primary flex items-center gap-2">
+            <span>🔍</span> Buscar
+          </button>
+        </div>
+
+        <!-- Resultados da busca -->
+        <div id="ml-kw-results" class="hidden mt-4 space-y-3">
+          <div class="flex items-center justify-between mb-2">
+            <p class="text-sm font-semibold text-slate-700" id="ml-kw-found"></p>
+            <div class="flex gap-2">
+              <button onclick="selectAllMLKw(true)"  class="text-xs px-2 py-1 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100">Selecionar todos</button>
+              <button onclick="selectAllMLKw(false)" class="text-xs px-2 py-1 bg-slate-100 text-slate-500 rounded-lg hover:bg-slate-200">Desmarcar todos</button>
+              <button onclick="importSelectedMLKw()" id="btn-ml-kw-import" class="btn-primary text-xs px-3 py-1.5 flex items-center gap-1">
+                <span>📥</span> Importar Selecionados
+              </button>
+            </div>
+          </div>
+          <div id="ml-kw-list" class="space-y-2"></div>
+        </div>
+
+        <!-- Log importação -->
+        <div id="ml-kw-log" class="hidden mt-4">
+          <div class="bg-slate-900 text-green-400 rounded-xl p-4 font-mono text-xs min-h-[80px] whitespace-pre-wrap overflow-auto max-h-[260px]" id="ml-kw-log-text">Aguardando...</div>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════
            IMPORTAR POR URL (método principal)
       ══════════════════════════════════════════ -->
       <div class="stat-card \${!connected ? 'opacity-60 pointer-events-none' : ''}">
@@ -6645,6 +6941,125 @@ MLB1234567890
 
     </div>
   \`
+}
+
+// ── Busca ML por keyword ──────────────────────────────────
+let _mlKwItems = [] // cache dos resultados da busca atual
+
+async function searchMLKeyword() {
+  const q     = document.getElementById('ml-kw-input')?.value?.trim()
+  const cat   = document.getElementById('ml-kw-category')?.value || 'outros'
+  const limit = document.getElementById('ml-kw-limit')?.value   || '10'
+  const btn   = document.getElementById('btn-ml-kw')
+  const res_el= document.getElementById('ml-kw-results')
+  const list  = document.getElementById('ml-kw-list')
+  const found = document.getElementById('ml-kw-found')
+  const log   = document.getElementById('ml-kw-log')
+  if (!q) { toast('Digite uma keyword para buscar.', 'error'); return }
+
+  btn.disabled = true
+  btn.innerHTML = '⏳ Buscando...'
+  res_el.classList.add('hidden')
+  log.classList.add('hidden')
+
+  const res = await api('POST', '/admin/api/affiliate-bot/import-search', { query: q, category: cat, limit: parseInt(limit) })
+
+  btn.disabled = false
+  btn.innerHTML = '<span>🔍</span> Buscar'
+
+  if (!res) { toast('Erro ao conectar com a API.', 'error'); return }
+
+  if (!res.ok) {
+    const logEl = document.getElementById('ml-kw-log')
+    const logTx = document.getElementById('ml-kw-log-text')
+    logEl.classList.remove('hidden')
+    logTx.textContent = [
+      '❌ ' + (res.error || 'Erro desconhecido'),
+      res.tip ? '💡 ' + res.tip : '',
+      res.token_source ? '🔑 Token: ' + res.token_source : '',
+    ].filter(Boolean).join('\\n')
+    return
+  }
+
+  // Mostra resultados — importados (já salvos) + novos para selecionar
+  const allItems = [
+    ...(res.imported || []).map(i => ({ ...i, _already: false, _saved: true })),
+    ...(res.skipped  || []).filter(s => s.id).map(s => ({ ...s, _already: true, _saved: true })),
+  ]
+
+  // Busca os resultados "crus" da API para montar o preview
+  // O endpoint já salvou os "imported" — mostramos o log
+  const log2 = document.getElementById('ml-kw-log')
+  const log2t = document.getElementById('ml-kw-log-text')
+
+  const imp = res.summary?.imported || 0
+  const skp = res.summary?.skipped  || 0
+  const err = res.summary?.errors   || 0
+
+  if (imp === 0 && skp === 0) {
+    log2.classList.remove('hidden')
+    log2t.textContent = [
+      '🔍 Estratégia: ' + (res.search_strategy || '—'),
+      '🔑 Token: ' + (res.token_source || 'none'),
+      '📦 Encontrados: ' + (res.summary?.found || 0),
+      imp === 0 ? '⚠️ Nenhum produto importado — sem preço ou sem ID nos resultados.' : '',
+      err > 0 ? '❌ Erros: ' + res.errors?.map((e:any) => e.error || e).join(', ') : '',
+    ].filter(Boolean).join('\\n')
+    log2.classList.remove('hidden')
+    res_el.classList.add('hidden')
+    return
+  }
+
+  // Monta lista de resultados importados
+  found.textContent = \`✅ \${imp} importados · \${skp} já existiam · \${err} erros  (Estratégia: \${res.search_strategy || '—'} · Token: \${res.token_source || 'none'})\`
+  _mlKwItems = res.imported || []
+
+  list.innerHTML = _mlKwItems.length === 0
+    ? \`<p class="text-sm text-slate-500">Todos os produtos já existiam no banco.</p>\`
+    : _mlKwItems.map((item, i) => \`
+      <div class="flex items-center gap-3 p-3 border border-slate-200 rounded-xl hover:border-green-400 transition-all bg-green-50/40">
+        <input type="checkbox" class="ml-kw-check w-4 h-4 accent-green-500" data-i="\${i}" checked/>
+        \${item.thumbnail ? \`<img src="\${item.thumbnail}" class="w-12 h-12 object-contain rounded-lg border border-slate-100 bg-white flex-shrink-0"/>\` : ''}
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-semibold text-slate-800 truncate">\${item.title}</p>
+          <div class="flex items-center gap-3 mt-0.5 flex-wrap">
+            <span class="text-sm font-bold text-green-600">R$ \${(item.price||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</span>
+            <span class="text-xs text-slate-400 font-mono">ID: \${item.ml_id}</span>
+            <span class="text-xs px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded-full font-medium">\${item.category}</span>
+          </div>
+          <a href="\${item.affiliate_url}" target="_blank" class="text-xs text-blue-500 hover:underline truncate block mt-0.5">🔗 \${(item.affiliate_url||'').substring(0,80)}...</a>
+        </div>
+        <span class="flex-shrink-0 text-xs font-bold text-green-600 bg-green-100 px-2 py-1 rounded-full">✅ Salvo</span>
+      </div>
+    \`).join('')
+
+  res_el.classList.remove('hidden')
+
+  // Também mostra os já existentes (skipped)
+  if (res.skipped?.length > 0) {
+    list.innerHTML += \`<div class="mt-3 border-t border-slate-100 pt-3">
+      <p class="text-xs font-semibold text-slate-500 mb-2">⏭️ Já existiam no banco (preço e afiliado atualizados):</p>
+      \${res.skipped.map((s:any) => \`<p class="text-xs text-slate-400 py-0.5">• \${s.title || s.reason || '—'} \${s.reason ? '— '+s.reason : ''}</p>\`).join('')}
+    </div>\`
+  }
+  if (res.errors?.length > 0) {
+    list.innerHTML += \`<div class="mt-2">
+      \${res.errors.map((e:any) => \`<p class="text-xs text-red-400">❌ \${e.title||'?'}: \${e.error||e}</p>\`).join('')}
+    </div>\`
+  }
+
+  toast(\`✅ \${imp} produtos importados do ML!\`, 'success')
+  setTimeout(() => loadSection('affiliate-bot'), 3000)
+}
+
+function selectAllMLKw(state) {
+  document.querySelectorAll('.ml-kw-check').forEach(cb => { (cb as HTMLInputElement).checked = state })
+}
+
+async function importSelectedMLKw() {
+  // Já foram importados no searchMLKeyword — este botão apenas confirma e recarrega
+  toast('Produtos já foram importados automaticamente ao buscar!', 'info')
+  setTimeout(() => loadSection('affiliate-bot'), 1500)
 }
 
 async function importMLByUrl() {
