@@ -25,7 +25,7 @@ type MLBindings = Bindings & {
 const ml = new Hono<{ Bindings: MLBindings }>()
 
 const PUBLISHER_ID = 'cfegdhabc31955'
-const MATT_TOOL    = '61674414'
+const MATT_TOOL    = '38524122'
 const ML_API       = 'https://api.mercadolibre.com'
 const APP_ID       = '3098423019766450'
 
@@ -446,79 +446,113 @@ ml.get('/token-debug', async (c) => {
   const appToken = await c.env.CACHE?.get('ml_app_token').catch(() => null)
   const refreshKV = await c.env.CACHE?.get('ml_refresh_token').catch(() => null)
 
-  // Tenta client_credentials ao vivo
-  let ccResult: any = null
+  // Limpa ml_app_token cacheado para forçar uso do OAuth
+  if (appToken) await c.env.CACHE?.delete('ml_app_token').catch(() => {})
+
+  // Testa OAUTH token diretamente (prioridade real)
+  let oauthTest: any = null
+  if (oauthKV) {
+    const r = await fetch(ML_API + '/items/MLB3990393083?attributes=id,title,price,permalink', {
+      headers: { 'Authorization': 'Bearer ' + oauthKV }
+    })
+    const body = await r.json().catch(() => null)
+    oauthTest = { status: r.status, title: (body as any)?.title?.substring(0,50), permalink: (body as any)?.permalink?.substring(0,80) }
+  }
+
+  // Testa client_credentials ao vivo
+  let ccTest: any = null
   if (secret) {
     const r = await fetch(ML_API + '/oauth/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ grant_type: 'client_credentials', client_id: appId, client_secret: secret }),
     })
-    ccResult = { status: r.status, body: await r.json().catch(() => null) }
-  }
-
-  // Tenta GET /items/{id} com o melhor token disponível
-  const token = appToken || oauthKV || ccResult?.body?.access_token
-  let itemTest: any = null
-  if (token) {
-    const r = await fetch(ML_API + '/items/MLB3990393083?attributes=id,title,price', {
-      headers: { 'Authorization': 'Bearer ' + token }
-    })
-    itemTest = { status: r.status, body: await r.json().catch(() => null) }
+    const body: any = await r.json().catch(() => null)
+    if (body?.access_token) {
+      const r2 = await fetch(ML_API + '/items/MLB3990393083?attributes=id,title,price,permalink', {
+        headers: { 'Authorization': 'Bearer ' + body.access_token }
+      })
+      const body2 = await r2.json().catch(() => null)
+      ccTest = { token_status: r.status, item_status: r2.status, title: (body2 as any)?.title?.substring(0,50) }
+    } else {
+      ccTest = { token_status: r.status, error: body }
+    }
   }
 
   return c.json({
-    has_secret:      !!secret,
+    app_token_kv_cleared: !!appToken,
     has_oauth_kv:    !!oauthKV,
-    has_app_token_kv: !!appToken,
     has_refresh_kv:  !!refreshKV,
-    app_id:          appId,
-    cc_result:       ccResult,
-    item_test:       itemTest,
+    has_secret:      !!secret,
+    oauth_test:      oauthTest,
+    cc_test:         ccTest,
   })
 })
 
 // ── POST /admin/api/ml/import-url ────────────────────────
 // Importa produtos a partir de URLs do ML (ou IDs diretos)
-// Body: { urls: string[], category?: string }
+// Body: { urls: string[], category?: string, names?: string[] }
 // Aceita:
-//   - https://www.mercadolivre.com.br/.../MLB1234567890-_JM
-//   - https://produto.mercadolivre.com.br/MLB-1234-titulo
+//   - https://produto.mercadolivre.com.br/MLB-1234-titulo-do-produto-_JM
 //   - https://www.mercadolivre.com.br/produto/p/MLB28965210
+//   - https://meli.la/XXXXX  (link encurtado do linkbuilder)
 //   - MLB1234567890  (ID direto)
+//
+// ESTRATÉGIA SEM API:
+//   A API ML /items/{id} exige OAuth com permissão read:catalog (403 sem ela).
+//   Este endpoint extrai o ID e o título da própria URL fornecida,
+//   monta o permalink canônico e gera o link afiliado sem nenhuma chamada à API ML.
+//   O título é extraído do slug da URL (ex: MLB-3990393083-apple-iphone-15-128gb → "apple iphone 15 128gb").
+//   Se o usuário passar { names: ["Nome do produto 1", ...] } os nomes serão usados diretamente.
 ml.post('/import-url', async (c) => {
   const body = await c.req.json().catch(() => ({})) as any
-  const urls: string[]     = Array.isArray(body.urls) ? body.urls : []
+  const urls: string[]       = Array.isArray(body.urls)  ? body.urls  : []
+  const names: string[]      = Array.isArray(body.names) ? body.names : []
   const categoryHint: string = body.category || 'outros'
 
   if (!urls.length) {
     return c.json({ error: 'Envie pelo menos uma URL ou ID no campo "urls".' }, 400)
   }
 
-  // getStoredToken tenta: OAuth KV → refresh_token → client_credentials
-  // client_credentials usa ML_SECRET (Cloudflare secret) — sem OAuth do usuario
-  const token = await getStoredToken(c.env)
-  if (!token) {
-    return c.json({
-      error: 'Sem token ML. Configure ML_SECRET no Cloudflare ou reconecte via /api/ml/auth.',
-      auth_url: '/api/ml/auth',
-    }, 401)
-  }
-
   const { DB } = c.env
 
-  // Extrai IDs únicos das URLs (resolve encurtadores antes de parsear)
-  const ids: string[] = []
-  const parseErrors: string[] = []
+  // Helper: extrai título legível do slug da URL
+  // "MLB-3990393083-apple-iphone-15-128gb-azul-_JM" → "Apple Iphone 15 128gb Azul"
+  function titleFromSlug(url: string): string {
+    try {
+      const path = new URL(url).pathname
+      // Pega a parte após o ID: /MLB-3990393083-apple-iphone-15-...
+      const m = path.match(/\/MLB-?\d+[-_](.+?)(?:-_JM|_JM|$)/i)
+      if (!m) return ''
+      return m[1]
+        .replace(/-/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .split(' ')
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ')
+    } catch { return '' }
+  }
+
+  // Helper: monta permalink canônico do produto
+  // MLB3990393083 → https://www.mercadolivre.com.br/p/MLB3990393083
+  function buildPermalink(mlId: string): string {
+    return `https://www.mercadolivre.com.br/p/${mlId}`
+  }
+
+  // Helper: monta link afiliado com rastreamento
+  function buildAffUrl(permalink: string): string {
+    return `${permalink}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+  }
 
   // Expande todas as entradas em linhas individuais
   const allLines: string[] = []
   for (const raw of urls) {
-    const lines = raw.split(new RegExp('[\n,]+')).map((l: string) => l.trim()).filter(Boolean)
+    const lines = raw.split(/[\n,]+/).map((l: string) => l.trim()).filter(Boolean)
     allLines.push(...lines)
   }
 
-  // Resolve encurtadores em paralelo (meli.la/xxx → URL real)
+  // Resolve encurtadores (meli.la/xxx → URL real)
   const resolvedLines = await Promise.all(
     allLines.map(async (line) => {
       if (line.startsWith('http') && isShortUrl(line)) {
@@ -528,81 +562,114 @@ ml.post('/import-url', async (c) => {
     })
   )
 
-  for (const line of resolvedLines) {
-    // Detecta URL de perfil de afiliado (/social/...) — erro explicativo
+  const parseErrors: string[] = []
+  let created = 0, updated = 0, skipped = 0
+  const details: any[] = []
+
+  for (let i = 0; i < resolvedLines.length; i++) {
+    const line = resolvedLines[i]
+
+    // Detecta URL de perfil de afiliado
     if (/mercadolivre\.com\.br\/social\//.test(line)) {
-      parseErrors.push(
-        `URL de PERFIL detectada (não é um produto): ${line.substring(0, 60)}...\n` +
-        `→ No linkbuilder, clique em "Gerar link" em cada produto e copie o link individual, não o link do seu perfil.`
-      )
+      parseErrors.push(`URL de perfil (não produto): ${line.substring(0, 60)}`)
       continue
     }
 
-    const id = extractMLBId(line)
-    if (id && !ids.includes(id)) {
-      ids.push(id)
-    } else if (!id) {
-      parseErrors.push(`Não foi possível extrair ID de: ${line.substring(0, 60)}`)
+    const mlId = extractMLBId(line)
+    if (!mlId) {
+      parseErrors.push(`ID não encontrado em: ${line.substring(0, 60)}`)
+      continue
+    }
+
+    // Nome: usa names[i] se fornecido, senão extrai do slug da URL
+    const nameFromUrl   = titleFromSlug(line.startsWith('http') ? line : '')
+    const productName   = (names[i] || nameFromUrl || mlId).trim()
+    const permalink     = buildPermalink(mlId)
+    const aff_url       = buildAffUrl(permalink)
+    const slug          = mlId.toLowerCase()
+
+    // Verifica se já existe pelo ml_item_id
+    const existing = await DB.prepare(
+      'SELECT id, name FROM products WHERE ml_item_id = ?'
+    ).bind(mlId).first<{ id: number; name: string }>()
+
+    if (existing) {
+      // Atualiza affiliate_url com o formato correto (matt_word)
+      await DB.prepare(`
+        UPDATE products
+        SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE ml_item_id = ?
+      `).bind(aff_url, mlId).run()
+      updated++
+      details.push({ ml_id: mlId, name: existing.name, action: 'updated', product_id: existing.id, affiliate_url: aff_url })
+      continue
+    }
+
+    // Verifica se existe produto sem ml_item_id mas com nome similar
+    // (produtos importados antes sem ID — tenta associar)
+    const bySlug = await DB.prepare(
+      'SELECT id, name FROM products WHERE slug = ? AND (ml_item_id IS NULL OR ml_item_id = \"\")'
+    ).bind(slug).first<{ id: number; name: string }>()
+
+    if (bySlug) {
+      await DB.prepare(`
+        UPDATE products
+        SET ml_item_id = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(mlId, aff_url, bySlug.id).run()
+      updated++
+      details.push({ ml_id: mlId, name: bySlug.name, action: 'updated', product_id: bySlug.id, affiliate_url: aff_url })
+      continue
+    }
+
+    // Cria novo produto com dados extraídos da URL
+    if (!productName || productName === mlId) {
+      // Sem nome — registra como pendente (bot vai tentar buscar nome depois)
+      skipped++
+      parseErrors.push(`Sem nome para ${mlId} — cole a URL completa com slug ou passe names[]`)
+      continue
+    }
+
+    try {
+      const res = await DB.prepare(`
+        INSERT INTO products
+          (name, slug, ml_item_id, affiliate_url, affiliate_updated_at,
+           best_price, is_active, category, created_at, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).bind(productName, slug, mlId, aff_url, categoryHint).run()
+
+      const newId = res.meta?.last_row_id as number
+      created++
+      details.push({ ml_id: mlId, name: productName, action: 'created', product_id: newId, affiliate_url: aff_url })
+    } catch (e: any) {
+      // Slug duplicado — tenta com sufixo do mlId
+      try {
+        const slugUniq = `${slug}-${mlId.toLowerCase()}`
+        const res = await DB.prepare(`
+          INSERT INTO products
+            (name, slug, ml_item_id, affiliate_url, affiliate_updated_at,
+             best_price, is_active, category, created_at, updated_at)
+          VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `).bind(productName, slugUniq, mlId, aff_url, categoryHint).run()
+        created++
+        details.push({ ml_id: mlId, name: productName, action: 'created', product_id: res.meta?.last_row_id, affiliate_url: aff_url })
+      } catch (e2: any) {
+        parseErrors.push(`Erro ao salvar ${mlId}: ${e2.message}`)
+      }
     }
   }
 
-  if (!ids.length) {
-    // Verifica se o erro foi por URL de perfil
-    const isProfileUrl = parseErrors.some(e => e.includes('URL de PERFIL'))
-    return c.json({
-      error: isProfileUrl
-        ? 'Você colou o link do seu PERFIL de afiliado, não o link de um produto.\nNo linkbuilder, clique em \'Gerar link\' em cada produto e copie o link gerado.'
-        : 'Nenhum ID válido encontrado nas URLs fornecidas.',
-      parse_errors: parseErrors,
-      hint: isProfileUrl ? 'profile_url' : 'invalid_url',
-    }, 400)
-  }
-
-  // Busca todos os items em lotes de 20 (multi-get)
-  const items = await fetchMLItemsMulti(ids, token)
-
-  let created = 0
-  let updated = 0
-  let skipped = 0
-  const details: any[] = []
-
-  for (const item of items) {
-    // Detecta categoria pelo category_id do item
-    const catSlug = Object.entries(ML_CATEGORIES)
-      .find(([, v]) => (item.category_id || '').startsWith(v.mlId.substring(0, 6)))?.[0]
-      || categoryHint
-
-    const { id, action } = await saveProductToDB(DB, item, catSlug)
-
-    if      (action === 'created') created++
-    else if (action === 'updated') updated++
-    else                           skipped++
-
-    details.push({
-      ml_id:      item.id,
-      name:       item.title,
-      price:      item.price,
-      category:   catSlug,
-      action,
-      product_id: id,
-    })
-
-    await new Promise(r => setTimeout(r, 50))
-  }
-
-  // IDs que não retornaram da API (inválidos ou não encontrados)
-  const returnedIds  = items.map((i: any) => i.id)
-  const notFoundIds  = ids.filter(id => !returnedIds.includes(id))
-
   return c.json({
-    ok:          true,
+    ok:           true,
     created,
     updated,
     skipped,
-    not_found:   notFoundIds,
+    not_found:    [],
     parse_errors: parseErrors,
-    items:       details,
-    message:     `${created} criados, ${updated} atualizados, ${skipped} ignorados${notFoundIds.length ? `, ${notFoundIds.length} IDs não encontrados` : ''}`,
+    items:        details,
+    message:      `${created} criados, ${updated} atualizados, ${skipped} ignorados` +
+                  (parseErrors.length ? ` — ${parseErrors.length} avisos` : ''),
+    note:         'Links gerados diretamente da URL (sem chamada à API ML)',
   })
 })
 

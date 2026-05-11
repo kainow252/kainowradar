@@ -1670,11 +1670,11 @@ admin.post('/api/affiliate-bot/apply', async (c) => {
 //   Fase 1: produtos COM ml_item_id -> GET /items/{id} -> permalink real
 //   Fase 2: produtos SEM ml_item_id -> GET /sites/MLB/search -> 1o match -> permalink
 //   Fallback: lista.mercadolivre.com.br/BUSCA?matt_word=... (rastreavel, sem produto especifico)
-// Link final: permalink?matt_word=PUBLISHER_ID&matt_tool=61674414&forceInApp=true
+// Link final: permalink?matt_word=PUBLISHER_ID&matt_tool=38524122&forceInApp=true
 admin.post('/api/affiliate-bot/run-all', async (c) => {
   const { DB, CACHE } = c.env
   const PUBLISHER_ID = 'cfegdhabc31955'
-  const MATT_TOOL    = '61674414'
+  const MATT_TOOL    = '38524122'
   const ML_API       = 'https://api.mercadolibre.com'
   const body: any = await c.req.json().catch(() => ({}))
   const LIMIT = Math.min(Math.max(parseInt(body.limit) || 50, 1), 100)
