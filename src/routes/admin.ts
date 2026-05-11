@@ -1746,9 +1746,9 @@ function renderAdminSPA(): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Admin — KainowRadar</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.tailwindcss.com"><\/script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"><\/script>
   <script>
     tailwind.config = {
       theme: {
@@ -1760,7 +1760,7 @@ function renderAdminSPA(): string {
         }
       }
     }
-  </script>
+  <\/script>
   <style>
     body { font-family: 'Inter', sans-serif; }
     .sidebar-link { @apply flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-slate-300 hover:bg-white/10 hover:text-white transition-all cursor-pointer; }
@@ -6149,7 +6149,7 @@ async function runBotAll() {
   if (!btn || !log || !logText) return
 
   btn.disabled = true
-  btn.innerHTML = '⏳ Rodando...'
+  btn.textContent = '⏳ Rodando...'
   log.classList.remove('hidden')
   logText.textContent = '🤖 Iniciando bot...'
 
@@ -6162,7 +6162,7 @@ async function runBotAll() {
   }
 
   const _total = (res.refreshed || 0) + (res.linked || 0) + (res.fallback || 0)
-  const _warn  = res.no_token ? '⚠️ Sem token OAuth ML — acesse Admin → Integrações → ML OAuth para autenticar.' : ''
+  const _warn  = res.no_token ? '⚠️ Sem token OAuth ML — acesse Admin → Integrações → ML OAuth.' : ''
   logText.textContent = [
     '✅ Bot finalizado!',
     _warn,
@@ -6196,13 +6196,13 @@ async function searchML() {
     resultsEl.innerHTML = '<div class="p-3 bg-orange-50 border border-orange-200 rounded-xl text-sm">'
       + '<p class="font-semibold text-orange-700 mb-1">⚠️ API de busca bloqueada</p>'
       + '<p class="text-orange-600 text-xs mb-2">' + (res.message || 'API retornou 403.') + '</p>'
-      + '<p class="text-slate-700 text-xs mb-2">Use <b>Importar ML → Importar por URL</b> para adicionar produtos reais.</p>'
-      + (su ? '<a href="' + su + '" target="_blank" class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg inline-block mt-1">🔗 Busca afiliada para "' + q + '"</a>' : '')
+      + '<p class="text-slate-700 text-xs mb-2">Use <b>Importar ML → Importar por URL</b>.</p>'
+      + (su ? '<a href="' + su + '" target="_blank" class="inline-flex items-center gap-1 text-xs text-orange-700 font-medium underline">🔗 Busca afiliada para &ldquo;' + q + '&rdquo;</a>' : '')
       + '</div>'
     return
   }
-  if (!res || !res.items || !res.items.length) {
-    resultsEl.innerHTML = '<p class="text-sm text-red-500">❌ Nenhum resultado para "' + q + '"</p>'
+  if (!res || !res.items?.length) {
+    resultsEl.innerHTML = \`<p class="text-sm text-red-500">❌ Nenhum resultado encontrado para "<b>\${q}</b>"</p>\`
     return
   }
 
@@ -6647,7 +6647,7 @@ async function importMLItem() {
     if (e.key === 'Enter') doLogin()
   })
 })()
-</script>
+<\/script>
 </body>
 </html>`
 }
