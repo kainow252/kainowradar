@@ -441,8 +441,8 @@ app.get('/', async (c) => {
         </div>
       </div>
 
-      <!-- Marquee linha 1 — esquerda para direita -->
-      <div class="stores-marquee-wrapper relative mb-2">
+      <!-- Marquee — única linha, esquerda para direita -->
+      <div class="stores-marquee-wrapper relative mb-4">
         <div class="stores-marquee-fade-left"></div>
         <div class="stores-marquee-fade-right"></div>
         <div class="stores-marquee" style="animation-duration:${Math.max(30, stores.length * 1.8)}s">
@@ -452,20 +452,6 @@ app.get('/', async (c) => {
           </div>
         </div>
       </div>
-
-      <!-- Marquee linha 2 — direita para esquerda (só aparece se >10 lojas) -->
-      ${stores.length > 10 ? `
-      <div class="stores-marquee-wrapper relative mb-4">
-        <div class="stores-marquee-fade-left"></div>
-        <div class="stores-marquee-fade-right"></div>
-        <div class="stores-marquee stores-marquee-reverse" style="animation-duration:${Math.max(35, stores.length * 2)}s">
-          <div class="stores-marquee-track flex gap-4 px-4 py-2">
-            ${storeCards([...stores].reverse())}
-            ${storeCards([...stores].reverse())}
-          </div>
-        </div>
-      </div>
-      ` : '<div class="mb-4"></div>'}
 
       <style>
         .stores-marquee-wrapper { overflow: hidden; position: relative; }
