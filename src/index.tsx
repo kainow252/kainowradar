@@ -410,7 +410,7 @@ app.get('/', async (c) => {
   // ── FAIXA DE LOJAS PARCEIRAS ──────────────────────────────
   // Duplica o array para criar loop contínuo no marquee
   const storeCards = (arr: typeof stores) => arr.map(s => `
-    <a href="/busca?q=${encodeURIComponent(s.name)}"
+    <a href="/categoria/${s.slug}"
        class="store-pill-card flex-shrink-0 flex flex-col items-center gap-1.5 w-20 cursor-pointer group"
        title="Comparar preços na ${s.name}">
       <div class="store-logo-circle w-14 h-14 rounded-2xl flex items-center justify-center border-2 shadow-sm transition-all duration-200 group-hover:scale-110 group-hover:shadow-md overflow-hidden"
@@ -689,6 +689,10 @@ app.get('/', async (c) => {
             <div class="w-1 h-7 bg-gradient-to-b from-blue-500 to-indigo-600 rounded-full"></div>
             <h2 class="text-xl font-black text-gray-900">Em Destaque</h2>
           </div>
+          <a href="/busca" class="inline-flex items-center gap-1.5 text-sm font-semibold text-blue-600 hover:text-blue-800 transition-colors group">
+            Ver todos os produtos
+            <svg class="w-4 h-4 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+          </a>
         </div>
         <div class="product-grid">
           ${featured.map(renderProductCard).join('')}
