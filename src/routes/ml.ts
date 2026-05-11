@@ -118,31 +118,33 @@ async function resolveShortUrl(url: string): Promise<string> {
 }
 
 // ── Helper: Extrai MLB ID de uma URL do Mercado Livre ─────
-// Suporta formatos:
-//   https://www.mercadolivre.com.br/produto/p/MLB12345678  (product page)
-//   https://produto.mercadolivre.com.br/MLB-1234-titulo    (listing URL)
-//   https://www.mercadolivre.com.br/.../MLB1234567890-_JM  (item URL)
-//   MLB1234567890  (ID direto)
+// Suporta formatos reais do ML:
+//   MLB3597223513                                        → ID direto
+//   https://...mercadolivre.com.br/celular/p/MLB28965210 → product page (/p/)
+//   https://produto.mercadolivre.com.br/MLB-3597223513-samsung-_JM → listing
+//   https://produto.mercadolivre.com.br/MLB-3635088353-iphone?partner_id=x
+//
+// IDs do ML têm 8+ dígitos CONTÍNUOS no path (sem hífen separando dígitos).
+// URLs com hífen no meio dos dígitos (ex: MLB-4411-4104) são inválidas → null.
 function extractMLBId(input: string): string | null {
   const s = input.trim()
 
-  // ID direto: MLB seguido de dígitos
+  // 1. ID direto (ex: MLB3597223513)
   if (/^MLB\d+$/i.test(s)) return s.toUpperCase()
 
-  // Formato produto: /p/MLB12345678 (product group ID — funciona em /items/{id})
-  const prodMatch = s.match(/\/p\/(MLB\d+)/i)
-  if (prodMatch) return prodMatch[1].toUpperCase()
+  // 2. /p/MLBXXXXXXXX — product group page
+  const pMatch = s.match(/\/p\/(MLB\d+)/i)
+  if (pMatch) return pMatch[1].toUpperCase()
 
-  // Formato listing URL: MLB-1234-567-titulo → MLB1234567
-  const listMatch = s.match(/\/(MLB)-?(\d+)-?(\d*)/i)
-  if (listMatch) {
-    const idStr = listMatch[2] + (listMatch[3] || '')
-    return `MLB${idStr}`
-  }
+  // 3. /MLB-XXXXXXXXXX-slug — ID contínuo com 8+ dígitos sem hífen no meio
+  //    Correto:  /MLB-3597223513-samsung → MLB3597223513
+  //    Inválido: /MLB-4411-4104-titulo  → null (dígitos separados por hífen = ID inválido)
+  const contMatch = s.match(/\/MLB-?(\d{8,})(?:[^0-9]|$)/i)
+  if (contMatch) return 'MLB' + contMatch[1]
 
-  // Formato direto no path: /MLB1234567890
-  const directMatch = s.match(/\b(MLB\d{6,})\b/i)
-  if (directMatch) return directMatch[1].toUpperCase()
+  // 4. MLB\d{8,} em qualquer posição (query string, fragmento, etc.)
+  const anyMatch = s.match(/\b(MLB\d{8,})\b/i)
+  if (anyMatch) return anyMatch[1].toUpperCase()
 
   return null
 }
