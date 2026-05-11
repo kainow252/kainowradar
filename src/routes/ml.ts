@@ -453,6 +453,15 @@ ml.post('/import-url', async (c) => {
   )
 
   for (const line of resolvedLines) {
+    // Detecta URL de perfil de afiliado (/social/...) — erro explicativo
+    if (/mercadolivre\.com\.br\/social\//.test(line)) {
+      parseErrors.push(
+        `URL de PERFIL detectada (não é um produto): ${line.substring(0, 60)}...\n` +
+        `→ No linkbuilder, clique em "Gerar link" em cada produto e copie o link individual, não o link do seu perfil.`
+      )
+      continue
+    }
+
     const id = extractMLBId(line)
     if (id && !ids.includes(id)) {
       ids.push(id)
@@ -462,9 +471,14 @@ ml.post('/import-url', async (c) => {
   }
 
   if (!ids.length) {
+    // Verifica se o erro foi por URL de perfil
+    const isProfileUrl = parseErrors.some(e => e.includes('URL de PERFIL'))
     return c.json({
-      error: 'Nenhum ID válido encontrado nas URLs fornecidas.',
+      error: isProfileUrl
+        ? 'Você colou o link do seu PERFIL de afiliado, não o link de um produto.\nNo linkbuilder, clique em \'Gerar link\' em cada produto e copie o link gerado.'
+        : 'Nenhum ID válido encontrado nas URLs fornecidas.',
       parse_errors: parseErrors,
+      hint: isProfileUrl ? 'profile_url' : 'invalid_url',
     }, 400)
   }
 

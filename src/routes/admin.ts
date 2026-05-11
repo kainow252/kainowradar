@@ -6472,9 +6472,22 @@ async function importMLByUrl() {
   }
 
   if (res.error) {
-    logText.textContent = \`❌ Erro: \${res.error}\${res.parse_errors?.length ? '\\n\\nErros de parse:\\n' + res.parse_errors.join('\\n') : ''}\`
+    // Erro específico: colou URL de perfil de afiliado
+    if (res.hint === 'profile_url') {
+      log.classList.add('hidden')
+      document.getElementById('ml-profile-warn')?.classList.remove('hidden')
+      btn.disabled = false
+      btn.innerHTML = '<span>📥</span> Importar URLs'
+      return
+    }
+    log.classList.remove('hidden')
+    document.getElementById('ml-profile-warn')?.classList.add('hidden')
+    logText.textContent = \`❌ Erro: \${res.error}\${res.parse_errors?.length ? '\\n\\nDetalhes:\\n' + res.parse_errors.join('\\n') : ''}\`
     return
   }
+
+  // Sucesso — esconde aviso de perfil se estava visível
+  document.getElementById('ml-profile-warn')?.classList.add('hidden')
 
   let output = \`✅ Importação concluída!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
