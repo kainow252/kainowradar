@@ -854,21 +854,11 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
           </div>
         </a>
 
-        <!-- Search Bar central (flex-1) -->
-        <div class="flex-1">
-          <div class="relative">
-            <svg class="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-            </svg>
-            <input type="text" id="search-input"
-              placeholder="Buscar produto, marca, modelo..."
-              class="w-full pl-10 pr-4 py-2.5 rounded-2xl border border-gray-200 bg-gray-50 hover:bg-white focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none text-sm transition-all"
-              autocomplete="off"
-              onkeydown="if(event.key==='Enter') searchProducts()"
-              oninput="debounceSearch(this.value)">
-            <div id="suggestions" class="hidden absolute top-full left-0 right-0 mt-1 bg-white rounded-2xl shadow-xl border border-gray-100 z-50 max-h-80 overflow-auto"></div>
-          </div>
-        </div>
+        <!-- search-input oculto: mantém funcionalidade JS sem aparecer no header -->
+        <input type="text" id="search-input" class="hidden" autocomplete="off"
+          onkeydown="if(event.key==='Enter') searchProducts()"
+          oninput="debounceSearch(this.value)">
+        <div id="suggestions" class="hidden absolute top-16 left-1/2 -translate-x-1/2 w-[600px] mt-1 bg-white rounded-2xl shadow-xl border border-gray-100 z-50 max-h-80 overflow-auto"></div>
 
         <!-- Alertas (ícone) — só desktop -->
         <a href="/meus-alertas" title="Meus Alertas"
