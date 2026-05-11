@@ -862,12 +862,12 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
             </svg>
             <input type="text" id="search-input"
               placeholder="Buscar produto, marca, modelo..."
-              class="w-full pl-10 pr-20 py-2.5 rounded-2xl border border-gray-200 bg-gray-50 hover:bg-white focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none text-sm transition-all"
+              class="w-full pl-10 pr-4 md:pr-20 py-2.5 rounded-2xl border border-gray-200 bg-gray-50 hover:bg-white focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none text-sm transition-all"
               autocomplete="off"
               onkeydown="if(event.key==='Enter') searchProducts()"
               oninput="debounceSearch(this.value)">
             <button onclick="searchProducts()"
-              class="absolute right-1.5 top-1/2 -translate-y-1/2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-1.5 rounded-xl transition-colors">
+              class="hidden md:block absolute right-1.5 top-1/2 -translate-y-1/2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-1.5 rounded-xl transition-colors">
               Buscar
             </button>
             <div id="suggestions" class="hidden absolute top-full left-0 right-0 mt-1 bg-white rounded-2xl shadow-xl border border-gray-100 z-50 max-h-80 overflow-auto"></div>
