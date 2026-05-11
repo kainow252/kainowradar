@@ -438,39 +438,41 @@ ml.get('/status', async (c) => {
   })
 })
 
-// ── GET /admin/api/ml/token-debug — Diagnóstico de token ─
+// ── GET /admin/api/ml/token-debug — Diagnóstico completo de token ─
 ml.get('/token-debug', async (c) => {
-  const appId  = (c.env as any).ML_APP_ID  || APP_ID
-  const secret = (c.env as any).ML_SECRET  || ''
-  const oauthKV  = await c.env.CACHE?.get('ml_access_token').catch(() => null)
-  const appToken = await c.env.CACHE?.get('ml_app_token').catch(() => null)
+  const appId     = (c.env as any).ML_APP_ID || APP_ID
+  const secret    = (c.env as any).ML_SECRET || ''
+  const oauthKV   = await c.env.CACHE?.get('ml_access_token').catch(() => null)
+  const appToken  = await c.env.CACHE?.get('ml_app_token').catch(() => null)
   const refreshKV = await c.env.CACHE?.get('ml_refresh_token').catch(() => null)
 
-  // Limpa ml_app_token cacheado para forçar uso do OAuth
+  // Limpa ml_app_token cacheado para forçar uso do OAuth neste teste
   if (appToken) await c.env.CACHE?.delete('ml_app_token').catch(() => {})
 
-  // Testa OAUTH token: /items/{id} + /sites/MLB/search
+  // Produto de teste: Perfume Riiffs (já existe no banco)
+  const TEST_ITEM_ID = 'MLB24045332'
+
+  // Testa token OAuth: /items/{id} (estratégia do scraper v3)
   let oauthTest: any = null
   if (oauthKV) {
     const headers = { 'Authorization': 'Bearer ' + oauthKV }
-    // Teste 1: item direto (costuma dar 403)
-    const r1 = await fetch(ML_API + '/items/MLB3990393083?attributes=id,title,price', { headers })
+    const r1 = await fetch(`${ML_API}/items/${TEST_ITEM_ID}?attributes=id,title,price,status`, { headers })
     const b1: any = await r1.json().catch(() => null)
-    // Teste 2: search por nome (deve funcionar com OAuth)
-    const r2 = await fetch(ML_API + '/sites/MLB/search?q=Riiffs+Imperial+Blue+100ml&limit=1', { headers })
-    const b2: any = await r2.json().catch(() => null)
-    const searchResult = b2?.results?.[0]
     oauthTest = {
-      item_status:   r1.status,
-      item_title:    b1?.title?.substring(0, 50),
-      search_status: r2.status,
-      search_total:  b2?.paging?.total,
-      search_price:  searchResult?.price,
-      search_title:  searchResult?.title?.substring(0, 50),
+      item_id:     TEST_ITEM_ID,
+      item_status: r1.status,
+      item_title:  b1?.title?.substring(0, 60) || null,
+      item_price:  b1?.price || null,
+      item_error:  r1.ok ? null : (b1?.message || b1?.error || `HTTP ${r1.status}`),
+      note:        r1.ok
+        ? '✅ OAuth funciona para /items/{id} — scraper deve atualizar preços'
+        : (r1.status === 403
+          ? '❌ 403: token expirado ou sem permissão. Acesse /api/ml/auth para renovar'
+          : `❌ HTTP ${r1.status}: ${b1?.message || 'erro desconhecido'}`),
     }
   }
 
-  // Testa client_credentials: token + search
+  // Testa client_credentials: /items/{id} (sem OAuth do usuário)
   let ccTest: any = null
   if (secret) {
     const tr = await fetch(ML_API + '/oauth/token', {
@@ -481,30 +483,133 @@ ml.get('/token-debug', async (c) => {
     const td: any = await tr.json().catch(() => null)
     if (td?.access_token) {
       const headers = { 'Authorization': 'Bearer ' + td.access_token }
-      const r1 = await fetch(ML_API + '/items/MLB3990393083?attributes=id,title,price', { headers })
-      const r2 = await fetch(ML_API + '/sites/MLB/search?q=Riiffs+Imperial+Blue+100ml&limit=1', { headers })
-      const b2: any = await r2.json().catch(() => null)
-      const searchResult = b2?.results?.[0]
+      const r1 = await fetch(`${ML_API}/items/${TEST_ITEM_ID}?attributes=id,title,price,status`, { headers })
+      const b1: any = await r1.json().catch(() => null)
       ccTest = {
-        token_status:  tr.status,
-        item_status:   r1.status,
-        search_status: r2.status,
-        search_total:  b2?.paging?.total,
-        search_price:  searchResult?.price,
-        search_title:  searchResult?.title?.substring(0, 50),
+        token_status: tr.status,
+        item_id:      TEST_ITEM_ID,
+        item_status:  r1.status,
+        item_title:   b1?.title?.substring(0, 60) || null,
+        item_price:   b1?.price || null,
+        item_error:   r1.ok ? null : (b1?.message || b1?.error || `HTTP ${r1.status}`),
+        note:         r1.ok
+          ? '✅ client_credentials funciona para /items/{id}'
+          : `❌ HTTP ${r1.status}: ${b1?.message || b1?.error || 'erro desconhecido'}`,
       }
     } else {
-      ccTest = { token_status: tr.status, error: td }
+      ccTest = { token_status: tr.status, error: td?.message || td?.error || 'falha ao obter token CC' }
+    }
+  }
+
+  // Testa refresh_token (renova silenciosamente sem redirect)
+  let refreshTest: any = null
+  if (refreshKV && secret) {
+    const tr = await fetch(ML_API + '/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token', client_id: appId,
+        client_secret: secret, refresh_token: refreshKV,
+      }),
+    })
+    const td: any = await tr.json().catch(() => null)
+    if (td?.access_token) {
+      // Salva novo token
+      await c.env.CACHE?.put('ml_access_token', td.access_token, { expirationTtl: td.expires_in || 21600 }).catch(() => {})
+      if (td.refresh_token) {
+        await c.env.CACHE?.put('ml_refresh_token', td.refresh_token, { expirationTtl: 86400 * 30 }).catch(() => {})
+      }
+      refreshTest = {
+        status:      tr.status,
+        renewed:     true,
+        expires_in:  td.expires_in,
+        note:        '✅ Token renovado via refresh_token e salvo no KV',
+      }
+    } else {
+      refreshTest = {
+        status:  tr.status,
+        renewed: false,
+        error:   td?.message || td?.error || 'falha ao renovar',
+        note:    tr.status === 400
+          ? '❌ refresh_token expirado ou inválido — precisa de novo OAuth em /api/ml/auth'
+          : `❌ HTTP ${tr.status}: ${td?.message || 'erro desconhecido'}`,
+      }
     }
   }
 
   return c.json({
-    app_token_kv_cleared: !!appToken,
-    has_oauth_kv:    !!oauthKV,
-    has_refresh_kv:  !!refreshKV,
-    has_secret:      !!secret,
-    oauth_test:      oauthTest,
-    cc_test:         ccTest,
+    // Estado do KV
+    has_oauth_kv:        !!oauthKV,
+    has_refresh_kv:      !!refreshKV,
+    has_secret:          !!secret,
+    app_token_cleared:   !!appToken,
+    // Resultados dos testes
+    oauth_test:          oauthTest,
+    cc_test:             ccTest,
+    refresh_test:        refreshTest,
+    // Diagnóstico geral
+    diagnosis: !oauthKV && !refreshKV
+      ? '⚠️ Sem token OAuth — acesse /api/ml/auth no browser para autorizar'
+      : refreshTest?.renewed
+        ? '✅ Token renovado — rode /admin/api/cron/run para atualizar preços'
+        : oauthTest?.item_status === 200
+          ? '✅ Token OK — rode /admin/api/cron/run para atualizar preços'
+          : '⚠️ Token pode estar expirado — acesse /api/ml/auth para renovar',
+    auth_url: 'https://kainowradar.com.br/api/ml/auth',
+  })
+})
+
+// ── POST /admin/api/ml/force-refresh — Renova token via refresh_token ─
+// Útil para renovar silenciosamente sem redirecionar o usuário
+ml.post('/force-refresh', async (c) => {
+  const appId   = (c.env as any).ML_APP_ID || APP_ID
+  const secret  = (c.env as any).ML_SECRET || ''
+  const refresh = await c.env.CACHE?.get('ml_refresh_token').catch(() => null)
+
+  if (!refresh) {
+    return c.json({
+      ok: false,
+      error: 'Sem refresh_token no KV — faça OAuth em /api/ml/auth primeiro',
+      auth_url: 'https://kainowradar.com.br/api/ml/auth',
+    }, 400)
+  }
+  if (!secret) {
+    return c.json({ ok: false, error: 'ML_SECRET não configurado nas secrets do Cloudflare' }, 500)
+  }
+
+  const tr = await fetch(ML_API + '/oauth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type:    'refresh_token',
+      client_id:     appId,
+      client_secret: secret,
+      refresh_token: refresh,
+    }),
+  })
+  const td: any = await tr.json().catch(() => null)
+
+  if (!td?.access_token) {
+    return c.json({
+      ok:    false,
+      error: td?.message || td?.error || `HTTP ${tr.status}`,
+      note:  tr.status === 400
+        ? 'refresh_token expirado — precisa de novo OAuth em /api/ml/auth'
+        : `HTTP ${tr.status}`,
+      auth_url: 'https://kainowradar.com.br/api/ml/auth',
+    }, tr.status === 400 ? 400 : 500)
+  }
+
+  // Salva novo access_token (e refresh_token se veio novo)
+  await c.env.CACHE?.put('ml_access_token', td.access_token, { expirationTtl: td.expires_in || 21600 }).catch(() => {})
+  if (td.refresh_token) {
+    await c.env.CACHE?.put('ml_refresh_token', td.refresh_token, { expirationTtl: 86400 * 30 }).catch(() => {})
+  }
+
+  return c.json({
+    ok:         true,
+    expires_in: td.expires_in,
+    note:       '✅ Token renovado e salvo no KV — rode /admin/api/cron/run para atualizar preços',
   })
 })
 
