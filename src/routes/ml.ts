@@ -3,6 +3,16 @@
 // APP ID: 3098423019766450
 // Publisher ID (Afiliados): cfegdhabc31955
 // ============================================================
+//
+// ESTRATÉGIA DE IMPORTAÇÃO:
+//  - /sites/MLB/search está bloqueado (403) para apps em modo legacy/test
+//  - /items/{id} ✅ funciona com token válido
+//  - Dois modos de importação:
+//    1. Via URL de produto: o usuário cola URLs do ML (painel de afiliados, browser, etc.)
+//       → extrai o ID do item da URL → busca /items/{id} → salva no D1
+//    2. Via seedIds por categoria: IDs reais manutenidos no código
+//       → busca /items/{ids} multi-get (até 20 por requisição) → salva no D1
+// ============================================================
 
 import { Hono } from 'hono'
 import type { Bindings } from '../types'
@@ -18,18 +28,55 @@ const PUBLISHER_ID = 'cfegdhabc31955'
 const ML_API       = 'https://api.mercadolibre.com'
 const APP_ID       = '3098423019766450'
 
-// Mapa de categorias ML → slug interno KainowRadar
-const ML_CATEGORIES: Record<string, { mlId: string; slug: string; name: string }> = {
-  smartphones:      { mlId: 'MLB1051', slug: 'smartphones',     name: 'Smartphones'      },
-  notebooks:        { mlId: 'MLB1648', slug: 'notebooks',        name: 'Notebooks'         },
-  tv:               { mlId: 'MLB1000', slug: 'tv',               name: 'TVs & Smart TVs'   },
-  games:            { mlId: 'MLB1144', slug: 'games',            name: 'Games & Consoles'  },
-  audio:            { mlId: 'MLB1003', slug: 'audio',            name: 'Áudio & Fones'     },
-  cameras:          { mlId: 'MLB1008', slug: 'cameras',          name: 'Câmeras & Drones'  },
-  eletrodomesticos: { mlId: 'MLB1574', slug: 'eletrodomesticos', name: 'Eletrodomésticos'  },
-  tablets:          { mlId: 'MLB1009', slug: 'tablets',          name: 'Tablets & iPads'   },
-  informatica:      { mlId: 'MLB1649', slug: 'informatica',      name: 'Informática'       },
-  'moda-calcados':  { mlId: 'MLB1430', slug: 'moda-calcados',    name: 'Moda & Calçados'   },
+// ── Mapa de categorias ML ─────────────────────────────────
+// seedIds: IDs reais do ML — use /admin/api/ml/import-url para adicionar mais
+// Limpe os IDs inválidos e adicione reais via painel de afiliados do ML
+const ML_CATEGORIES: Record<string, {
+  mlId: string
+  slug: string
+  name: string
+  seedIds: string[]  // IDs REAIS — adicionados via import-url ou manualmente
+}> = {
+  smartphones: {
+    mlId: 'MLB1051', slug: 'smartphones', name: 'Smartphones',
+    seedIds: [],  // Adicione via /admin → Importar ML → "Importar por URL"
+  },
+  notebooks: {
+    mlId: 'MLB1648', slug: 'notebooks', name: 'Notebooks',
+    seedIds: [],
+  },
+  tv: {
+    mlId: 'MLB1000', slug: 'tv', name: 'TVs & Smart TVs',
+    seedIds: [],
+  },
+  games: {
+    mlId: 'MLB1144', slug: 'games', name: 'Games & Consoles',
+    seedIds: [],
+  },
+  audio: {
+    mlId: 'MLB1003', slug: 'audio', name: 'Áudio & Fones',
+    seedIds: [],
+  },
+  cameras: {
+    mlId: 'MLB1008', slug: 'cameras', name: 'Câmeras & Drones',
+    seedIds: [],
+  },
+  eletrodomesticos: {
+    mlId: 'MLB1574', slug: 'eletrodomesticos', name: 'Eletrodomésticos',
+    seedIds: [],
+  },
+  tablets: {
+    mlId: 'MLB1009', slug: 'tablets', name: 'Tablets & iPads',
+    seedIds: [],
+  },
+  informatica: {
+    mlId: 'MLB1649', slug: 'informatica', name: 'Informática',
+    seedIds: [],
+  },
+  'moda-calcados': {
+    mlId: 'MLB1430', slug: 'moda-calcados', name: 'Moda & Calçados',
+    seedIds: [],
+  },
 }
 
 // ── Helper: Gera slug ─────────────────────────────────────
@@ -43,6 +90,36 @@ function slugify(text: string): string {
     .substring(0, 80)
 }
 
+// ── Helper: Extrai MLB ID de uma URL do Mercado Livre ─────
+// Suporta formatos:
+//   https://www.mercadolivre.com.br/produto/p/MLB12345678  (product page)
+//   https://produto.mercadolivre.com.br/MLB-1234-titulo    (listing URL)
+//   https://www.mercadolivre.com.br/.../MLB1234567890-_JM  (item URL)
+//   MLB1234567890  (ID direto)
+function extractMLBId(input: string): string | null {
+  const s = input.trim()
+
+  // ID direto: MLB seguido de dígitos
+  if (/^MLB\d+$/i.test(s)) return s.toUpperCase()
+
+  // Formato produto: /p/MLB12345678 (product group ID — funciona em /items/{id})
+  const prodMatch = s.match(/\/p\/(MLB\d+)/i)
+  if (prodMatch) return prodMatch[1].toUpperCase()
+
+  // Formato listing URL: MLB-1234-567-titulo → MLB1234567
+  const listMatch = s.match(/\/(MLB)-?(\d+)-?(\d*)/i)
+  if (listMatch) {
+    const idStr = listMatch[2] + (listMatch[3] || '')
+    return `MLB${idStr}`
+  }
+
+  // Formato direto no path: /MLB1234567890
+  const directMatch = s.match(/\b(MLB\d{6,})\b/i)
+  if (directMatch) return directMatch[1].toUpperCase()
+
+  return null
+}
+
 // ── Helper: Pega token do KV (com auto-refresh) ───────────
 async function getStoredToken(env: MLBindings): Promise<string | null> {
   if (!env.CACHE) return null
@@ -50,7 +127,6 @@ async function getStoredToken(env: MLBindings): Promise<string | null> {
     const token = await env.CACHE.get('ml_access_token')
     if (token) return token
 
-    // Tenta refresh se tiver refresh_token
     const refreshToken = await env.CACHE.get('ml_refresh_token')
     if (!refreshToken) return null
 
@@ -71,7 +147,6 @@ async function getStoredToken(env: MLBindings): Promise<string | null> {
     const data: any = await res.json()
     if (!data.access_token) return null
 
-    // Salva novo token
     await env.CACHE.put('ml_access_token',  data.access_token,          { expirationTtl: data.expires_in || 21600 })
     await env.CACHE.put('ml_refresh_token', data.refresh_token || '',   { expirationTtl: 86400 * 30 })
     await env.CACHE.put('ml_user_id',       String(data.user_id || ''), { expirationTtl: 86400 * 30 })
@@ -81,36 +156,14 @@ async function getStoredToken(env: MLBindings): Promise<string | null> {
   }
 }
 
-// ── Helper: Busca produtos por categoria ─────────────────
-async function fetchMLProducts(categoryId: string, token: string, offset = 0, limit = 50): Promise<{ items: any[]; error?: string }> {
-  try {
-    const url = `${ML_API}/sites/MLB/search?category=${categoryId}&limit=${limit}&offset=${offset}&sort=relevance`
-    const res = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'User-Agent':    'KainowRadar/1.0',
-        'Accept':        'application/json',
-      },
-    })
-    if (!res.ok) {
-      const txt = await res.text()
-      return { items: [], error: `API ${res.status}: ${txt.substring(0, 100)}` }
-    }
-    const data: any = await res.json()
-    return { items: data.results || [] }
-  } catch (e: any) {
-    return { items: [], error: e.message }
-  }
-}
-
-// ── Helper: Busca detalhes de item ────────────────────────
+// ── Helper: Busca detalhes de um item via /items/{id} ─────
 async function fetchMLItem(itemId: string, token: string): Promise<any | null> {
   try {
     const res = await fetch(`${ML_API}/items/${itemId}`, {
       headers: {
         'Authorization': `Bearer ${token}`,
-        'User-Agent':    'KainowRadar/1.0',
         'Accept':        'application/json',
+        'User-Agent':    'KainowRadar/1.0',
       },
     })
     if (!res.ok) return null
@@ -120,26 +173,65 @@ async function fetchMLItem(itemId: string, token: string): Promise<any | null> {
   }
 }
 
-// ── Helper: Salva produto no D1 ──────────────────────────
+// ── Helper: Multi-get de items (até 20 IDs por chamada) ──
+// Endpoint: GET /items?ids=MLB1,MLB2,...  ← ✅ funciona com token
+async function fetchMLItemsMulti(ids: string[], token: string): Promise<any[]> {
+  if (!ids.length) return []
+  // ML suporta no máximo 20 IDs por chamada
+  const chunks: string[][] = []
+  for (let i = 0; i < ids.length; i += 20) {
+    chunks.push(ids.slice(i, i + 20))
+  }
+
+  const results: any[] = []
+  for (const chunk of chunks) {
+    try {
+      const url = `${ML_API}/items?ids=${chunk.join(',')}`
+      const res = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept':        'application/json',
+          'User-Agent':    'KainowRadar/1.0',
+        },
+      })
+      if (!res.ok) continue
+      const data: any[] = await res.json()
+      // Formato: [{ code: 200, body: { id, title, price, ... } }, ...]
+      for (const entry of data) {
+        if (entry.code === 200 && entry.body) {
+          results.push(entry.body)
+        }
+      }
+    } catch { /* ignora chunk com erro */ }
+    // Pausa entre chunks para não throttle
+    if (chunks.length > 1) await new Promise(r => setTimeout(r, 100))
+  }
+  return results
+}
+
+// ── Helper: Salva produto no D1 ───────────────────────────
 async function saveProductToDB(
   DB: D1Database,
   item: any,
   categorySlug: string,
 ): Promise<{ id: number | null; action: 'created' | 'updated' | 'skipped' }> {
   try {
-    const mlId       = item.id
-    const name       = (item.title || '').trim()
+    const mlId = item.id
+    const name = (item.title || '').trim()
     if (!name || !mlId) return { id: null, action: 'skipped' }
 
-    const brand      = item.attributes?.find((a: any) => a.id === 'BRAND')?.value_name || ''
-    const ean        = item.attributes?.find((a: any) => a.id === 'GTIN')?.value_name  || ''
-    const slug       = slugify(name)
-    const price      = item.price || 0
-    const image      = (item.thumbnail || '').replace('-I.jpg', '-O.jpg')
-    const permalink  = item.permalink || ''
-    const aff_url    = permalink ? `${permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow` : ''
+    const brand     = item.attributes?.find((a: any) => a.id === 'BRAND')?.value_name || ''
+    const ean       = item.attributes?.find((a: any) => a.id === 'GTIN')?.value_name  || ''
+    const slug      = slugify(name)
+    const price     = item.price || 0
+    // Thumbnail em resolução maior: substitui -I.jpg por -O.jpg
+    const image     = (item.thumbnail || '').replace('-I.jpg', '-O.jpg')
+    const permalink = item.permalink || ''
+    const aff_url   = permalink
+      ? `${permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`
+      : ''
 
-    // Já existe pelo ml_item_id?
+    // Atualiza se já existe pelo ml_item_id
     const existing = await DB.prepare(
       'SELECT id FROM products WHERE ml_item_id = ?'
     ).bind(mlId).first<{ id: number }>()
@@ -155,7 +247,7 @@ async function saveProductToDB(
       return { id: existing.id, action: 'updated' }
     }
 
-    // Slug único?
+    // Garante slug único
     const slugExists = await DB.prepare(
       'SELECT id FROM products WHERE slug = ?'
     ).bind(slug).first<{ id: number }>()
@@ -189,18 +281,17 @@ async function saveProductToDB(
 }
 
 // ════════════════════════════════════════════════════════════
-// ROTAS PÚBLICAS (sem auth admin)
+// PKCE HELPERS (OAuth2 Authorization Code + PKCE)
 // ════════════════════════════════════════════════════════════
 
-// ── Helpers PKCE ─────────────────────────────────────────
 function base64urlEncode(buf: ArrayBuffer): string {
   return btoa(String.fromCharCode(...new Uint8Array(buf)))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
 }
 
 async function generatePKCE(): Promise<{ verifier: string; challenge: string }> {
-  // code_verifier: 64 bytes aleatórios → base64url (resultado ~86 chars, dentro do limite 43-128)
-  const raw     = crypto.getRandomValues(new Uint8Array(64))
+  // code_verifier: 64 bytes aleatórios → base64url (~86 chars, limite ML: 43-128)
+  const raw      = crypto.getRandomValues(new Uint8Array(64))
   const verifier = base64urlEncode(raw.buffer as ArrayBuffer)
   // code_challenge: SHA-256 do verifier → base64url
   const encoded  = new TextEncoder().encode(verifier)
@@ -209,15 +300,17 @@ async function generatePKCE(): Promise<{ verifier: string; challenge: string }> 
   return { verifier, challenge }
 }
 
-// ── GET /api/ml/auth — Inicia OAuth2 Authorization Code + PKCE ──
+// ════════════════════════════════════════════════════════════
+// ROTAS PÚBLICAS
+// ════════════════════════════════════════════════════════════
+
+// ── GET /api/ml/auth — Inicia OAuth2 + PKCE ──────────────
 ml.get('/auth', async (c) => {
   const appId       = c.env.ML_APP_ID || APP_ID
   const redirectUri = 'https://kainowradar.com.br/api/ml-callback'
 
-  // Gera PKCE
   const { verifier, challenge } = await generatePKCE()
 
-  // Salva code_verifier no KV por 10 minutos (tempo máximo do code ML)
   if (c.env.CACHE) {
     await c.env.CACHE.put('ml_pkce_verifier', verifier, { expirationTtl: 600 })
   }
@@ -231,8 +324,7 @@ ml.get('/auth', async (c) => {
   return c.redirect(url)
 })
 
-// ── GET /api/ml-callback (via ml.ts — não usado diretamente, ver index.tsx) ──
-// Este handler existe como fallback; o handler principal está em index.tsx
+// ── GET /api/ml/callback — fallback (handler real em index.tsx) ──
 ml.get('/callback', async (c) => {
   return c.html(`<h2>ℹ️ Use /api/ml-callback (sem /api/ml/)</h2>`)
 })
@@ -266,7 +358,7 @@ ml.post('/webhook', async (c) => {
 })
 
 // ════════════════════════════════════════════════════════════
-// ROTAS ADMIN (passam pelo middleware de auth do admin.ts)
+// ROTAS ADMIN (auth via middleware do admin.ts)
 // ════════════════════════════════════════════════════════════
 
 // ── GET /admin/api/ml/status ──────────────────────────────
@@ -285,15 +377,111 @@ ml.get('/status', async (c) => {
   })
 })
 
-// ── POST /admin/api/ml/import — Importa por categoria ────
+// ── POST /admin/api/ml/import-url ────────────────────────
+// Importa produtos a partir de URLs do ML (ou IDs diretos)
+// Body: { urls: string[], category?: string }
+// Aceita:
+//   - https://www.mercadolivre.com.br/.../MLB1234567890-_JM
+//   - https://produto.mercadolivre.com.br/MLB-1234-titulo
+//   - https://www.mercadolivre.com.br/produto/p/MLB28965210
+//   - MLB1234567890  (ID direto)
+ml.post('/import-url', async (c) => {
+  const body = await c.req.json().catch(() => ({})) as any
+  const urls: string[]     = Array.isArray(body.urls) ? body.urls : []
+  const categoryHint: string = body.category || 'outros'
+
+  if (!urls.length) {
+    return c.json({ error: 'Envie pelo menos uma URL ou ID no campo "urls".' }, 400)
+  }
+
+  const token = await getStoredToken(c.env)
+  if (!token) {
+    return c.json({
+      error: 'Token ML não encontrado. Conecte ao ML primeiro.',
+      auth_url: '/api/ml/auth',
+    }, 401)
+  }
+
+  const { DB } = c.env
+
+  // Extrai IDs únicos das URLs
+  const ids: string[] = []
+  const parseErrors: string[] = []
+  for (const raw of urls) {
+    const lines = raw.split(/[\n,]+/).map(l => l.trim()).filter(Boolean)
+    for (const line of lines) {
+      const id = extractMLBId(line)
+      if (id && !ids.includes(id)) {
+        ids.push(id)
+      } else if (!id) {
+        parseErrors.push(`Não foi possível extrair ID de: ${line.substring(0, 60)}`)
+      }
+    }
+  }
+
+  if (!ids.length) {
+    return c.json({
+      error: 'Nenhum ID válido encontrado nas URLs fornecidas.',
+      parse_errors: parseErrors,
+    }, 400)
+  }
+
+  // Busca todos os items em lotes de 20 (multi-get)
+  const items = await fetchMLItemsMulti(ids, token)
+
+  let created = 0
+  let updated = 0
+  let skipped = 0
+  const details: any[] = []
+
+  for (const item of items) {
+    // Detecta categoria pelo category_id do item
+    const catSlug = Object.entries(ML_CATEGORIES)
+      .find(([, v]) => (item.category_id || '').startsWith(v.mlId.substring(0, 6)))?.[0]
+      || categoryHint
+
+    const { id, action } = await saveProductToDB(DB, item, catSlug)
+
+    if      (action === 'created') created++
+    else if (action === 'updated') updated++
+    else                           skipped++
+
+    details.push({
+      ml_id:      item.id,
+      name:       item.title,
+      price:      item.price,
+      category:   catSlug,
+      action,
+      product_id: id,
+    })
+
+    await new Promise(r => setTimeout(r, 50))
+  }
+
+  // IDs que não retornaram da API (inválidos ou não encontrados)
+  const returnedIds  = items.map((i: any) => i.id)
+  const notFoundIds  = ids.filter(id => !returnedIds.includes(id))
+
+  return c.json({
+    ok:          true,
+    created,
+    updated,
+    skipped,
+    not_found:   notFoundIds,
+    parse_errors: parseErrors,
+    items:       details,
+    message:     `${created} criados, ${updated} atualizados, ${skipped} ignorados${notFoundIds.length ? `, ${notFoundIds.length} IDs não encontrados` : ''}`,
+  })
+})
+
+// ── POST /admin/api/ml/import — Importa por seedIds de categoria ──
+// Usa os seedIds hardcoded em ML_CATEGORIES — requer IDs reais válidos
 ml.post('/import', async (c) => {
   const { DB } = c.env
   const body   = await c.req.json().catch(() => ({}))
   const category: string = (body as any).category || 'smartphones'
-  const limit: number    = Math.min(Number((body as any).limit)  || 50, 50)
-  const offset: number   = Number((body as any).offset) || 0
+  const limit: number    = Math.min(Number((body as any).limit) || 50, 200)
 
-  // Resolve token
   const token = await getStoredToken(c.env)
   if (!token) {
     return c.json({
@@ -315,41 +503,47 @@ ml.post('/import', async (c) => {
   let totalCreated = 0
   let totalUpdated = 0
   let totalSkipped = 0
+  let totalNotFound = 0
   const errors: string[] = []
 
   for (const cat of categoriesToImport) {
-    const { items, error: fetchErr } = await fetchMLProducts(cat.mlId, token, offset, limit)
+    const idsToFetch = cat.seedIds.slice(0, limit)
+    if (!idsToFetch.length) {
+      errors.push(`${cat.slug}: nenhum seedId configurado — use "Importar por URL" para adicionar produtos`)
+      continue
+    }
 
-    if (fetchErr) {
-      errors.push(`${cat.slug}: ${fetchErr}`)
-      continue
-    }
-    if (!items.length) {
-      errors.push(`${cat.slug}: nenhum resultado`)
-      continue
-    }
+    const items = await fetchMLItemsMulti(idsToFetch, token)
+
+    const returnedIds  = items.map((i: any) => i.id)
+    const notFoundHere = idsToFetch.filter(id => !returnedIds.includes(id))
+    totalNotFound += notFoundHere.length
 
     for (const item of items) {
       const { action } = await saveProductToDB(DB, item, cat.slug)
       if      (action === 'created') totalCreated++
       else if (action === 'updated') totalUpdated++
       else                           totalSkipped++
-
       await new Promise(r => setTimeout(r, 40))
+    }
+
+    if (notFoundHere.length) {
+      errors.push(`${cat.slug}: ${notFoundHere.length} IDs não encontrados no ML`)
     }
   }
 
   return c.json({
-    ok:      true,
-    created: totalCreated,
-    updated: totalUpdated,
-    skipped: totalSkipped,
-    errors:  errors.slice(0, 5),
-    message: `${totalCreated} criados, ${totalUpdated} atualizados, ${totalSkipped} ignorados`,
+    ok:        true,
+    created:   totalCreated,
+    updated:   totalUpdated,
+    skipped:   totalSkipped,
+    not_found: totalNotFound,
+    errors:    errors.slice(0, 10),
+    message:   `${totalCreated} criados, ${totalUpdated} atualizados, ${totalSkipped} ignorados`,
   })
 })
 
-// ── POST /admin/api/ml/import-item — Item por ID ─────────
+// ── POST /admin/api/ml/import-item — Item único por ID ───
 ml.post('/import-item', async (c) => {
   const { ml_id } = await c.req.json().catch(() => ({})) as any
   if (!ml_id) return c.json({ error: 'ml_id obrigatório' }, 400)
@@ -357,11 +551,14 @@ ml.post('/import-item', async (c) => {
   const { DB } = c.env
   const token  = await getStoredToken(c.env)
   if (!token) {
-    return c.json({ error: 'Token ML não encontrado. Autorize primeiro em "Conectar ao ML".', auth_url: `/api/ml/auth` }, 401)
+    return c.json({
+      error: 'Token ML não encontrado. Autorize primeiro em "Conectar ao ML".',
+      auth_url: `/api/ml/auth`,
+    }, 401)
   }
 
   const item = await fetchMLItem(ml_id, token)
-  if (!item) return c.json({ error: `Item ${ml_id} não encontrado` }, 404)
+  if (!item) return c.json({ error: `Item ${ml_id} não encontrado ou inválido` }, 404)
 
   const catSlug = Object.entries(ML_CATEGORIES)
     .find(([, v]) => (item.category_id || '').startsWith(v.mlId.substring(0, 6)))?.[0] || 'outros'
@@ -369,15 +566,16 @@ ml.post('/import-item', async (c) => {
   const { id, action } = await saveProductToDB(DB, item, catSlug)
 
   return c.json({
-    ok:          true,
+    ok:            true,
     action,
-    product_id:  id,
-    ml_id:       item.id,
-    name:        item.title,
-    price:       item.price,
+    product_id:    id,
+    ml_id:         item.id,
+    name:          item.title,
+    price:         item.price,
+    category:      catSlug,
     affiliate_url: `${item.permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`,
   })
 })
 
 export default ml
-export { ML_CATEGORIES }
+export { ML_CATEGORIES, extractMLBId }
