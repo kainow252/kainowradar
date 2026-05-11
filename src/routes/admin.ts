@@ -6248,13 +6248,16 @@ async function runBotAll() {
     ? '⚠️ AVISO: sem token OAuth ML — preços e IDs podem estar desatualizados.\n   Acesse Admin → Integrações → ML OAuth para autenticar.\n'
     : ''
 
-  logText.textContent = \`✅ Bot finalizado!\n\${_noTokenWarn}
-📦 Total processados : \${_total}
-🔄 Preços atualizados: \${res.refreshed || 0}  (produtos COM ml_item_id → /items/{id})
-🔗 Novos links       : \${res.linked || 0}   (produtos SEM id → encontrados no search)
-🔍 Link de busca     : \${res.fallback || 0}  (fallback — search bloqueou ou sem resultado)
-\${res.errors?.length ? '\\n⚠ Erros: ' + res.errors.join(' | ') : ''}
-\${res.message || ''}\`
+  logText.textContent = [
+    '✅ Bot finalizado!',
+    _noTokenWarn,
+    '📦 Total processados : ' + _total,
+    '🔄 Preços atualizados: ' + (res.refreshed || 0) + '  (COM ml_item_id → /items/{id})',
+    '🔗 Novos links       : ' + (res.linked   || 0) + '   (SEM id → encontrados no search)',
+    '🔍 Link de busca     : ' + (res.fallback  || 0) + '  (fallback — search bloqueou)',
+    res.errors && res.errors.length ? '⚠ Erros: ' + res.errors.join(' | ') : '',
+    res.message || '',
+  ].filter(Boolean).join('\n')
 
   btn.disabled = false
   btn.innerHTML = '<span>▶</span> Rodar Bot (próximos 30 pendentes)'
