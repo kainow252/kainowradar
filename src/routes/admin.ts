@@ -6318,37 +6318,59 @@ async function renderMLImport(area) {
     { id: 'moda-calcados',    label: '👟 Moda & Calçados'     },
   ]
 
+  const connected = status?.connected === true
+
   area.innerHTML = \`
     <div class="section space-y-6">
 
       <!-- Status da conexão -->
       <div class="stat-card">
-        <div class="flex items-center gap-4">
-          <div class="w-14 h-14 bg-yellow-400 rounded-2xl flex items-center justify-center text-2xl shadow-md">🟡</div>
-          <div class="flex-1">
+        <div class="flex items-center gap-4 flex-wrap">
+          <div class="w-14 h-14 bg-yellow-400 rounded-2xl flex items-center justify-center text-2xl shadow-md flex-shrink-0">🟡</div>
+          <div class="flex-1 min-w-0">
             <h3 class="font-bold text-slate-800 text-lg">Mercado Livre API</h3>
-            <p class="text-sm text-slate-500">APP ID: <code class="bg-slate-100 px-1.5 py-0.5 rounded font-mono text-xs">\${status?.app_id || '3098423019766450'}</code></p>
+            <p class="text-sm text-slate-500">APP ID: <code class="bg-slate-100 px-1.5 py-0.5 rounded font-mono text-xs">3098423019766450</code></p>
             <p class="text-sm text-slate-500">Publisher ID: <code class="bg-slate-100 px-1.5 py-0.5 rounded font-mono text-xs">cfegdhabc31955</code></p>
           </div>
-          <div class="text-right">
-            \${status?.connected
-              ? \`<span class="badge-green text-sm px-3 py-1.5">✅ Conectado</span>\`
-              : \`<span class="badge-yellow text-sm px-3 py-1.5">⚡ Client Credentials</span>\`
+          <div class="text-right flex-shrink-0">
+            \${connected
+              ? \`<span class="badge-green text-sm px-3 py-1.5">✅ Conectado</span>
+                 <p class="text-xs text-slate-400 mt-1">Token OAuth2 ativo</p>\`
+              : \`<a href="/api/ml/auth" target="_blank"
+                   class="inline-flex items-center gap-2 bg-yellow-400 hover:bg-yellow-500 text-slate-900 font-bold px-4 py-2.5 rounded-xl transition-colors shadow text-sm">
+                   🔗 Conectar ao ML
+                 </a>
+                 <p class="text-xs text-red-500 mt-1.5 font-semibold">⚠ Autorização necessária</p>\`
             }
-            <p class="text-xs text-slate-400 mt-1">OAuth2 automático</p>
           </div>
         </div>
+
+        \${!connected ? \`
+        <div class="mt-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
+          <p class="font-bold mb-1">🔐 Como conectar:</p>
+          <ol class="list-decimal ml-4 space-y-1">
+            <li>Clique em <strong>"Conectar ao ML"</strong> acima</li>
+            <li>Faça login na sua conta Mercado Livre</li>
+            <li>Autorize o app <strong>KainowRadar</strong></li>
+            <li>Volte a esta página — o status ficará verde ✅</li>
+          </ol>
+        </div>
+        \` : \`
+        <div class="mt-3 bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-800">
+          ✅ Autorizado! Você já pode importar produtos do Mercado Livre abaixo.
+        </div>
+        \`}
       </div>
 
       <!-- Como funciona -->
       <div class="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-800">
         <p class="font-semibold mb-1">💡 Como funciona:</p>
-        <p>1. Seleciona a categoria → 2. Bot busca produtos reais no ML via API → 3. Salva no banco D1 com nome, imagem, preço e EAN → 4. Gera <code class="bg-blue-100 px-1 rounded">affiliate_url</code> com seu Publisher ID automaticamente ✅</p>
+        <p>1. Conecta sua conta ML (uma vez) → 2. Seleciona a categoria → 3. Bot busca produtos reais via API → 4. Salva no D1 com nome, imagem, preço e <code class="bg-blue-100 px-1 rounded">affiliate_url</code> com seu Publisher ID ✅</p>
       </div>
 
       <!-- Importação por categoria -->
-      <div class="stat-card">
-        <h3 class="font-bold text-slate-800 mb-4">📥 Importar Produtos</h3>
+      <div class="stat-card \${!connected ? 'opacity-60 pointer-events-none' : ''}">
+        <h3 class="font-bold text-slate-800 mb-4">📥 Importar Produtos \${!connected ? '<span class="text-xs text-red-500 font-normal ml-2">(conecte ao ML primeiro)</span>' : ''}</h3>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
           <div>
             <label class="block text-xs font-semibold text-slate-500 mb-1.5">Categoria</label>
@@ -6362,7 +6384,7 @@ async function renderMLImport(area) {
           </div>
           <div class="flex items-end">
             <button onclick="runMLImport()" id="btn-ml-import"
-              class="btn-primary w-full flex items-center justify-center gap-2">
+              class="btn-primary w-full flex items-center justify-center gap-2" \${!connected ? 'disabled' : ''}>
               <span>▶</span> Importar Agora
             </button>
           </div>
@@ -6377,22 +6399,23 @@ async function renderMLImport(area) {
       </div>
 
       <!-- Importar item específico por ID ML -->
-      <div class="stat-card">
-        <h3 class="font-bold text-slate-800 mb-4">🔍 Importar Item Específico</h3>
+      <div class="stat-card \${!connected ? 'opacity-60 pointer-events-none' : ''}">
+        <h3 class="font-bold text-slate-800 mb-4">🔍 Importar Item por ID</h3>
         <p class="text-xs text-slate-500 mb-3">Cole o ID de um produto do ML (ex: <code class="bg-slate-100 px-1 rounded">MLB3456789012</code>) para importar direto.</p>
         <div class="flex gap-3">
           <input id="ml-item-id" type="text" placeholder="MLB3456789012"
             class="input flex-1 font-mono" onkeydown="if(event.key==='Enter') importMLItem()"/>
-          <button onclick="importMLItem()" class="btn-primary whitespace-nowrap">
+          <button onclick="importMLItem()" class="btn-primary whitespace-nowrap" \${!connected ? 'disabled' : ''}>
             📥 Importar Item
           </button>
         </div>
         <div id="ml-item-result" class="mt-3"></div>
       </div>
 
-      <!-- Categorias disponíveis -->
+      <!-- Categorias disponíveis (clique rápido) — só mostra se conectado -->
+      \${connected ? \`
       <div class="stat-card">
-        <h3 class="font-bold text-slate-800 mb-4">📂 Categorias Disponíveis</h3>
+        <h3 class="font-bold text-slate-800 mb-4">📂 Importação Rápida por Categoria</h3>
         <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
           \${cats.filter(c => c.id !== 'all').map(c => \`
             <button onclick="document.getElementById('ml-cat').value='\${c.id}'; runMLImport()"
@@ -6403,6 +6426,7 @@ async function renderMLImport(area) {
           \`).join('')}
         </div>
       </div>
+      \` : ''}
 
     </div>
   \`
