@@ -699,9 +699,9 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
           </svg>
         </button>
 
-        <!-- Grid de categorias — aberto por padrão -->
-        <div id="mob-cats-grid" class="mt-2 pb-1">
-          <div class="grid grid-cols-3 gap-2 px-1">
+        <!-- Lista de categorias — aberto por padrão -->
+        <div id="mob-cats-grid" class="mt-1 pb-1">
+          <div class="flex flex-col gap-0.5 px-1">
             ${(opts.navCategories && opts.navCategories.length > 0
               ? opts.navCategories
               : [
@@ -714,15 +714,19 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
                   { slug: 'cameras',          icon: '📷', name: 'Câmeras & Drones' },
                   { slug: 'moda',             icon: '👗', name: 'Moda & Calçados' },
                   { slug: 'tablets',          icon: '📟', name: 'Tablets & iPads' },
-                  { slug: 'computadores',     icon: '🖥️', name: 'Computadores' },
+                  { slug: 'computadores',     icon: '🖥️', name: 'Computadores & Desktops' },
                   { slug: 'monitores',        icon: '🖥', name: 'Monitores' },
-                  { slug: 'impressoras',      icon: '🖨️', name: 'Impressoras' },
+                  { slug: 'impressoras',      icon: '🖨️', name: 'Impressoras & Scanners' },
+                  { slug: 'componentes',      icon: '⚙️', name: 'Componentes PC' },
+                  { slug: 'armazenamento',    icon: '💾', name: 'Armazenamento & SSDs' },
+                  { slug: 'redes',            icon: '📡', name: 'Redes & Wi-Fi' },
                 ]
             ).map(cat => `
               <a href="/categoria/${cat.slug}" onclick="closeHamburger()"
-                class="flex flex-col items-center gap-1.5 p-2.5 bg-gray-50 hover:bg-blue-50 border border-gray-100 hover:border-blue-200 rounded-xl transition-all text-center group">
-                <span class="text-2xl leading-none group-hover:scale-110 transition-transform">${cat.icon || '🛍️'}</span>
-                <span class="text-[10px] font-bold text-gray-700 group-hover:text-blue-700 leading-tight line-clamp-2">${cat.name}</span>
+                class="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-blue-50 transition-colors group">
+                <span class="text-xl w-7 text-center flex-shrink-0">${cat.icon || '🛍️'}</span>
+                <span class="text-sm font-semibold text-gray-700 group-hover:text-blue-700">${cat.name}</span>
+                <svg class="w-3.5 h-3.5 text-gray-300 ml-auto group-hover:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>
               </a>
             `).join('')}
           </div>
