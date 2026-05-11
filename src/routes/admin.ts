@@ -1572,6 +1572,159 @@ admin.post('/api/footer-config/:section', async (c) => {
   return c.json({ ok: true, section, key })
 })
 
+// ── GET /admin/api/affiliate-bot/status — Progresso ──────
+admin.get('/api/affiliate-bot/status', async (c) => {
+  const { DB } = c.env
+  const [total, withAffiliate, withMlId] = await Promise.all([
+    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1").first<any>(),
+    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND affiliate_url IS NOT NULL AND affiliate_url != ''").first<any>(),
+    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND ml_item_id IS NOT NULL AND ml_item_id != ''").first<any>(),
+  ])
+  return c.json({
+    total: total?.n || 0,
+    with_affiliate: withAffiliate?.n || 0,
+    with_ml_id: withMlId?.n || 0,
+    pending: (total?.n || 0) - (withAffiliate?.n || 0),
+  })
+})
+
+// ── GET /admin/api/affiliate-bot/products — Lista produtos ─
+admin.get('/api/affiliate-bot/products', async (c) => {
+  const { DB } = c.env
+  const page = parseInt(c.req.query('page') || '1')
+  const perPage = 20
+  const offset = (page - 1) * perPage
+  const filter = c.req.query('filter') || 'all' // all | missing | done
+
+  let where = 'WHERE is_active = 1'
+  if (filter === 'missing') where += " AND (affiliate_url IS NULL OR affiliate_url = '')"
+  if (filter === 'done')    where += " AND affiliate_url IS NOT NULL AND affiliate_url != ''"
+
+  const { results } = await DB.prepare(`
+    SELECT id, name, slug, brand, category, best_price, ml_item_id, affiliate_url, affiliate_updated_at
+    FROM products ${where}
+    ORDER BY id ASC
+    LIMIT ? OFFSET ?
+  `).bind(perPage, offset).all<any>()
+
+  const count = await DB.prepare(`SELECT COUNT(*) as n FROM products ${where}`).first<any>()
+
+  return c.json({ results, total: count?.n || 0, page, per_page: perPage })
+})
+
+// ── POST /admin/api/affiliate-bot/search — Busca ML ───────
+// Consulta a API pública do ML e retorna o melhor match
+admin.post('/api/affiliate-bot/search', async (c) => {
+  const { query, product_id } = await c.req.json()
+  if (!query) return c.json({ error: 'Query obrigatória' }, 400)
+
+  const PUBLISHER_ID = 'cfegdhabc31955'
+
+  try {
+    const url = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query)}&limit=5`
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'KainowRadar/1.0' }
+    })
+    if (!res.ok) return c.json({ error: `ML API error: ${res.status}` }, 502)
+
+    const data: any = await res.json()
+    const items = (data.results || []).map((item: any) => ({
+      ml_id: item.id,
+      title: item.title,
+      price: item.price,
+      permalink: item.permalink,
+      thumbnail: item.thumbnail,
+      affiliate_url: `${item.permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`,
+    }))
+
+    return c.json({ items, query })
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500)
+  }
+})
+
+// ── POST /admin/api/affiliate-bot/apply — Salva link ──────
+admin.post('/api/affiliate-bot/apply', async (c) => {
+  const { product_id, ml_item_id, affiliate_url } = await c.req.json()
+  if (!product_id || !affiliate_url) return c.json({ error: 'product_id e affiliate_url obrigatórios' }, 400)
+
+  const { DB } = c.env
+  await DB.prepare(`
+    UPDATE products
+    SET ml_item_id = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(ml_item_id || null, affiliate_url, product_id).run()
+
+  return c.json({ ok: true })
+})
+
+// ── POST /admin/api/affiliate-bot/run-all — Bot automático ─
+// Percorre todos os produtos sem affiliate_url e tenta preencher automaticamente
+admin.post('/api/affiliate-bot/run-all', async (c) => {
+  const { DB } = c.env
+  const PUBLISHER_ID = 'cfegdhabc31955'
+
+  // Pega até 30 produtos sem affiliate_url
+  const { results: products } = await DB.prepare(`
+    SELECT id, name, brand FROM products
+    WHERE is_active = 1 AND (affiliate_url IS NULL OR affiliate_url = '')
+    ORDER BY id ASC
+    LIMIT 30
+  `).all<any>()
+
+  if (!products.length) return c.json({ ok: true, processed: 0, message: 'Todos os produtos já têm link de afiliado!' })
+
+  let processed = 0
+  let failed = 0
+  const errors: string[] = []
+
+  for (const product of products) {
+    try {
+      const query = `${product.brand || ''} ${product.name}`.trim()
+      const url = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query)}&limit=1`
+      const res = await fetch(url, { headers: { 'User-Agent': 'KainowRadar/1.0' } })
+      if (!res.ok) { failed++; continue }
+
+      const data: any = await res.json()
+      const item = data.results?.[0]
+      if (!item) { failed++; continue }
+
+      const affiliate_url = `${item.permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`
+
+      await DB.prepare(`
+        UPDATE products
+        SET ml_item_id = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(item.id, affiliate_url, product.id).run()
+
+      processed++
+
+      // Pausa pequena para não sobrecarregar a API do ML
+      await new Promise(r => setTimeout(r, 150))
+    } catch (e: any) {
+      failed++
+      errors.push(`Produto ${product.id}: ${e.message}`)
+    }
+  }
+
+  return c.json({ ok: true, processed, failed, errors: errors.slice(0, 5) })
+})
+
+// ── DELETE /admin/api/affiliate-bot/clear/:id — Remove link ─
+admin.delete('/api/affiliate-bot/clear/:id', async (c) => {
+  const { DB } = c.env
+  const id = c.req.param('id')
+  await DB.prepare(`
+    UPDATE products SET ml_item_id = NULL, affiliate_url = NULL, affiliate_updated_at = NULL
+    WHERE id = ?
+  `).bind(id).run()
+  return c.json({ ok: true })
+})
+
+// ── Rotas ML dentro do Admin (com auth) ──────────────────
+admin.route('/api/ml', ml)
+
+
 // ── Página HTML do Admin (SPA) ────────────────────────────
 admin.get('*', async (c) => {
   const path = new URL(c.req.url).pathname
@@ -6352,157 +6505,5 @@ async function importMLItem() {
 </body>
 </html>`
 }
-
-// ── GET /admin/api/affiliate-bot/status — Progresso ──────
-admin.get('/api/affiliate-bot/status', async (c) => {
-  const { DB } = c.env
-  const [total, withAffiliate, withMlId] = await Promise.all([
-    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1").first<any>(),
-    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND affiliate_url IS NOT NULL AND affiliate_url != ''").first<any>(),
-    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND ml_item_id IS NOT NULL AND ml_item_id != ''").first<any>(),
-  ])
-  return c.json({
-    total: total?.n || 0,
-    with_affiliate: withAffiliate?.n || 0,
-    with_ml_id: withMlId?.n || 0,
-    pending: (total?.n || 0) - (withAffiliate?.n || 0),
-  })
-})
-
-// ── GET /admin/api/affiliate-bot/products — Lista produtos ─
-admin.get('/api/affiliate-bot/products', async (c) => {
-  const { DB } = c.env
-  const page = parseInt(c.req.query('page') || '1')
-  const perPage = 20
-  const offset = (page - 1) * perPage
-  const filter = c.req.query('filter') || 'all' // all | missing | done
-
-  let where = 'WHERE is_active = 1'
-  if (filter === 'missing') where += " AND (affiliate_url IS NULL OR affiliate_url = '')"
-  if (filter === 'done')    where += " AND affiliate_url IS NOT NULL AND affiliate_url != ''"
-
-  const { results } = await DB.prepare(`
-    SELECT id, name, slug, brand, category, best_price, ml_item_id, affiliate_url, affiliate_updated_at
-    FROM products ${where}
-    ORDER BY id ASC
-    LIMIT ? OFFSET ?
-  `).bind(perPage, offset).all<any>()
-
-  const count = await DB.prepare(`SELECT COUNT(*) as n FROM products ${where}`).first<any>()
-
-  return c.json({ results, total: count?.n || 0, page, per_page: perPage })
-})
-
-// ── POST /admin/api/affiliate-bot/search — Busca ML ───────
-// Consulta a API pública do ML e retorna o melhor match
-admin.post('/api/affiliate-bot/search', async (c) => {
-  const { query, product_id } = await c.req.json()
-  if (!query) return c.json({ error: 'Query obrigatória' }, 400)
-
-  const PUBLISHER_ID = 'cfegdhabc31955'
-
-  try {
-    const url = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query)}&limit=5`
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'KainowRadar/1.0' }
-    })
-    if (!res.ok) return c.json({ error: `ML API error: ${res.status}` }, 502)
-
-    const data: any = await res.json()
-    const items = (data.results || []).map((item: any) => ({
-      ml_id: item.id,
-      title: item.title,
-      price: item.price,
-      permalink: item.permalink,
-      thumbnail: item.thumbnail,
-      affiliate_url: `${item.permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`,
-    }))
-
-    return c.json({ items, query })
-  } catch (e: any) {
-    return c.json({ error: e.message }, 500)
-  }
-})
-
-// ── POST /admin/api/affiliate-bot/apply — Salva link ──────
-admin.post('/api/affiliate-bot/apply', async (c) => {
-  const { product_id, ml_item_id, affiliate_url } = await c.req.json()
-  if (!product_id || !affiliate_url) return c.json({ error: 'product_id e affiliate_url obrigatórios' }, 400)
-
-  const { DB } = c.env
-  await DB.prepare(`
-    UPDATE products
-    SET ml_item_id = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `).bind(ml_item_id || null, affiliate_url, product_id).run()
-
-  return c.json({ ok: true })
-})
-
-// ── POST /admin/api/affiliate-bot/run-all — Bot automático ─
-// Percorre todos os produtos sem affiliate_url e tenta preencher automaticamente
-admin.post('/api/affiliate-bot/run-all', async (c) => {
-  const { DB } = c.env
-  const PUBLISHER_ID = 'cfegdhabc31955'
-
-  // Pega até 30 produtos sem affiliate_url
-  const { results: products } = await DB.prepare(`
-    SELECT id, name, brand FROM products
-    WHERE is_active = 1 AND (affiliate_url IS NULL OR affiliate_url = '')
-    ORDER BY id ASC
-    LIMIT 30
-  `).all<any>()
-
-  if (!products.length) return c.json({ ok: true, processed: 0, message: 'Todos os produtos já têm link de afiliado!' })
-
-  let processed = 0
-  let failed = 0
-  const errors: string[] = []
-
-  for (const product of products) {
-    try {
-      const query = `${product.brand || ''} ${product.name}`.trim()
-      const url = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query)}&limit=1`
-      const res = await fetch(url, { headers: { 'User-Agent': 'KainowRadar/1.0' } })
-      if (!res.ok) { failed++; continue }
-
-      const data: any = await res.json()
-      const item = data.results?.[0]
-      if (!item) { failed++; continue }
-
-      const affiliate_url = `${item.permalink}?partner_id=${PUBLISHER_ID}&source_id=kainow`
-
-      await DB.prepare(`
-        UPDATE products
-        SET ml_item_id = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).bind(item.id, affiliate_url, product.id).run()
-
-      processed++
-
-      // Pausa pequena para não sobrecarregar a API do ML
-      await new Promise(r => setTimeout(r, 150))
-    } catch (e: any) {
-      failed++
-      errors.push(`Produto ${product.id}: ${e.message}`)
-    }
-  }
-
-  return c.json({ ok: true, processed, failed, errors: errors.slice(0, 5) })
-})
-
-// ── DELETE /admin/api/affiliate-bot/clear/:id — Remove link ─
-admin.delete('/api/affiliate-bot/clear/:id', async (c) => {
-  const { DB } = c.env
-  const id = c.req.param('id')
-  await DB.prepare(`
-    UPDATE products SET ml_item_id = NULL, affiliate_url = NULL, affiliate_updated_at = NULL
-    WHERE id = ?
-  `).bind(id).run()
-  return c.json({ ok: true })
-})
-
-// ── Rotas ML dentro do Admin (com auth) ──────────────────
-admin.route('/api/ml', ml)
 
 export default admin
