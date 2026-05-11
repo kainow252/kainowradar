@@ -5022,10 +5022,16 @@ const Social = {
 }
 
 const PLATFORM_META = {
-  instagram: { label: 'Instagram', color: 'from-pink-500 to-purple-600', icon: '📸', textLimit: 2200 },
-  facebook:  { label: 'Facebook',  color: 'from-blue-600 to-blue-800',   icon: '👍', textLimit: 63206 },
-  x:         { label: 'X/Twitter', color: 'from-slate-800 to-black',     icon: '✖️', textLimit: 280 },
-  linkedin:  { label: 'LinkedIn',  color: 'from-blue-700 to-blue-900',   icon: '💼', textLimit: 3000 },
+  tiktok:    { label: 'TikTok',     color: 'from-black to-slate-800',      icon: '🎵', textLimit: 2200 },
+  instagram: { label: 'Instagram',  color: 'from-pink-500 to-purple-600',  icon: '📸', textLimit: 2200 },
+  youtube:   { label: 'YouTube',    color: 'from-red-500 to-red-700',      icon: '▶️', textLimit: 5000 },
+  linkedin:  { label: 'LinkedIn',   color: 'from-blue-700 to-blue-900',    icon: '💼', textLimit: 3000 },
+  facebook:  { label: 'Facebook',   color: 'from-blue-600 to-blue-800',    icon: '👍', textLimit: 63206 },
+  threads:   { label: 'Threads',    color: 'from-slate-700 to-slate-900',  icon: '🧵', textLimit: 500 },
+  x:         { label: 'X (Twitter)',color: 'from-slate-800 to-black',      icon: '✖️', textLimit: 280 },
+  pinterest: { label: 'Pinterest',  color: 'from-red-500 to-red-700',      icon: '📌', textLimit: 500 },
+  reddit:    { label: 'Reddit',     color: 'from-orange-500 to-orange-700',icon: '🤖', textLimit: 40000 },
+  bluesky:   { label: 'Bluesky',   color: 'from-sky-400 to-sky-600',      icon: '🦋', textLimit: 300 },
 }
 
 async function renderSocial(area) {
@@ -5267,23 +5273,52 @@ function updateSocialFormFields(acc = null) {
   if (!container) return
 
   const fieldSets = {
+    tiktok: [
+      { id: 'soc-acc-id',     label: 'Open ID (tiktok_open_id)',       placeholder: '0000-0000-0000-0000' },
+      { id: 'soc-access',     label: 'Access Token',                   placeholder: 'act.xxxxxx...', type: 'password' },
+      { id: 'soc-refresh',    label: 'Refresh Token (opcional)',        placeholder: 'rft.xxxxxx...', type: 'password' },
+    ],
     instagram: [
       { id: 'soc-ig-user',    label: 'Instagram User ID (ig_user_id)', placeholder: '17841400000000000' },
       { id: 'soc-access',     label: 'Page Access Token (Long-Lived)',  placeholder: 'EAABsbCS...', type: 'password' },
     ],
-    facebook: [
-      { id: 'soc-page-id',    label: 'Facebook Page ID',               placeholder: '111234567890' },
-      { id: 'soc-access',     label: 'Page Access Token (Long-Lived)',  placeholder: 'EAABsbCS...', type: 'password' },
-    ],
-    x: [
-      { id: 'soc-acc-id',     label: 'Account ID (opcional)',          placeholder: '123456789' },
-      { id: 'soc-secret',     label: 'Bearer Token (API v2)',          placeholder: 'AAAAAAAAAAAAAAAAAAAAAml...', type: 'password' },
-      { id: 'soc-access',     label: 'OAuth 2.0 User Access Token (opcional)', placeholder: '...', type: 'password' },
+    youtube: [
+      { id: 'soc-acc-id',     label: 'Channel ID',                     placeholder: 'UCxxxxxxxxxxxxxxxxxxxxxxxx' },
+      { id: 'soc-access',     label: 'OAuth 2.0 Access Token',         placeholder: 'ya29.xxxxxxx...', type: 'password' },
+      { id: 'soc-refresh',    label: 'Refresh Token',                  placeholder: '1//xxxxxxxx...', type: 'password' },
     ],
     linkedin: [
       { id: 'soc-acc-id',     label: 'Person/Org URN',                 placeholder: 'urn:li:person:AbcDef123' },
       { id: 'soc-access',     label: 'OAuth 2.0 Access Token',         placeholder: 'AQV...', type: 'password' },
       { id: 'soc-refresh',    label: 'Refresh Token (opcional)',        placeholder: 'AQW...', type: 'password' },
+    ],
+    facebook: [
+      { id: 'soc-page-id',    label: 'Facebook Page ID',               placeholder: '111234567890' },
+      { id: 'soc-access',     label: 'Page Access Token (Long-Lived)',  placeholder: 'EAABsbCS...', type: 'password' },
+    ],
+    threads: [
+      { id: 'soc-ig-user',    label: 'Threads User ID',                placeholder: '17841400000000000' },
+      { id: 'soc-access',     label: 'Access Token (Long-Lived)',       placeholder: 'THQAAxxxxxxx...', type: 'password' },
+    ],
+    x: [
+      { id: 'soc-acc-id',     label: 'Account ID (opcional)',          placeholder: '123456789' },
+      { id: 'soc-secret',     label: 'Bearer Token (API v2)',           placeholder: 'AAAAAAAAAAAAAAAAAAAAAml...', type: 'password' },
+      { id: 'soc-access',     label: 'OAuth 2.0 User Access Token (opcional)', placeholder: '...', type: 'password' },
+    ],
+    pinterest: [
+      { id: 'soc-acc-id',     label: 'Pinterest User ID / Board ID',   placeholder: '123456789012345678' },
+      { id: 'soc-access',     label: 'Access Token (OAuth 2.0)',        placeholder: 'pina_xxxxxxxx...', type: 'password' },
+      { id: 'soc-refresh',    label: 'Refresh Token (opcional)',        placeholder: 'pinr_xxxxxxxx...', type: 'password' },
+    ],
+    reddit: [
+      { id: 'soc-acc-id',     label: 'Subreddit ou Username',          placeholder: 'r/meusubreddit ou u/username' },
+      { id: 'soc-secret',     label: 'Client ID (Reddit App)',         placeholder: 'xxxxxxxxxxxxxx', type: 'password' },
+      { id: 'soc-access',     label: 'OAuth 2.0 Access Token',         placeholder: 'bearer xxxxxxx...', type: 'password' },
+      { id: 'soc-refresh',    label: 'Refresh Token',                  placeholder: 'xxxxxxxx...', type: 'password' },
+    ],
+    bluesky: [
+      { id: 'soc-acc-id',     label: 'Handle (DID ou @usuario.bsky.social)', placeholder: '@usuario.bsky.social' },
+      { id: 'soc-access',     label: 'App Password',                   placeholder: 'xxxx-xxxx-xxxx-xxxx', type: 'password' },
     ],
   }
 
@@ -5312,20 +5347,43 @@ async function saveSocialAccount(id) {
 
   // Tokens conforme plataforma
   const plat = id ? (Social.accounts.find(a => a.id === id)?.platform) : platform
-  if (plat === 'instagram') {
-    if (get('soc-ig-user')) payload.ig_user_id   = get('soc-ig-user')
-    if (get('soc-access'))  payload.access_token  = get('soc-access')
+  if (plat === 'tiktok') {
+    if (get('soc-acc-id'))  payload.account_id    = get('soc-acc-id')
+    if (get('soc-access'))  payload.access_token   = get('soc-access')
+    if (get('soc-refresh')) payload.refresh_token  = get('soc-refresh')
+  } else if (plat === 'instagram') {
+    if (get('soc-ig-user')) payload.ig_user_id    = get('soc-ig-user')
+    if (get('soc-access'))  payload.access_token   = get('soc-access')
+  } else if (plat === 'youtube') {
+    if (get('soc-acc-id'))  payload.account_id    = get('soc-acc-id')
+    if (get('soc-access'))  payload.access_token   = get('soc-access')
+    if (get('soc-refresh')) payload.refresh_token  = get('soc-refresh')
+  } else if (plat === 'linkedin') {
+    if (get('soc-acc-id'))  payload.account_id    = get('soc-acc-id')
+    if (get('soc-access'))  payload.access_token   = get('soc-access')
+    if (get('soc-refresh')) payload.refresh_token  = get('soc-refresh')
   } else if (plat === 'facebook') {
-    if (get('soc-page-id')) payload.page_id       = get('soc-page-id')
+    if (get('soc-page-id')) payload.page_id        = get('soc-page-id')
+    if (get('soc-access'))  payload.access_token   = get('soc-access')
+  } else if (plat === 'threads') {
+    if (get('soc-ig-user')) payload.ig_user_id    = get('soc-ig-user')
     if (get('soc-access'))  payload.access_token   = get('soc-access')
   } else if (plat === 'x') {
     if (get('soc-acc-id'))  payload.account_id    = get('soc-acc-id')
     if (get('soc-secret'))  payload.token_secret   = get('soc-secret')
     if (get('soc-access'))  payload.access_token   = get('soc-access')
-  } else if (plat === 'linkedin') {
+  } else if (plat === 'pinterest') {
     if (get('soc-acc-id'))  payload.account_id    = get('soc-acc-id')
     if (get('soc-access'))  payload.access_token   = get('soc-access')
     if (get('soc-refresh')) payload.refresh_token  = get('soc-refresh')
+  } else if (plat === 'reddit') {
+    if (get('soc-acc-id'))  payload.account_id    = get('soc-acc-id')
+    if (get('soc-secret'))  payload.token_secret   = get('soc-secret')
+    if (get('soc-access'))  payload.access_token   = get('soc-access')
+    if (get('soc-refresh')) payload.refresh_token  = get('soc-refresh')
+  } else if (plat === 'bluesky') {
+    if (get('soc-acc-id'))  payload.account_id    = get('soc-acc-id')
+    if (get('soc-access'))  payload.access_token   = get('soc-access')
   }
 
   if (id) {
