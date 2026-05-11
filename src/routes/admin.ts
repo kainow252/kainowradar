@@ -2244,171 +2244,117 @@ admin.post('/api/affiliate-bot/import-search', async (c) => {
 })
 
 // ── POST /admin/api/affiliate-bot/import-offers ──────────
-// Scrapa a página de ofertas do ML (mercadolivre.com.br/ofertas)
-// extrai IDs reais (MLB + 10 dígitos), busca preço via /items/{id}
-// e importa no banco com link de afiliado.
-// VANTAGEM sobre import-search:
-//   - Usa IDs REAIS de anúncios ativos (não catalog IDs sem sellers)
-//   - Preço sempre disponível (são anúncios com buy box ativo)
-//   - Não depende de GeckoAPI nem de nenhum serviço externo pago
-//   - Categorias variadas em um único request (melhores ofertas do dia)
+// Scrapa mercadolivre.com.br/ofertas, extrai o JSON embutido (_n.ctx.r)
+// e importa os produtos com link de afiliado — SEM chamar /items/{id}.
+// Todo o dados (titulo, preco, imagem, permalink) ja estao no HTML.
+// Link afiliado = permalink + ?matt_word=cfegdhabc31955&matt_tool=38524122&forceInApp=true
 admin.post('/api/affiliate-bot/import-offers', async (c) => {
-  const { DB, CACHE } = c.env
-  const body: any     = await c.req.json().catch(() => ({}))
-  const limit         = Math.min(Math.max(parseInt(body.limit) || 10, 1), 30)
-  const categoryHint  = (body.category || '').trim()  // opcional — sobrescreve a detecção auto
-  const dryRun        = !!body.dry_run                // true → não salva no banco, só retorna o que encontrou
+  const { DB } = c.env
+  const body: any    = await c.req.json().catch(() => ({}))
+  const limit        = Math.min(Math.max(parseInt(body.limit) || 20, 1), 54)
+  const categoryHint = (body.category || '').trim()
+  const dryRun       = !!body.dry_run
 
-  const PUBLISHER_ID  = 'cfegdhabc31955'
-  const MATT_TOOL     = '38524122'
-  const ML_API        = 'https://api.mercadolibre.com'
-  const appId         = (c.env as any).ML_APP_ID || '3098423019766450'
-  const secret        = (c.env as any).ML_SECRET  || ''
+  const PUBLISHER_ID = 'cfegdhabc31955'
+  const MATT_TOOL    = '38524122'
 
-  // ── 1. Token ML (OAuth > refresh > client_credentials) ───
-  let token: string | null = null
-  let token_source = 'none'
-
-  const oauthToken = await CACHE?.get('ml_access_token').catch(() => null)
-  if (oauthToken) { token = oauthToken; token_source = 'oauth' }
-
-  if (!token && secret) {
-    const refreshToken = await CACHE?.get('ml_refresh_token').catch(() => null)
-    if (refreshToken) {
-      try {
-        const tr = await fetch(`${ML_API}/oauth/token`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ grant_type: 'refresh_token', client_id: appId, client_secret: secret, refresh_token: refreshToken }),
-        })
-        if (tr.ok) {
-          const td: any = await tr.json()
-          if (td.access_token) {
-            token = td.access_token; token_source = 'refresh'
-            await CACHE?.put('ml_access_token', token!, { expirationTtl: td.expires_in || 21600 }).catch(() => {})
-            if (td.refresh_token) await CACHE?.put('ml_refresh_token', td.refresh_token, { expirationTtl: 86400 * 30 }).catch(() => {})
-          }
-        }
-      } catch {}
-    }
-  }
-
-  if (!token && secret) {
-    const cached = await CACHE?.get('ml_app_token').catch(() => null)
-    if (cached) { token = cached; token_source = 'cc_cache' }
-    else {
-      try {
-        const tr = await fetch(`${ML_API}/oauth/token`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ grant_type: 'client_credentials', client_id: appId, client_secret: secret }),
-        })
-        if (tr.ok) {
-          const td: any = await tr.json()
-          if (td.access_token) {
-            token = td.access_token; token_source = 'cc_new'
-            await CACHE?.put('ml_app_token', token!, { expirationTtl: 18000 }).catch(() => {})
-          }
-        }
-      } catch {}
-    }
-  }
-
-  if (!token) {
-    return c.json({
-      ok: false,
-      error: 'Token ML nao encontrado. Acesse /api/ml/auth para autorizar ou configure ML_SECRET nas secrets do Cloudflare.',
-      token_source,
-    }, 401)
-  }
-
-  const authHeaders: Record<string, string> = {
-    'User-Agent': 'KainowRadar/1.0',
-    'Accept': 'application/json',
-    'Authorization': `Bearer ${token}`,
-  }
-
-  // ── 2. Scrapa /ofertas e extrai IDs reais ─────────────────
-  // A pagina /ofertas retorna HTML com IDs MLB + 10 digitos (anuncios reais, nao catalog IDs)
-  // Esses IDs funcionam direto no /items/{id} com token OAuth
-  let scrapedIds: string[] = []
-  let scrape_status = 0
-  let scrape_bytes  = 0
-  let is_bot_challenge = false
+  // ── 1. Scrapa /ofertas ────────────────────────────────────
+  let scrape_status  = 0
+  let scrape_bytes   = 0
+  let rawItems: any[] = []
 
   try {
-    const ofertasRes = await fetch('https://www.mercadolivre.com.br/ofertas', {
+    const res = await fetch('https://www.mercadolivre.com.br/ofertas', {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
-        'Referer': 'https://www.mercadolivre.com.br/',
+        'Referer':         'https://www.mercadolivre.com.br/',
       },
     })
-    scrape_status = ofertasRes.status
+    scrape_status = res.status
 
-    if (ofertasRes.ok) {
-      const html = await ofertasRes.text()
-      scrape_bytes = html.length
+    if (!res.ok) {
+      return c.json({ ok: false, error: `HTTP ${res.status} ao acessar /ofertas`, scrape_status }, 502)
+    }
 
-      // Detecta bot challenge (pagina menor que 20KB ou contém marcadores de PoW)
-      is_bot_challenge = html.includes('_bmstate') || html.includes('PoW') || html.length < 20000
+    const html = await res.text()
+    scrape_bytes = html.length
 
-      if (!is_bot_challenge) {
-        // Extrai todos os IDs reais (10+ digitos = anuncio real, nao catalog ID de 8 digitos)
-        const idRegex = /\b(MLB\d{10,})\b/gi
-        const allIds  = [...html.matchAll(idRegex)].map(m => m[1].toUpperCase())
-        // Deduplica mantendo ordem de aparicao (primeiros = mais promovidos)
-        scrapedIds = [...new Set(allIds)]
-      }
+    // Detecta bot challenge
+    if (html.includes('_bmstate') || html.includes('PoW') || html.length < 20000) {
+      return c.json({
+        ok: false, error: 'Bot challenge detectado — IP do Worker foi bloqueado.',
+        scrape_status, scrape_bytes,
+        tip: 'Tente novamente em alguns minutos.',
+      }, 503)
+    }
+
+    // ── 2. Extrai JSON embutido _n.ctx.r = {...} ──────────────
+    // O ML embute todos os dados dos produtos neste objeto JS no HTML
+    const ctxMatch = html.match(/_n\.ctx\.r\s*=\s*(\{)/)
+    if (!ctxMatch || ctxMatch.index === undefined) {
+      return c.json({
+        ok: false, error: 'JSON _n.ctx.r nao encontrado no HTML. Estrutura da pagina pode ter mudado.',
+        scrape_status, scrape_bytes,
+        tip: 'Verifique /admin/api/ml/search-debug (T12) para diagnosticar.',
+      }, 422)
+    }
+
+    // Parse incremental — pega apenas o objeto JSON, ignora o JS que vem depois
+    const jsonStart = ctxMatch.index + ctxMatch[0].length - 1  // posicao do {
+    const rawJson   = html.slice(jsonStart)
+
+    // Percorre caracter a caracter para encontrar o fim do objeto raiz
+    let depth = 0, end = 0, inStr = false, esc = false
+    for (let i = 0; i < rawJson.length; i++) {
+      const ch = rawJson[i]
+      if (esc)          { esc = false; continue }
+      if (ch === '\\')  { esc = true;  continue }
+      if (ch === '"')   { inStr = !inStr; continue }
+      if (inStr)        { continue }
+      if (ch === '{')   { depth++; continue }
+      if (ch === '}')   { depth--; if (depth === 0) { end = i + 1; break } }
+    }
+
+    if (!end) {
+      return c.json({ ok: false, error: 'Nao foi possivel delimitar o JSON do _n.ctx.r', scrape_status }, 422)
+    }
+
+    const ctx: any = JSON.parse(rawJson.slice(0, end))
+    rawItems = ctx?.appProps?.pageProps?.data?.items ?? []
+
+    if (rawItems.length === 0) {
+      return c.json({
+        ok: false, error: 'Nenhum item encontrado no JSON da pagina.',
+        scrape_status, scrape_bytes,
+      }, 422)
     }
   } catch (e: any) {
-    return c.json({ ok: false, error: 'Falha ao acessar /ofertas: ' + e?.message, scrape_status }, 500)
+    return c.json({ ok: false, error: 'Falha ao scraping /ofertas: ' + (e?.message || e), scrape_status }, 500)
   }
 
-  if (is_bot_challenge) {
-    return c.json({
-      ok: false,
-      error: 'Bot challenge detectado no Worker ao acessar /ofertas do ML. O IP deste Worker foi bloqueado.',
-      scrape_status,
-      scrape_bytes,
-      tip: 'Tente novamente em alguns minutos ou use "Importar por URL" colando URLs manualmente.',
-    }, 503)
-  }
-
-  if (scrapedIds.length === 0) {
-    return c.json({
-      ok: false,
-      error: 'Nenhum ID de produto encontrado na pagina de ofertas. O HTML pode ter mudado de estrutura.',
-      scrape_status,
-      scrape_bytes,
-      tip: 'Verifique /admin/api/ml/search-debug (T12) para diagnosticar.',
-    }, 422)
-  }
-
-  // Limita aos primeiros N * 2 para ter margem (alguns podem duplicar ou falhar)
-  const idsToProcess = scrapedIds.slice(0, limit * 2)
-
-  // ── 3. Helper: deteccao de categoria pelo titulo ──────────
+  // ── 3. Helpers ────────────────────────────────────────────
   function detectCat(title: string, hint: string): string {
     if (hint && hint !== 'outros') return hint
     const t = title.toLowerCase()
-    if (/iphone|galaxy|smartphone|celular|motorola|xiaomi|redmi/.test(t)) return 'smartphones'
-    if (/notebook|macbook|laptop|ultrabook/.test(t)) return 'notebooks'
-    if (/smart tv|televisor|\btv\b|qled|oled|led [0-9]/.test(t)) return 'tv'
-    if (/fone|headphone|airpods|speaker|caixa de som|headset/.test(t)) return 'audio'
-    if (/playstation|xbox|nintendo|\bgame\b|console/.test(t)) return 'games'
-    if (/camera|drone|gopro/.test(t)) return 'cameras'
-    if (/tablet|\bipad\b/.test(t)) return 'tablets'
+    if (/iphone|galaxy|smartphone|celular|motorola|xiaomi|redmi/.test(t))     return 'smartphones'
+    if (/notebook|macbook|laptop|ultrabook/.test(t))                           return 'notebooks'
+    if (/smart tv|televisor|\btv\b|qled|oled|led [0-9]/.test(t))              return 'tv'
+    if (/fone|headphone|airpods|speaker|caixa de som|headset/.test(t))        return 'audio'
+    if (/playstation|xbox|nintendo|\bgame\b|console/.test(t))                  return 'games'
+    if (/camera|drone|gopro/.test(t))                                          return 'cameras'
+    if (/tablet|\bipad\b/.test(t))                                             return 'tablets'
     if (/geladeira|fogao|maquina de lavar|microondas|ar condicionado/.test(t)) return 'eletrodomesticos'
-    if (/perfume|eau de|colonia/.test(t)) return 'perfumes'
-    if (/relogio|smartwatch|\bwatch\b/.test(t)) return 'smartwatches'
-    if (/cadeira|sofa|mesa|cama|movel/.test(t)) return 'moveis'
-    if (/tenis|camisa|calcado|roupa|jaqueta/.test(t)) return 'moda'
+    if (/perfume|eau de|colonia/.test(t))                                      return 'perfumes'
+    if (/relogio|smartwatch|\bwatch\b/.test(t))                                return 'smartwatches'
+    if (/cadeira|sofa|mesa|cama|movel/.test(t))                                return 'moveis'
+    if (/tenis|camisa|calcado|roupa|jaqueta/.test(t))                          return 'moda'
+    if (/creatina|suplemento|whey|protein|vitamina/.test(t))                   return 'saude'
+    if (/escada|ferramenta|parafuso|furadeira/.test(t))                        return 'ferramentas'
     return 'outros'
   }
 
-  // ── 4. Helper: gera slug unico ────────────────────────────
   function makeSlug(title: string, mlId: string): string {
     return title.toLowerCase()
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -2416,149 +2362,153 @@ admin.post('/api/affiliate-bot/import-offers', async (c) => {
       .substring(0, 70) + '-' + mlId.toLowerCase()
   }
 
-  // ── 5. Busca loja ML no banco ─────────────────────────────
+  // ── 4. Busca loja ML no banco ─────────────────────────────
   const mlStore = await DB.prepare(
     `SELECT id FROM stores WHERE slug = 'mercadolivre' AND is_active = 1 LIMIT 1`
   ).first<{ id: number }>()
   const storeId = mlStore?.id ?? 3
 
-  // ── 6. Processa cada ID: /items/{id} → salva no banco ─────
+  // ── 5. Processa cada item do JSON ─────────────────────────
   const imported: any[] = []
   const skipped:  any[] = []
   const errors:   any[] = []
 
-  for (const mlId of idsToProcess) {
-    if (imported.length >= limit) break
-
+  for (const raw of rawItems.slice(0, limit)) {
     try {
-      // Busca dados completos do item via API ML (autenticada)
-      const ir = await fetch(
-        `${ML_API}/items/${mlId}?attributes=id,title,price,original_price,status,thumbnail,permalink,category_id,attributes`,
-        { headers: authHeaders }
-      )
+      const card  = raw?.card ?? {}
+      const meta  = card?.metadata ?? {}
+      const comps: Record<string, any> = {}
+      for (const comp of (card?.components ?? [])) comps[comp.type] = comp
 
-      if (!ir.ok) {
-        const eb: any = await ir.json().catch(() => ({}))
-        skipped.push({ id: mlId, reason: `HTTP ${ir.status}: ${eb?.message || eb?.error || 'erro'}` })
-        await new Promise(r => setTimeout(r, 80))
+      // Dados do produto — tudo ja esta no HTML, sem nenhuma chamada de API
+      const mlId  = (meta.id || '').toUpperCase()
+      if (!mlId || !/^MLB\d{10,}$/.test(mlId)) {
+        skipped.push({ id: mlId || '?', reason: 'ID invalido ou catalog ID (< 10 digitos)' })
         continue
       }
 
-      const item: any = await ir.json().catch(() => null)
-      if (!item?.id || !item?.price) {
-        skipped.push({ id: mlId, reason: 'item sem preco ou invalido' })
+      const title = comps.title?.title?.text?.trim() || mlId
+      if (!title || title === mlId) {
+        skipped.push({ id: mlId, reason: 'sem titulo no JSON' })
         continue
       }
 
-      // Ignora anuncios fechados/pausados/banidos
-      if (['closed', 'paused', 'under_review', 'inactive'].includes(item.status)) {
-        skipped.push({ id: mlId, reason: `status: ${item.status}` })
+      const priceBlk   = comps.price?.price ?? {}
+      const price      = priceBlk?.current_price?.value as number | undefined
+      const origPrice  = priceBlk?.previous_price?.value as number | undefined
+      const discPct    = priceBlk?.discount?.value as number ?? 0
+
+      if (!price || price <= 0) {
+        skipped.push({ id: mlId, title: title.slice(0, 50), reason: 'sem preco no JSON' })
         continue
       }
 
-      const title       = (item.title || mlId).trim()
-      const price       = item.price as number
-      const origPrice   = item.original_price as number | null
-      const thumbnail   = (item.thumbnail || '').replace('-I.jpg', '-O.jpg') || null
-      const permalink   = item.permalink || `https://www.mercadolivre.com.br/p/${mlId}`
-      const affUrl      = `${permalink}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
-      const brand       = (item.attributes || []).find((a: any) => a.id === 'BRAND')?.value_name || ''
-      const cat         = detectCat(title, categoryHint)
-      const slug        = makeSlug(title, mlId)
-      const discount    = origPrice && origPrice > price ? Math.round(((origPrice - price) / origPrice) * 100) : 0
+      // URL limpa sem parametros de tracking
+      const rawUrl   = meta.url || ''
+      const permalink = rawUrl
+        ? 'https://' + rawUrl.split('?')[0].split('#')[0]
+        : `https://www.mercadolivre.com.br/p/${mlId}`
+
+      // Link de afiliado — formato oficial do programa ML Afiliados
+      const affUrl = `${permalink}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+
+      // Imagem: monta URL a partir do picture_id (formato D_{id}-O.jpg)
+      const picId  = (card?.pictures?.pictures ?? [])[0]?.id ?? ''
+      const imgUrl = picId ? `https://http2.mlstatic.com/D_${picId}-O.jpg` : null
+
+      const cat  = detectCat(title, categoryHint)
+      const slug = makeSlug(title, mlId)
+      const disc = discPct > 0
+        ? discPct
+        : (origPrice && origPrice > price ? Math.round(((origPrice - price) / origPrice) * 100) : 0)
 
       if (dryRun) {
-        imported.push({ id: mlId, title, price, category: cat, affiliate_url: affUrl, thumbnail, dry_run: true })
+        imported.push({
+          ml_id: mlId, title: title.slice(0, 70), price,
+          original_price: origPrice ?? null, discount_percent: disc,
+          category: cat, affiliate_url: affUrl, image_url: imgUrl, dry_run: true,
+        })
         continue
       }
 
-      // Verifica se ja existe pelo ml_item_id
+      // ── 6. Salva ou atualiza no banco ─────────────────────
       const existing = await DB.prepare(
         `SELECT id, best_price FROM products WHERE ml_item_id = ? LIMIT 1`
       ).bind(mlId).first<{ id: number; best_price: number | null }>()
 
       if (existing) {
-        // Atualiza preco e afiliado
         await DB.prepare(`
           UPDATE products SET
             best_price = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP,
-            image_url = COALESCE(NULLIF(image_url,''), ?),
+            image_url  = COALESCE(NULLIF(image_url,''), ?),
             updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
-        `).bind(price, affUrl, thumbnail, existing.id).run()
+        `).bind(price, affUrl, imgUrl, existing.id).run()
 
         skipped.push({
-          id: mlId, title, reason: 'ja existe — preco atualizado',
-          price_before: existing.best_price, price_after: price,
-          product_id: existing.id,
+          id: mlId, title: title.slice(0, 50), reason: 'ja existe — preco atualizado',
+          price_before: existing.best_price, price_after: price, product_id: existing.id,
         })
-        await new Promise(r => setTimeout(r, 60))
         continue
       }
 
-      // Insere novo produto
       const ins = await DB.prepare(`
         INSERT INTO products
           (name, slug, brand, category, description, image_url,
            ml_item_id, affiliate_url, affiliate_updated_at,
            best_price, best_store_id, offer_count, is_active,
            created_at, updated_at)
-        VALUES (?, ?, ?, ?, '', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).bind(title, slug, brand || null, cat, thumbnail, mlId, affUrl, price, storeId).run()
+        VALUES (?, ?, NULL, ?, '', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).bind(title, slug, cat, imgUrl, mlId, affUrl, price, storeId).run()
 
       const productId = ins.meta.last_row_id as number
 
-      // Cria oferta correspondente
+      // Oferta correspondente (expira em 6h — dados das ofertas do dia mudam)
       const expiresAt = new Date(Date.now() + 6 * 3600 * 1000).toISOString()
       await DB.prepare(`
         INSERT INTO offers
           (product_id, store_id, external_id, title, price, original_price,
            discount_percent, free_shipping, in_stock, product_url, image_url, cache_expires_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?)
-      `).bind(productId, storeId, mlId, title, price, origPrice || null, discount, affUrl, thumbnail, expiresAt).run()
+      `).bind(productId, storeId, mlId, title, price, origPrice ?? null, disc, affUrl, imgUrl, expiresAt).run()
 
-      // Incrementa contagem na tabela de categorias (se existir)
       await DB.prepare(`UPDATE categories SET product_count = product_count + 1 WHERE slug = ?`)
         .bind(cat).run().catch(() => {})
 
       imported.push({
-        id: productId, ml_id: mlId, title, price,
-        original_price: origPrice, discount_percent: discount,
-        category: cat, brand: brand || null,
-        affiliate_url: affUrl, thumbnail,
-        in_stock: true, status: item.status,
+        id: productId, ml_id: mlId, title: title.slice(0, 70), price,
+        original_price: origPrice ?? null, discount_percent: disc,
+        category: cat, affiliate_url: affUrl, image_url: imgUrl,
       })
 
-      // Pausa pequena entre requests para nao throttle
-      await new Promise(r => setTimeout(r, 120))
-
     } catch (e: any) {
-      errors.push({ id: mlId, error: e?.message || 'exception' })
+      errors.push({ error: e?.message || 'exception' })
     }
   }
 
+  const updated = skipped.filter((s: any) => s.reason?.includes('atualizado')).length
+
   return c.json({
     ok: true,
-    token_source,
     dry_run: dryRun,
     scrape: {
       status:          scrape_status,
       bytes:           scrape_bytes,
-      total_ids_found: scrapedIds.length,
-      ids_processed:   idsToProcess.length,
+      total_found:     rawItems.length,
+      processed:       Math.min(rawItems.length, limit),
     },
     summary: {
       imported: imported.length,
-      updated:  skipped.filter((s: any) => s.reason?.includes('atualizado')).length,
-      skipped:  skipped.filter((s: any) => !s.reason?.includes('atualizado')).length,
+      updated,
+      skipped:  skipped.length - updated,
       errors:   errors.length,
     },
     imported,
     skipped,
     errors: errors.slice(0, 10),
     tip: imported.length > 0
-      ? imported.length + ' produto(s) importado(s) da pagina de ofertas do ML com preco real!'
-      : 'Nenhum produto novo. Tente aumentar o limit ou rode novamente.',
+      ? `${imported.length} produto(s) importado(s) direto da pagina de ofertas do ML!`
+      : 'Nenhum produto novo. Pode ter tudo ja importado — rode com dry_run:true para ver.',
   })
 })
 
@@ -7244,25 +7194,18 @@ async function importOffers() {
 
   const sc = res.scrape || {}
   const sm = res.summary || {}
-  const tokenLabel = {
-    client_credentials: '🔑 client_credentials (ML_SECRET)',
-    cache:              '📦 cache KV',
-    oauth_kv:           '🔑 OAuth usuario (KV)',
-    none:               '⚠️ Sem token',
-  }[res.token_source || 'none'] || res.token_source || ''
 
   const lines = [
     '✅ Import finalizado!',
-    'Token: ' + tokenLabel,
-    '--- Scrape ---',
-    'Status HTTP      : ' + (sc.status || '-'),
-    'HTML recebido    : ' + (sc.bytes ? (sc.bytes / 1024).toFixed(1) + ' KB' : '-'),
-    'IDs MLB encontrados: ' + (sc.total_ids_found || 0),
-    'IDs processados  : ' + (sc.ids_processed || 0),
+    '--- Scrape /ofertas ---',
+    'Status HTTP : ' + (sc.status || '-'),
+    'HTML        : ' + (sc.bytes ? (sc.bytes / 1024).toFixed(1) + ' KB' : '-'),
+    'Itens no JSON : ' + (sc.total_found || 0),
+    'Processados   : ' + (sc.processed  || 0),
     '--- Resultado ---',
-    '✅ Importados     : ' + (sm.imported || 0),
-    '🔄 Atualizados   : ' + (sm.updated || 0),
-    '⏭ Skipped        : ' + (sm.skipped || 0),
+    '✅ Importados  : ' + (sm.imported || 0),
+    '🔄 Atualizados : ' + (sm.updated  || 0),
+    '⏭  Skipped     : ' + (sm.skipped  || 0),
     sm.errors ? '⚠ Erros: ' + sm.errors : '',
     res.tip ? '💡 ' + res.tip : '',
   ].filter(Boolean)
