@@ -192,66 +192,49 @@ async function saveProductToDB(
 // ROTAS PÚBLICAS (sem auth admin)
 // ════════════════════════════════════════════════════════════
 
-// ── GET /api/ml/auth — Inicia OAuth2 Authorization Code ──
-ml.get('/auth', (c) => {
+// ── Helpers PKCE ─────────────────────────────────────────
+function base64urlEncode(buf: ArrayBuffer): string {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
+}
+
+async function generatePKCE(): Promise<{ verifier: string; challenge: string }> {
+  // code_verifier: 64 bytes aleatórios → base64url (resultado ~86 chars, dentro do limite 43-128)
+  const raw     = crypto.getRandomValues(new Uint8Array(64))
+  const verifier = base64urlEncode(raw.buffer as ArrayBuffer)
+  // code_challenge: SHA-256 do verifier → base64url
+  const encoded  = new TextEncoder().encode(verifier)
+  const digest   = await crypto.subtle.digest('SHA-256', encoded)
+  const challenge = base64urlEncode(digest)
+  return { verifier, challenge }
+}
+
+// ── GET /api/ml/auth — Inicia OAuth2 Authorization Code + PKCE ──
+ml.get('/auth', async (c) => {
   const appId       = c.env.ML_APP_ID || APP_ID
   const redirectUri = 'https://kainowradar.com.br/api/ml-callback'
-  const url         = `https://auth.mercadolivre.com.br/authorization?response_type=code&client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}`
+
+  // Gera PKCE
+  const { verifier, challenge } = await generatePKCE()
+
+  // Salva code_verifier no KV por 10 minutos (tempo máximo do code ML)
+  if (c.env.CACHE) {
+    await c.env.CACHE.put('ml_pkce_verifier', verifier, { expirationTtl: 600 })
+  }
+
+  const url = `https://auth.mercadolivre.com.br/authorization?response_type=code` +
+    `&client_id=${appId}` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+    `&code_challenge=${challenge}` +
+    `&code_challenge_method=S256`
+
   return c.redirect(url)
 })
 
-// ── GET /api/ml-callback — Recebe código OAuth2 ──────────
+// ── GET /api/ml-callback (via ml.ts — não usado diretamente, ver index.tsx) ──
+// Este handler existe como fallback; o handler principal está em index.tsx
 ml.get('/callback', async (c) => {
-  const code  = c.req.query('code')
-  const error = c.req.query('error')
-
-  if (error || !code) {
-    return c.html(`<h2>❌ Erro OAuth ML: ${error || 'código ausente'}</h2>`)
-  }
-
-  const appId       = c.env.ML_APP_ID || APP_ID
-  const secret      = c.env.ML_SECRET || ''
-  const redirectUri = 'https://kainowradar.com.br/api/ml-callback'
-
-  try {
-    const res = await fetch(`${ML_API}/oauth/token`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
-      body:    new URLSearchParams({
-        grant_type:    'authorization_code',
-        client_id:     appId,
-        client_secret: secret,
-        code,
-        redirect_uri:  redirectUri,
-      }),
-    })
-    const data: any = await res.json()
-    if (!res.ok) return c.html(`<h2>❌ Erro ao obter token: ${JSON.stringify(data)}</h2>`)
-
-    if (c.env.CACHE) {
-      await c.env.CACHE.put('ml_access_token',  data.access_token,          { expirationTtl: data.expires_in || 21600 })
-      await c.env.CACHE.put('ml_refresh_token', data.refresh_token || '',   { expirationTtl: 86400 * 30 })
-      await c.env.CACHE.put('ml_user_id',       String(data.user_id || ''), { expirationTtl: 86400 * 30 })
-    }
-
-    return c.html(`
-      <!DOCTYPE html><html><head><meta charset="UTF-8">
-      <script src="https://cdn.tailwindcss.com"></script></head>
-      <body class="bg-green-50 flex items-center justify-center min-h-screen">
-        <div class="bg-white rounded-2xl p-8 shadow-xl text-center max-w-md">
-          <div class="text-5xl mb-4">✅</div>
-          <h2 class="text-2xl font-bold text-green-700 mb-2">Conectado ao Mercado Livre!</h2>
-          <p class="text-gray-600 mb-1">User ID: <strong>${data.user_id}</strong></p>
-          <p class="text-gray-600 mb-4">Token válido por ${Math.round((data.expires_in || 21600) / 3600)}h</p>
-          <a href="/admin" class="bg-blue-600 text-white px-6 py-2 rounded-xl font-semibold hover:bg-blue-700">
-            → Ir para o Admin
-          </a>
-        </div>
-      </body></html>
-    `)
-  } catch (e: any) {
-    return c.html(`<h2>❌ Erro: ${e.message}</h2>`)
-  }
+  return c.html(`<h2>ℹ️ Use /api/ml-callback (sem /api/ml/)</h2>`)
 })
 
 // ── POST /api/ml-webhook — Notificações de preço/estoque ─

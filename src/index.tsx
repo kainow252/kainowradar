@@ -55,7 +55,6 @@ app.route('/api/editorial', editorial)
 app.route('/api/ml', ml)
 // /api/ml-callback → ml.get('/') para receber o code do OAuth2
 app.get('/api/ml-callback', async (c) => {
-  // Repassa para o handler de callback do ml router
   const code  = c.req.query('code')
   const error = c.req.query('error')
   if (error || !code) return c.html(`<h2>❌ Erro OAuth ML: ${error || 'código ausente'}</h2>`)
@@ -64,27 +63,54 @@ app.get('/api/ml-callback', async (c) => {
   const appId       = (c.env as any).ML_APP_ID  || '3098423019766450'
   const secret      = (c.env as any).ML_SECRET  || ''
   const redirectUri = 'https://kainowradar.com.br/api/ml-callback'
+  const env         = c.env as any
+
+  // ── Recupera code_verifier do KV (PKCE obrigatório pelo ML) ──
+  const codeVerifier: string | null = env.CACHE
+    ? await env.CACHE.get('ml_pkce_verifier').catch(() => null)
+    : null
+
+  if (!codeVerifier) {
+    return c.html(`
+      <!DOCTYPE html><html><head><meta charset="UTF-8">
+      <script src="https://cdn.tailwindcss.com"></script></head>
+      <body class="bg-red-50 flex items-center justify-center min-h-screen">
+        <div class="bg-white rounded-2xl p-8 shadow-xl text-center max-w-md">
+          <div class="text-5xl mb-4">⚠️</div>
+          <h2 class="text-xl font-bold text-red-700 mb-3">Sessão expirada</h2>
+          <p class="text-gray-600 mb-4">O tempo limite do fluxo de autorização foi excedido (máx. 10 min).<br>Por favor, inicie o processo novamente.</p>
+          <a href="/api/ml/auth" class="bg-yellow-500 text-white px-6 py-3 rounded-xl font-bold hover:bg-yellow-600 inline-block">
+            🔄 Tentar novamente
+          </a>
+        </div>
+      </body></html>
+    `)
+  }
 
   try {
+    const params: Record<string, string> = {
+      grant_type:    'authorization_code',
+      client_id:     appId,
+      client_secret: secret,
+      code,
+      redirect_uri:  redirectUri,
+      code_verifier: codeVerifier,
+    }
+
     const res = await fetch(`${ML_API}/oauth/token`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
-      body: new URLSearchParams({
-        grant_type:    'authorization_code',
-        client_id:     appId,
-        client_secret: secret,
-        code,
-        redirect_uri:  redirectUri,
-      }),
+      body:    new URLSearchParams(params),
     })
     const data: any = await res.json()
     if (!res.ok) return c.html(`<h2>❌ Erro ao obter token: ${JSON.stringify(data)}</h2>`)
 
-    const env = c.env as any
     if (env.CACHE) {
       await env.CACHE.put('ml_access_token',  data.access_token,          { expirationTtl: data.expires_in || 21600 })
       await env.CACHE.put('ml_refresh_token', data.refresh_token || '',   { expirationTtl: 86400 * 30 })
       await env.CACHE.put('ml_user_id',       String(data.user_id || ''), { expirationTtl: 86400 * 30 })
+      // Limpa o verifier após uso
+      await env.CACHE.delete('ml_pkce_verifier').catch(() => null)
     }
 
     return c.html(`
