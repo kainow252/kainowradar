@@ -6360,14 +6360,38 @@ async function renderMLImport(area) {
         </div>
 
         <!-- Instrução de uso -->
-        <div class="mt-3 mb-4 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-800">
-          <p class="font-semibold mb-1.5">📋 Como obter as URLs:</p>
-          <ol class="list-decimal ml-4 space-y-1 text-xs">
-            <li>Acesse <a href="https://www.mercadolivre.com.br/afiliados/linkbuilder" target="_blank" class="underline font-semibold">mercadolivre.com.br/afiliados/linkbuilder</a></li>
-            <li>Selecione os produtos que deseja promover</li>
-            <li>Copie os links gerados e cole na área abaixo</li>
-            <li>Também aceita URLs diretas do ML, IDs (MLB...) ou links de produto</li>
-          </ol>
+        <div class="mt-3 mb-4 space-y-3 text-xs">
+
+          <!-- Método recomendado -->
+          <div class="bg-green-50 border border-green-300 rounded-xl px-4 py-3 text-green-900">
+            <p class="font-bold text-sm mb-2">✅ Método mais fácil — URL direta do ML</p>
+            <ol class="list-decimal ml-4 space-y-1">
+              <li>Abra <a href="https://www.mercadolivre.com.br" target="_blank" class="underline font-semibold">mercadolivre.com.br</a> e encontre o produto que quer importar</li>
+              <li>Copie a URL da <strong>barra de endereços</strong> do browser</li>
+              <li>Cole aqui abaixo e clique em Importar</li>
+            </ol>
+            <div class="mt-2 bg-green-100 rounded-lg px-3 py-2 font-mono text-green-800 break-all">
+              Ex: https://www.mercadolivre.com.br/samsung-galaxy-s24/p/MLB28765432
+            </div>
+            <p class="mt-1.5 text-green-700">💡 O sistema adiciona seu affiliate ID (<code class="bg-green-100 px-1 rounded">cfegdhabc31955</code>) automaticamente.</p>
+          </div>
+
+          <!-- Linkbuilder — fluxo correto -->
+          <div class="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-blue-900">
+            <p class="font-bold mb-2">📋 Via Linkbuilder (gera link com tracking)</p>
+            <ol class="list-decimal ml-4 space-y-1">
+              <li>Acesse <a href="https://www.mercadolivre.com.br/afiliados/linkbuilder" target="_blank" class="underline font-semibold">mercadolivre.com.br/afiliados/linkbuilder</a></li>
+              <li>Cole a URL de <strong>um produto</strong> no campo do gerador</li>
+              <li>Clique em <strong>"Gerar"</strong> — será gerado um link <code class="bg-blue-100 px-1 rounded">meli.la/xxxxx</code></li>
+              <li>Copie o link gerado e cole aqui abaixo</li>
+            </ol>
+            <div class="mt-2 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2 text-amber-800">
+              ⚠️ <strong>Não copie</strong> o link do botão "Compartilhar" do seu perfil
+              (<code class="bg-amber-100 px-1 rounded">/social/cfegdhabc31955</code>) — isso é a
+              sua página, não um produto.
+            </div>
+          </div>
+
         </div>
 
         <div class="space-y-3">
