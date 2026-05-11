@@ -142,9 +142,11 @@ async function fetchByCatalogItems(catalogId: string, token: string): Promise<Pr
 
     if (results.length === 0) return null
 
-    // Pega o mais barato com estoque
-    const withStock = results.filter((r: any) => (r.available_quantity || 0) > 0 && r.status !== 'closed')
-    const best = withStock.sort((a: any, b: any) => (a.price || 0) - (b.price || 0))[0] || results[0]
+    // Pega o mais barato — prefere com estoque, mas aceita sem estoque se for o único
+    const active    = results.filter((r: any) => r.status !== 'closed' && r.status !== 'paused' && r.price)
+    const withStock = active.filter((r: any) => (r.available_quantity || 1) > 0)
+    const pool      = withStock.length > 0 ? withStock : active
+    const best      = pool.sort((a: any, b: any) => (a.price || 0) - (b.price || 0))[0] || results[0]
 
     if (!best?.price) return null
 
@@ -153,7 +155,8 @@ async function fetchByCatalogItems(catalogId: string, token: string): Promise<Pr
       original_price: best.original_price || null,
       title:          best.title || catalogId,
       thumbnail:      best.thumbnail || null,
-      in_stock:       (best.available_quantity || 0) > 0 && best.status !== 'closed',
+      // Considera in_stock=true se tem preço e não está fechado (catálogo sempre tem alguém vendendo)
+      in_stock:       best.status !== 'closed' && best.status !== 'paused',
       permalink:      best.permalink || `https://www.mercadolivre.com.br/p/${catalogId}`,
       strategy:       'catalog_items',
       status_code:    res.status,
