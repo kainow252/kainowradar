@@ -693,14 +693,14 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
             <div class="w-1 h-5 bg-gradient-to-b from-blue-500 to-blue-700 rounded-full"></div>
             <span class="text-xs font-black text-gray-700 uppercase tracking-wider">Explorar por Categoria</span>
           </div>
-          <svg id="mob-cats-chevron" class="w-4 h-4 text-gray-400 transition-transform duration-200 rotate-0"
+          <svg id="mob-cats-chevron" class="w-4 h-4 text-gray-400 transition-transform duration-200" style="transform:rotate(-90deg)"
                fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
           </svg>
         </button>
 
-        <!-- Lista de categorias — aberto por padrão -->
-        <div id="mob-cats-grid" class="mt-1 pb-1">
+        <!-- Lista de categorias — fechado por padrão, abre ao clicar -->
+        <div id="mob-cats-grid" class="mt-1 pb-1" style="display:none">
           <div class="flex flex-col gap-0.5 px-1">
             ${(opts.navCategories && opts.navCategories.length > 0
               ? opts.navCategories

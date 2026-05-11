@@ -99,6 +99,7 @@ function toggleMobCats() {
   const isOpen = grid.style.display !== 'none'
   grid.style.display    = isOpen ? 'none' : ''
   if (chevron) chevron.style.transform = isOpen ? 'rotate(-90deg)' : 'rotate(0deg)'
+  grid.style.transition = 'all 0.2s ease'
 }
 
 // Sincroniza estado do usuário no drawer (após loadUser)
