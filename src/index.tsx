@@ -166,6 +166,39 @@ app.get('/', async (c) => {
   const eBannerSec2 = editorials.find((e: any) => e.slot === 'banner_sec2')
   const eInsights   = editorials.filter((e: any) => e.type === 'insight')
 
+  // Logos SVG inline por slug — 100% confiáveis, sem depender de URL externa
+  const STORE_LOGO_SVG: Record<string, string> = {
+    'mercadolivre': `<svg viewBox="0 0 120 40" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="120" height="40" rx="6" fill="#FFE600"/><text x="60" y="27" font-family="Arial,sans-serif" font-size="11" font-weight="900" fill="#333" text-anchor="middle">Mercado</text><text x="60" y="38" font-family="Arial,sans-serif" font-size="9" font-weight="700" fill="#333" text-anchor="middle">Livre</text></svg>`,
+    'amazon':       `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><text x="50" y="22" font-family="Arial,sans-serif" font-size="18" font-weight="900" fill="#FF9900" text-anchor="middle">amazon</text><path d="M20 28 Q50 36 80 28" stroke="#FF9900" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg>`,
+    'magalu':       `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#0086FF"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="13" font-weight="900" fill="#fff" text-anchor="middle">magalu</text></svg>`,
+    'shopee':       `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#EE4D2D"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="12" font-weight="900" fill="#fff" text-anchor="middle">shopee</text></svg>`,
+    'americanas':   `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#E60014"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">americanas</text></svg>`,
+    'casasbahia':   `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#0057A8"/><text x="50" y="15" font-family="Arial,sans-serif" font-size="9" font-weight="900" fill="#fff" text-anchor="middle">Casas</text><text x="50" y="28" font-family="Arial,sans-serif" font-size="9" font-weight="900" fill="#FFD700" text-anchor="middle">Bahia</text></svg>`,
+    'kabum':        `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#F47920"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="13" font-weight="900" fill="#fff" text-anchor="middle">KaBuM!</text></svg>`,
+    'aliexpress':   `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#FF6600"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">AliExpress</text></svg>`,
+    'submarino':    `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#0057A8"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">submarino</text></svg>`,
+    'netshoes':     `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#003DA5"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">netshoes</text></svg>`,
+    'pichau':       `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#1a1a2e"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="12" font-weight="900" fill="#00CFFF" text-anchor="middle">pichau</text></svg>`,
+    'terabyte':     `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#e60000"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">Terabyte</text></svg>`,
+    'fastshop':     `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#00843D"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">Fast Shop</text></svg>`,
+    'carrefour':    `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#0066CC"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">Carrefour</text></svg>`,
+    'extra':        `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#E30613"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="14" font-weight="900" fill="#fff" text-anchor="middle">extra</text></svg>`,
+    'pontofrio':    `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#00AAFF"/><text x="50" y="15" font-family="Arial,sans-serif" font-size="9" font-weight="900" fill="#fff" text-anchor="middle">Ponto</text><text x="50" y="28" font-family="Arial,sans-serif" font-size="9" font-weight="900" fill="#fff" text-anchor="middle">Frio</text></svg>`,
+    'centauro':     `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#FF6B00"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="11" font-weight="900" fill="#fff" text-anchor="middle">centauro</text></svg>`,
+    'dafiti':       `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#5C068C"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="12" font-weight="900" fill="#fff" text-anchor="middle">dafiti</text></svg>`,
+    'shein':        `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#000"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="13" font-weight="900" fill="#fff" text-anchor="middle">SHEIN</text></svg>`,
+    'renner':       `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#E30613"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="12" font-weight="900" fill="#fff" text-anchor="middle">renner</text></svg>`,
+    'riachuelo':    `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#E30613"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">riachuelo</text></svg>`,
+    'leroy':        `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#00843D"/><text x="50" y="15" font-family="Arial,sans-serif" font-size="8" font-weight="900" fill="#fff" text-anchor="middle">Leroy</text><text x="50" y="28" font-family="Arial,sans-serif" font-size="8" font-weight="900" fill="#fff" text-anchor="middle">Merlin</text></svg>`,
+    'madeiramadeira': `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#00833E"/><text x="50" y="15" font-family="Arial,sans-serif" font-size="8" font-weight="900" fill="#fff" text-anchor="middle">Madeira</text><text x="50" y="28" font-family="Arial,sans-serif" font-size="8" font-weight="900" fill="#fff" text-anchor="middle">Madeira</text></svg>`,
+    'havan':        `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#0057A8"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="13" font-weight="900" fill="#FFD700" text-anchor="middle">havan</text></svg>`,
+    'tok_stok':     `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#E63329"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">Tok&amp;Stok</text></svg>`,
+    'samsung':      `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#1428A0"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="11" font-weight="900" fill="#fff" text-anchor="middle">SAMSUNG</text></svg>`,
+    'apple':        `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#555"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="12" font-weight="900" fill="#fff" text-anchor="middle"> Apple</text></svg>`,
+    'zattini':      `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#1a1a1a"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="12" font-weight="900" fill="#fff" text-anchor="middle">zattini</text></svg>`,
+    'hotmart':      `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#FF4D0D"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="11" font-weight="900" fill="#fff" text-anchor="middle">hotmart</text></svg>`,
+  }
+
   // Monta lista de lojas com dados visuais reais do banco + fallbacks
   const stores = dbStores.map((s: any, idx: number) => {
     const visual = STORE_VISUAL[s.slug] || COLOR_PALETTE[idx % COLOR_PALETTE.length]
@@ -177,7 +210,8 @@ app.get('/', async (c) => {
     const initial = words.length >= 2
       ? (words[0][0] + words[1][0]).toUpperCase()
       : (s.name as string).substring(0, 2).toUpperCase()
-    return { ...s, color, bg, text, initial }
+    const logoSvg = STORE_LOGO_SVG[s.slug] || null
+    return { ...s, color, bg, text, initial, logoSvg }
   })
 
   // ── HERO ─────────────────────────────────────────────────
@@ -301,11 +335,11 @@ app.get('/', async (c) => {
     <a href="/busca?q=${encodeURIComponent(s.name)}"
        class="store-pill-card flex-shrink-0 flex flex-col items-center gap-1.5 w-20 cursor-pointer group"
        title="Comparar preços na ${s.name}">
-      <div class="store-logo-circle w-12 h-12 rounded-2xl flex items-center justify-center border-2 shadow-sm transition-all duration-200 group-hover:scale-110 group-hover:shadow-md"
+      <div class="store-logo-circle w-14 h-14 rounded-2xl flex items-center justify-center border-2 shadow-sm transition-all duration-200 group-hover:scale-110 group-hover:shadow-md overflow-hidden"
            style="background:${s.bg}; border-color:${s.color};">
-        ${s.logo_url
-          ? `<img src="${s.logo_url}" alt="${s.name}" class="w-8 h-8 object-contain rounded-lg">`
-          : `<span class="font-black text-sm leading-none" style="color:${s.color}">${s.initial}</span>`
+        ${s.logoSvg
+          ? s.logoSvg
+          : `<span class="font-black text-base leading-none" style="color:${s.color}">${s.initial}</span>`
         }
       </div>
       <span class="text-xs text-gray-600 font-semibold text-center leading-tight w-full truncate group-hover:text-gray-900 transition-colors">${s.name}</span>
