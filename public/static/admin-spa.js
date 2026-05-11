@@ -102,6 +102,7 @@ async function loadSection(name) {
     social: ['📣 Social Media', 'Gerencie contas e publique nas redes sociais'],
     'affiliate-bot': ['🤝 Bot Afiliados ML', 'Gera links de afiliado do Mercado Livre automaticamente'],
     'ml-import': ['🟡 Importar do ML', 'Importa produtos reais do Mercado Livre para o banco de dados'],
+    'affiliate-codes': ['🔗 Códigos Afiliados', 'Configure seus códigos por rede e gere links para todos os produtos'],
   }
   const [title, subtitle] = titles[name] || ['Admin', '']
   document.getElementById('page-title').textContent = title
@@ -122,6 +123,7 @@ async function loadSection(name) {
     social: renderSocial,
     'affiliate-bot': renderAffiliateBot,
     'ml-import': renderMLImport,
+    'affiliate-codes': renderAffiliateCodes,
   }
   if (sections[name]) await sections[name](area)
 }
@@ -4440,6 +4442,343 @@ async function clearAffiliate(id) {
   if (res?.ok) {
     toast('Link removido', 'info')
     loadAffiliateTable('done')
+  }
+}
+
+// ── CÓDIGOS AFILIADOS ─────────────────────────────────────
+async function renderAffiliateCodes(area) {
+  area.innerHTML = spin
+
+  const [data, stats] = await Promise.all([
+    api('GET', '/admin/api/affiliate-rules'),
+    api('GET', '/admin/api/affiliate-rules/stats'),
+  ])
+  if (!data || !stats) return
+
+  const rules = data.rules || []
+  const pct = stats.total > 0 ? Math.round((stats.with_affiliate / stats.total) * 100) : 0
+
+  const networkColor = {
+    'meli-api':      '#ffe600',
+    'awin':          '#0073e6',
+    'lomadee':       '#e85d04',
+    'amazon-pa-api': '#ff9900',
+    'shein-api':     '#e91e8c',
+    'hotmart-api':   '#ff4f00',
+    'eduzz-api':     '#7c3aed',
+    'monetizze-api': '#059669',
+  }
+  const networkIcon = {
+    'meli-api':      '🛒',
+    'awin':          '🌐',
+    'lomadee':       '🏪',
+    'amazon-pa-api': '📦',
+    'shein-api':     '👗',
+    'hotmart-api':   '🔥',
+    'eduzz-api':     '⚡',
+    'monetizze-api': '💰',
+  }
+
+  area.innerHTML = `
+    <div class="section space-y-6">
+
+      <!-- Stats globais -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        ${statCard('📦', 'Total Produtos', stats.total, 'no catálogo', 'blue')}
+        ${statCard('🔗', 'Com Link Afiliado', stats.with_affiliate, 'links gerados', 'green')}
+        ${statCard('⏳', 'Sem Link', stats.pending, 'aguardando código', 'orange')}
+        ${statCard('📊', 'Cobertura', pct + '%', 'do catálogo linkado', 'purple')}
+      </div>
+
+      <!-- Barra de progresso -->
+      <div class="stat-card">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="font-bold text-slate-800">📈 Cobertura de Links</h3>
+          <span class="text-sm font-semibold text-slate-600">${stats.with_affiliate} / ${stats.total} produtos</span>
+        </div>
+        <div class="w-full bg-slate-100 rounded-full h-4 overflow-hidden">
+          <div class="h-4 rounded-full transition-all duration-500"
+               style="width:${pct}%;background:linear-gradient(90deg,#22c55e,#16a34a)"></div>
+        </div>
+        <p class="text-xs text-slate-500 mt-2">
+          Produtos do ML: <strong>${stats.with_ml_id}</strong> com ml_item_id
+        </p>
+      </div>
+
+      <!-- Ações globais -->
+      <div class="stat-card">
+        <h3 class="font-bold text-slate-800 mb-4">⚡ Ações Globais</h3>
+        <div class="flex flex-wrap gap-3 items-center">
+          <button onclick="generateAllLinks()" id="btn-gen-all"
+            class="btn-primary flex items-center gap-2"
+            style="background:linear-gradient(135deg,#7c3aed,#4f46e5)">
+            <span>🔗</span> Gerar/Atualizar TODOS os Links
+          </button>
+          <button onclick="importAllOffers()" id="btn-import-all"
+            class="btn-primary flex items-center gap-2"
+            style="background:linear-gradient(135deg,#f59e0b,#d97706)">
+            <span>🛒</span> Importar 54 Ofertas ML
+          </button>
+          <button onclick="renderAffiliateCodes(document.getElementById('content-area'))"
+            class="btn-secondary">↻ Atualizar</button>
+        </div>
+        <div id="aff-codes-log" class="mt-4 hidden">
+          <div class="bg-slate-900 text-green-400 rounded-xl p-4 font-mono text-sm min-h-[80px] whitespace-pre-wrap"
+               id="aff-codes-log-text">Aguardando...</div>
+        </div>
+      </div>
+
+      <!-- Cards por rede -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="rules-grid">
+        ${rules.map(r => renderRuleCard(r, networkIcon, networkColor)).join('')}
+      </div>
+
+    </div>
+  `
+}
+
+function renderRuleCard(r, icons, colors) {
+  const hasPub  = r.publisher_id && r.publisher_id.trim() !== ''
+  const icon    = icons[r.network]  || '🔌'
+  const color   = colors[r.network] || '#6366f1'
+  const statusBadge = hasPub
+    ? `<span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700">✅ Configurado</span>`
+    : `<span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">⚠ Sem código</span>`
+
+  return `
+    <div class="stat-card border-l-4" style="border-left-color:${color}" id="rule-card-${r.network}">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <span class="text-2xl">${icon}</span>
+          <div>
+            <h4 class="font-bold text-slate-800">${r.label}</h4>
+            <p class="text-xs text-slate-500 font-mono">${r.network}</p>
+          </div>
+        </div>
+        ${statusBadge}
+      </div>
+
+      <div class="text-sm text-slate-600 mb-3 flex gap-4">
+        <span>🏪 <strong>${r.store_count || 0}</strong> lojas</span>
+        <span>🔗 <strong>${r.linked_products || 0}</strong> / <strong>${r.total_products || 0}</strong> links</span>
+      </div>
+
+      <!-- Campos editáveis -->
+      <div class="space-y-2">
+        <div>
+          <label class="text-xs font-semibold text-slate-600 block mb-1">
+            Publisher ID / Código de Afiliado
+          </label>
+          <div class="flex gap-2">
+            <input type="text" id="pub-${r.network}"
+              class="input flex-1 font-mono text-sm"
+              placeholder="Ex: cfegdhabc31955"
+              value="${hasPub ? r.publisher_id : ''}"/>
+          </div>
+        </div>
+
+        ${r.extra_param !== undefined ? `
+        <div>
+          <label class="text-xs font-semibold text-slate-600 block mb-1">
+            Parâmetro Extra (opcional)
+          </label>
+          <input type="text" id="extra-${r.network}"
+            class="input w-full font-mono text-sm"
+            placeholder="Ex: matt_tool=38524122"
+            value="${r.extra_param || ''}"/>
+        </div>` : ''}
+
+        <div>
+          <label class="text-xs font-semibold text-slate-600 block mb-1">
+            Template do Link
+          </label>
+          <input type="text" id="tpl-${r.network}"
+            class="input w-full font-mono text-xs text-slate-600"
+            placeholder="{url}?param={pub}"
+            value="${r.link_template || ''}"/>
+          <p class="text-xs text-slate-400 mt-1">
+            Variáveis: <code>{url}</code> = URL do produto, <code>{pub}</code> = publisher_id, <code>{extra}</code> = parâmetro extra
+          </p>
+        </div>
+      </div>
+
+      <!-- Ações do card -->
+      <div class="flex gap-2 mt-4">
+        <button onclick="saveAffRule('${r.network}')"
+          class="btn-primary text-sm flex-1">
+          💾 Salvar
+        </button>
+        ${hasPub ? `
+        <button onclick="generateLinks('${r.network}', '${r.label}')"
+          class="btn-secondary text-sm flex-1">
+          🔗 Gerar Links
+        </button>` : `
+        <button disabled class="btn-secondary text-sm flex-1 opacity-40 cursor-not-allowed">
+          🔗 Gerar Links
+        </button>`}
+      </div>
+    </div>
+  `
+}
+
+async function saveAffRule(network) {
+  const pub   = document.getElementById('pub-' + network)?.value?.trim() || ''
+  const extra = document.getElementById('extra-' + network)?.value?.trim() || null
+  const tpl   = document.getElementById('tpl-' + network)?.value?.trim() || ''
+
+  if (!pub) {
+    toast('Digite o Publisher ID antes de salvar', 'warning')
+    return
+  }
+
+  const res = await api('PUT', '/admin/api/affiliate-rules/' + encodeURIComponent(network), {
+    publisher_id: pub,
+    extra_param: extra,
+    link_template: tpl || undefined,
+  })
+
+  if (!res || !res.ok) {
+    toast('Erro ao salvar regra: ' + (res?.error || 'desconhecido'), 'error')
+    return
+  }
+
+  toast('✅ Código salvo para ' + network, 'success')
+  // Recarrega a seção para atualizar os badges
+  setTimeout(() => renderAffiliateCodes(document.getElementById('content-area')), 800)
+}
+
+async function generateLinks(network, label) {
+  const log     = document.getElementById('aff-codes-log')
+  const logText = document.getElementById('aff-codes-log-text')
+  log.classList.remove('hidden')
+  logText.textContent = '🔗 Gerando links para ' + label + '...'
+
+  const res = await api('POST', '/admin/api/affiliate-rules/generate', { network })
+
+  if (!res || !res.ok) {
+    logText.textContent = '❌ Erro: ' + (res?.error || 'desconhecido')
+    toast('Erro ao gerar links', 'error')
+    return
+  }
+
+  const lines = [
+    '✅ Links gerados!',
+    '────────────────────',
+    'Rede      : ' + (network || 'todas'),
+    'Atualizados: ' + res.total_updated,
+    res.tip || '',
+  ]
+  if (res.summary) {
+    Object.values(res.summary).forEach(s => {
+      lines.push('  ' + s.label + ': ' + s.updated + ' links')
+    })
+  }
+
+  logText.textContent = lines.filter(Boolean).join(String.fromCharCode(10))
+  toast('🔗 ' + res.total_updated + ' links gerados!', res.total_updated > 0 ? 'success' : 'warning')
+
+  // Atualiza stats após 1.5s
+  if (res.total_updated > 0) {
+    setTimeout(() => renderAffiliateCodes(document.getElementById('content-area')), 1500)
+  }
+}
+
+async function generateAllLinks() {
+  const btn = document.getElementById('btn-gen-all')
+  const log     = document.getElementById('aff-codes-log')
+  const logText = document.getElementById('aff-codes-log-text')
+  if (!btn) return
+
+  btn.disabled = true
+  btn.innerHTML = '<span>⏳</span> Gerando...'
+  log.classList.remove('hidden')
+  logText.textContent = '🔗 Regenerando TODOS os links afiliados...'
+
+  const res = await api('POST', '/admin/api/affiliate-rules/generate', {})
+
+  btn.disabled = false
+  btn.innerHTML = '<span>🔗</span> Gerar/Atualizar TODOS os Links'
+
+  if (!res || !res.ok) {
+    logText.textContent = '❌ Erro: ' + (res?.error || 'desconhecido')
+    toast('Erro ao gerar links', 'error')
+    return
+  }
+
+  const lines = [
+    '✅ Geração concluída!',
+    '────────────────────',
+    'Total atualizado: ' + res.total_updated,
+    '',
+    '📋 Por rede:',
+  ]
+  if (res.summary) {
+    Object.values(res.summary).forEach(s => {
+      const icon = s.updated > 0 ? '✅' : '⏭'
+      lines.push('  ' + icon + ' ' + s.label + ': ' + s.updated + ' links')
+    })
+  }
+  if (res.tip) lines.push('', '💡 ' + res.tip)
+
+  logText.textContent = lines.filter(Boolean).join(String.fromCharCode(10))
+  toast('🔗 ' + res.total_updated + ' links gerados!', res.total_updated > 0 ? 'success' : 'warning')
+
+  if (res.total_updated > 0) {
+    setTimeout(() => renderAffiliateCodes(document.getElementById('content-area')), 1500)
+  }
+}
+
+async function importAllOffers() {
+  const btn = document.getElementById('btn-import-all')
+  const log     = document.getElementById('aff-codes-log')
+  const logText = document.getElementById('aff-codes-log-text')
+  if (!btn) return
+
+  btn.disabled = true
+  btn.innerHTML = '<span>⏳</span> Importando...'
+  log.classList.remove('hidden')
+  logText.textContent = '🛒 Buscando todas as ofertas em mercadolivre.com.br/ofertas...'
+
+  const res = await api('POST', '/admin/api/affiliate-bot/import-offers', { limit: 54 })
+
+  btn.disabled = false
+  btn.innerHTML = '<span>🛒</span> Importar 54 Ofertas ML'
+
+  if (!res) {
+    logText.textContent = '❌ Erro ao chamar import-offers'
+    toast('Falha na importação', 'error')
+    return
+  }
+
+  if (!res.ok) {
+    logText.textContent = '❌ ' + (res.error || 'Erro desconhecido') + (res.tip ? String.fromCharCode(10) + '💡 ' + res.tip : '')
+    toast('Falha: ' + (res.error || ''), 'error')
+    return
+  }
+
+  const sc = res.scrape || {}
+  const sm = res.summary || {}
+  const total = (sm.imported || 0) + (sm.updated || 0)
+
+  const lines = [
+    '✅ Importação concluída!',
+    '────────────────────────',
+    'HTML scrapeado  : ' + (sc.bytes ? (sc.bytes / 1024).toFixed(1) + ' KB' : '-'),
+    'Itens no JSON   : ' + (sc.total_found || 0),
+    'Processados     : ' + (sc.processed  || 0),
+    '',
+    '📦 Novos        : ' + (sm.imported || 0),
+    '🔄 Atualizados  : ' + (sm.updated  || 0),
+    '⏭  Skipped      : ' + (sm.skipped  || 0),
+    sm.errors ? '⚠  Erros        : ' + sm.errors : '',
+    res.tip ? String.fromCharCode(10) + '💡 ' + res.tip : '',
+  ]
+
+  logText.textContent = lines.filter(Boolean).join(String.fromCharCode(10))
+  toast('🛒 ' + total + ' produtos importados/atualizados', total > 0 ? 'success' : 'warning')
+
+  if (total > 0) {
+    setTimeout(() => renderAffiliateCodes(document.getElementById('content-area')), 2000)
   }
 }
 

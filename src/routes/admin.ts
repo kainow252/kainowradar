@@ -2251,7 +2251,7 @@ admin.post('/api/affiliate-bot/import-search', async (c) => {
 admin.post('/api/affiliate-bot/import-offers', async (c) => {
   const { DB } = c.env
   const body: any    = await c.req.json().catch(() => ({}))
-  const limit        = Math.min(Math.max(parseInt(body.limit) || 20, 1), 54)
+  const limit        = Math.min(Math.max(parseInt(body.limit) || 54, 1), 54)
   const categoryHint = (body.category || '').trim()
   const dryRun       = !!body.dry_run
 
@@ -2906,6 +2906,9 @@ function renderAdminSPA(): string {
       <div onclick="showSection('ml-import')" class="sidebar-link" data-section="ml-import">
         <span class="text-lg">🟡</span> Importar do ML
       </div>
+      <div onclick="showSection('affiliate-codes')" class="sidebar-link" data-section="affiliate-codes">
+        <span class="text-lg">🔗</span> Códigos Afiliados
+      </div>
       <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Análise</div>
       <div onclick="showSection('analytics')" class="sidebar-link" data-section="analytics">
         <span class="text-lg">📈</span> Analytics
@@ -2962,5 +2965,231 @@ function renderAdminSPA(): string {
 </body>
 </html>`
 }
+
+// ============================================================
+// AFFILIATE RULES — Códigos de afiliado por rede
+// ============================================================
+
+// ── GET /admin/api/affiliate-rules ───────────────────────────
+// Lista todas as redes com lojas vinculadas e status
+admin.get('/api/affiliate-rules', async (c) => {
+  const { DB } = c.env
+
+  const rules = await DB.prepare(`
+    SELECT r.*,
+      (SELECT COUNT(*) FROM stores s WHERE s.affiliate_network = r.network AND s.is_active = 1) AS store_count,
+      (SELECT COUNT(*) FROM products p
+         JOIN stores s ON s.id = p.best_store_id
+         WHERE s.affiliate_network = r.network AND p.affiliate_url IS NOT NULL AND p.affiliate_url != '') AS linked_products,
+      (SELECT COUNT(*) FROM products p
+         JOIN stores s ON s.id = p.best_store_id
+         WHERE s.affiliate_network = r.network) AS total_products
+    FROM affiliate_rules r
+    ORDER BY r.label
+  `).all<any>()
+
+  // Contagem total de produtos por rede (incluindo ML via ml_item_id)
+  const mlLinked = await DB.prepare(`
+    SELECT COUNT(*) as n FROM products
+    WHERE affiliate_url IS NOT NULL AND affiliate_url != ''
+      AND (ml_item_id IS NOT NULL OR best_store_id = (SELECT id FROM stores WHERE slug='mercadolivre' LIMIT 1))
+  `).first<{ n: number }>()
+
+  return c.json({
+    ok: true,
+    rules: rules.results,
+    ml_linked: mlLinked?.n ?? 0,
+  })
+})
+
+// ── PUT /admin/api/affiliate-rules/:network ──────────────────
+// Salva publisher_id e extra_param para uma rede
+admin.put('/api/affiliate-rules/:network', async (c) => {
+  const { DB } = c.env
+  const network = c.req.param('network')
+  const body: any = await c.req.json().catch(() => ({}))
+
+  const { publisher_id, extra_param, link_template, label } = body
+
+  if (!publisher_id && publisher_id !== '') {
+    return c.json({ error: 'publisher_id obrigatório' }, 400)
+  }
+
+  await DB.prepare(`
+    UPDATE affiliate_rules
+    SET publisher_id = ?, extra_param = COALESCE(?, extra_param),
+        link_template = COALESCE(NULLIF(?, ''), link_template),
+        label = COALESCE(NULLIF(?, ''), label),
+        updated_at = CURRENT_TIMESTAMP
+    WHERE network = ?
+  `).bind(
+    publisher_id || null,
+    extra_param ?? null,
+    link_template ?? '',
+    label ?? '',
+    network,
+  ).run()
+
+  return c.json({ ok: true, network, publisher_id })
+})
+
+// ── POST /admin/api/affiliate-rules/generate ─────────────────
+// Regenera affiliate_url de TODOS os produtos de uma rede (ou todas)
+// Usa o link_template da tabela affiliate_rules
+admin.post('/api/affiliate-rules/generate', async (c) => {
+  const { DB } = c.env
+  const body: any = await c.req.json().catch(() => ({}))
+  const targetNetwork: string = (body.network || '').trim()  // '' = todas
+  const dryRun = !!body.dry_run
+
+  // Carrega regras ativas com publisher_id preenchido
+  const rulesRes = await DB.prepare(`
+    SELECT * FROM affiliate_rules
+    WHERE is_active = 1 AND publisher_id IS NOT NULL AND publisher_id != ''
+    ${targetNetwork ? "AND network = '" + targetNetwork.replace(/'/g, "''") + "'" : ''}
+  `).all<any>()
+
+  const rules: any[] = rulesRes.results ?? []
+  if (rules.length === 0) {
+    return c.json({ ok: false, error: 'Nenhuma regra ativa com publisher_id para processar', network: targetNetwork }, 404)
+  }
+
+  // Função que constrói o link afiliado a partir do template
+  function buildAffLink(template: string, url: string, pub: string, extra: string | null): string {
+    let link = template
+      .replace('{url}', url)
+      .replace('{pub}', pub)
+      .replace('{extra}', extra || '')
+    // Limpa parâmetros vazios (ex: &&, ?&)
+    link = link.replace(/[?&]{2,}/g, '&').replace(/[?&]$/, '')
+    return link
+  }
+
+  const summary: Record<string, { updated: number; skipped: number; network: string; label: string }> = {}
+  let totalUpdated = 0
+
+  for (const rule of rules) {
+    const ruleStats = { updated: 0, skipped: 0, network: rule.network, label: rule.label }
+    summary[rule.network] = ruleStats
+
+    // Caso especial: meli-api — produtos têm permalink no affiliate_url ou ml_item_id
+    if (rule.network === 'meli-api') {
+      // Busca todos os produtos com ml_item_id (produtos do ML)
+      const mlProds = await DB.prepare(`
+        SELECT p.id, p.ml_item_id, p.affiliate_url,
+               o.product_url
+        FROM products p
+        LEFT JOIN offers o ON o.product_id = p.id
+          AND o.store_id = (SELECT id FROM stores WHERE slug='mercadolivre' LIMIT 1)
+        WHERE p.ml_item_id IS NOT NULL AND p.ml_item_id != ''
+        GROUP BY p.id
+      `).all<any>()
+
+      for (const prod of mlProds.results ?? []) {
+        // Reconstrói URL limpa a partir do affiliate_url anterior ou product_url da oferta
+        let baseUrl = prod.product_url || prod.affiliate_url || ''
+        // Remove parâmetros de tracking anteriores
+        baseUrl = baseUrl.split('?')[0].split('#')[0]
+
+        if (!baseUrl || !baseUrl.startsWith('http')) {
+          // Monta URL genérica do ML a partir do ml_item_id
+          const id = prod.ml_item_id.toLowerCase()
+          baseUrl = `https://www.mercadolivre.com.br/p/${id}`
+        }
+
+        const newUrl = buildAffLink(rule.link_template, baseUrl, rule.publisher_id, rule.extra_param)
+
+        if (!dryRun) {
+          await DB.prepare(`
+            UPDATE products
+            SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).bind(newUrl, prod.id).run()
+
+          // Atualiza também a oferta correspondente
+          await DB.prepare(`
+            UPDATE offers SET affiliate_url = ?
+            WHERE product_id = ?
+              AND store_id = (SELECT id FROM stores WHERE slug='mercadolivre' LIMIT 1)
+          `).bind(newUrl, prod.id).run()
+        }
+
+        ruleStats.updated++
+        totalUpdated++
+      }
+
+      continue
+    }
+
+    // Para outras redes: busca produtos via best_store_id
+    const storesRes = await DB.prepare(`
+      SELECT id FROM stores WHERE affiliate_network = ? AND is_active = 1
+    `).bind(rule.network).all<{ id: number }>()
+
+    const storeIds = (storesRes.results ?? []).map((s) => s.id)
+    if (storeIds.length === 0) {
+      ruleStats.skipped++
+      continue
+    }
+
+    const placeholders = storeIds.map(() => '?').join(',')
+    const prodsRes = await DB.prepare(`
+      SELECT p.id, o.product_url, o.affiliate_url AS offer_aff_url
+      FROM products p
+      JOIN offers o ON o.product_id = p.id AND o.store_id IN (${placeholders})
+      WHERE p.is_active = 1
+      GROUP BY p.id
+    `).bind(...storeIds).all<any>()
+
+    for (const prod of prodsRes.results ?? []) {
+      let baseUrl = (prod.product_url || prod.offer_aff_url || '').split('?')[0].split('#')[0]
+      if (!baseUrl || !baseUrl.startsWith('http')) { ruleStats.skipped++; continue }
+
+      const newUrl = buildAffLink(rule.link_template, baseUrl, rule.publisher_id, rule.extra_param)
+
+      if (!dryRun) {
+        await DB.prepare(`
+          UPDATE products SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(newUrl, prod.id).run()
+      }
+
+      ruleStats.updated++
+      totalUpdated++
+    }
+  }
+
+  return c.json({
+    ok: true,
+    dry_run: dryRun,
+    total_updated: totalUpdated,
+    summary,
+    tip: dryRun
+      ? 'dry_run=true — nada foi salvo. Envie sem dry_run para aplicar.'
+      : `${totalUpdated} link(s) regenerado(s) com sucesso!`,
+  })
+})
+
+// ── GET /admin/api/affiliate-rules/stats ─────────────────────
+// Estatísticas rápidas para o painel
+admin.get('/api/affiliate-rules/stats', async (c) => {
+  const { DB } = c.env
+
+  const [total, withAff, withMlId, rules] = await Promise.all([
+    DB.prepare(`SELECT COUNT(*) as n FROM products WHERE is_active=1`).first<{ n: number }>(),
+    DB.prepare(`SELECT COUNT(*) as n FROM products WHERE is_active=1 AND affiliate_url IS NOT NULL AND affiliate_url != ''`).first<{ n: number }>(),
+    DB.prepare(`SELECT COUNT(*) as n FROM products WHERE ml_item_id IS NOT NULL AND ml_item_id != ''`).first<{ n: number }>(),
+    DB.prepare(`SELECT network, label, publisher_id FROM affiliate_rules WHERE is_active=1 ORDER BY label`).all<any>(),
+  ])
+
+  return c.json({
+    ok: true,
+    total: total?.n ?? 0,
+    with_affiliate: withAff?.n ?? 0,
+    with_ml_id: withMlId?.n ?? 0,
+    pending: (total?.n ?? 0) - (withAff?.n ?? 0),
+    rules: rules.results ?? [],
+  })
+})
 
 export default admin
