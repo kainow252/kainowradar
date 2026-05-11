@@ -6,9 +6,12 @@
 import { Hono } from 'hono'
 import type { Bindings } from '../types'
 import { CacheManager } from '../lib/cache'
+import ml from './ml'
 
 type AdminBindings = Bindings & {
   ADMIN_SECRET?: string
+  ML_APP_ID?: string
+  ML_SECRET?: string
 }
 
 const admin = new Hono<{ Bindings: AdminBindings }>()
@@ -6498,5 +6501,8 @@ admin.delete('/api/affiliate-bot/clear/:id', async (c) => {
   `).bind(id).run()
   return c.json({ ok: true })
 })
+
+// ── Rotas ML dentro do Admin (com auth) ──────────────────
+admin.route('/api/ml', ml)
 
 export default admin

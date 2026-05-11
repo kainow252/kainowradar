@@ -51,11 +51,11 @@ app.route('/admin', admin)
 // ── Editorial AI Routes ───────────────────────────────────
 app.route('/api/editorial', editorial)
 
-// ── Mercado Livre — OAuth2, Webhook, Import ───────────────
+// ── Mercado Livre — OAuth2, Webhook (público) ───────────────
 app.route('/api/ml', ml)
 app.route('/api/ml-callback', ml)
 app.route('/api/ml-webhook', ml)
-app.route('/admin/api/ml', ml)
+// NOTA: /admin/api/ml/* está registrado DENTRO do admin.ts para passar pelo middleware de auth
 
 // ── Page Routes ───────────────────────────────────────────
 app.route('/', pages)
