@@ -769,6 +769,63 @@ ml.get('/search-debug', async (c) => {
     }
   } catch (e: any) { results.T11_html_scrape = { error: e?.message } }
 
+  // ── Teste 12: mercadolivre.com.br/ofertas — fonte de IDs reais sem bot ──
+  // Descoberta: este endpoint retorna HTML com IDs reais MLB\d{10,} sem bot challenge
+  // Os IDs extraídos podem ser usados diretamente no /items/{id} com token OAuth
+  try {
+    const ofertasUrl = 'https://www.mercadolivre.com.br/ofertas'
+    const r = await fetch(ofertasUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+        'Referer': 'https://www.mercadolivre.com.br/',
+      },
+    })
+    const html = await r.text().catch(() => '')
+    // IDs reais: MLB + 10 ou mais dígitos = anúncios reais (não catalog IDs de 8 dígitos)
+    const idRegex = /\b(MLB\d{10,})\b/gi
+    const foundIds = [...new Set([...html.matchAll(idRegex)].map(m => m[1].toUpperCase()))]
+    const isBotChallenge = html.includes('_bmstate') || html.includes('PoW') || html.length < 10000
+
+    // Se temos IDs e token, testa o primeiro via /items/{id}
+    let sampleItem: any = null
+    if (foundIds.length > 0 && token) {
+      try {
+        const testId = foundIds[0]
+        const ir = await fetch(
+          `${ML_API}/items/${testId}?attributes=id,title,price,status,permalink,thumbnail`,
+          { headers }
+        )
+        const ib: any = await ir.json().catch(() => null)
+        sampleItem = {
+          id: testId,
+          http_status: ir.status,
+          title: ib?.title?.slice(0, 60) ?? null,
+          price: ib?.price ?? null,
+          status: ib?.status ?? null,
+          permalink: ib?.permalink ?? null,
+          error: ib?.error ?? null,
+        }
+      } catch {}
+    }
+
+    results.T12_ofertas_scrape = {
+      url: ofertasUrl,
+      http_status: r.status,
+      html_bytes: html.length,
+      is_bot_challenge: isBotChallenge,
+      item_ids_found: foundIds.slice(0, 15),
+      item_ids_count: foundIds.length,
+      sample_item_fetch: sampleItem,
+      verdict: isBotChallenge
+        ? 'BLOQUEADO — bot challenge detectado no Worker'
+        : foundIds.length > 0
+          ? 'OK — IDs reais encontrados, prontos para /items/{id}'
+          : 'VAZIO — HTML sem IDs de produto',
+    }
+  } catch (e: any) { results.T12_ofertas_scrape = { error: e?.message } }
+
   return c.json({ q, has_token: !!token, results })
 })
 
