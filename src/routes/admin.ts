@@ -14,6 +14,7 @@ type AdminBindings = Bindings & {
   ML_SECRET?: string
   GECKO_API_KEY?: string
   LOMADEE_API_KEY?: string
+  AWIN_API_TOKEN?: string
 }
 
 const admin = new Hono<{ Bindings: AdminBindings }>()
@@ -4261,6 +4262,434 @@ admin.post('/api/affiliate-rules/generate', async (c) => {
   })
 })
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ██  AWIN API — Integração com rede global de afiliados
+// ═══════════════════════════════════════════════════════════════════════════
+// Publisher ID: 2892017 (KAINOW PROMOCAO DE VENDAS E SERVICOS)
+// Token: AWIN_API_TOKEN (OAuth2 Bearer)
+// Base: https://api.awin.com
+// Lojas BR mapeadas: Casas Bahia (17629), Extra (17874), Ponto (17621),
+//                    Fast Shop (17590), Kabum (17729), Centauro (17806)
+// ─────────────────────────────────────────────────────────────────────────
+
+const AWIN_BASE    = 'https://api.awin.com'
+const AWIN_PUB_ID  = 2892017
+
+// Mapa slug → advertiser ID (fallback hardcoded para as lojas principais)
+const AWIN_STORE_MAP: Record<string, number> = {
+  casasbahia : 17629,
+  extra      : 17874,
+  ponto      : 17621,
+  pontofrio  : 17621,
+  fastshop   : 17590,
+  kabum      : 17729,
+  centauro   : 17806,
+}
+
+// Helper GET autenticado na Awin
+async function awinGet(path: string, token: string): Promise<{ data: any; error: string | null }> {
+  try {
+    const r = await fetch(`${AWIN_BASE}${path}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(12000),
+    })
+    const text = await r.text()
+    if (!r.ok) return { data: null, error: `Awin ${r.status}: ${text.slice(0, 200)}` }
+    return { data: JSON.parse(text), error: null }
+  } catch (e: any) {
+    return { data: null, error: `Awin fetch error: ${e.message}` }
+  }
+}
+
+// Helper: gera link de afiliado via Link Builder API da Awin
+// POST https://api.awin.com/publishers/{pub}/linkbuilder
+async function awinBuildLink(
+  advertiserId: number,
+  destinationUrl: string,
+  token: string,
+  shorten = false,
+): Promise<{ url: string | null; shortUrl: string | null; error: string | null }> {
+  try {
+    const r = await fetch(`${AWIN_BASE}/publishers/${AWIN_PUB_ID}/linkbuilder`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ advertiserId, destinationUrl, shorten }),
+      signal: AbortSignal.timeout(12000),
+    })
+    const json: any = await r.json().catch(() => ({}))
+    if (!r.ok || json.description) {
+      return { url: null, shortUrl: null, error: json.description ?? `Awin ${r.status}` }
+    }
+    return { url: json.url ?? null, shortUrl: json.shortUrl ?? null, error: null }
+  } catch (e: any) {
+    return { url: null, shortUrl: null, error: e.message }
+  }
+}
+
+// ── GET /admin/api/awin/status ────────────────────────────────────────────
+admin.get('/api/awin/status', async (c) => {
+  const token = (c.env as any).AWIN_API_TOKEN as string | undefined
+  if (!token) return c.json({ ok: false, configured: false, error: 'AWIN_API_TOKEN não configurado' })
+
+  const { data, error } = await awinGet('/accounts', token)
+  if (error || !data) return c.json({ ok: false, configured: true, error })
+
+  const acc = data.accounts?.[0]
+  return c.json({
+    ok: true,
+    configured: true,
+    publisher_id: acc?.accountId,
+    publisher_name: acc?.accountName,
+    account_type: acc?.accountType,
+    user_role: acc?.userRole,
+  })
+})
+
+// ── GET /admin/api/awin/programmes ────────────────────────────────────────
+// Lista programas do banco local (após sync)
+admin.get('/api/awin/programmes', async (c) => {
+  const { DB } = c.env
+  const relationship = c.req.query('relationship') || 'all'
+  const search       = (c.req.query('search') || '').trim()
+
+  let sql = `SELECT id, name, logo_url, primary_region, status, relationship, joined_at, synced_at
+             FROM awin_programmes WHERE 1=1`
+  const binds: any[] = []
+
+  if (relationship !== 'all') { sql += ` AND relationship = ?`; binds.push(relationship) }
+  if (search) { sql += ` AND name LIKE ?`; binds.push(`%${search}%`) }
+  sql += ` ORDER BY relationship DESC, name ASC LIMIT 300`
+
+  const { results } = await DB.prepare(sql).bind(...binds).all<any>()
+
+  // Vinculação com stores do banco
+  const { results: linked } = await DB.prepare(
+    `SELECT slug, name, awin_advertiser_id FROM stores WHERE awin_advertiser_id IS NOT NULL`
+  ).all<any>()
+  const linkedMap = new Map(linked.map((s: any) => [s.awin_advertiser_id, s]))
+
+  const enriched = results.map((p: any) => ({
+    ...p,
+    store: linkedMap.get(p.id) ?? null,
+  }))
+
+  return c.json({ ok: true, total: enriched.length, programmes: enriched })
+})
+
+// ── POST /admin/api/awin/sync-programmes ─────────────────────────────────
+// Busca todos os programas BR da Awin API e salva no banco local
+admin.post('/api/awin/sync-programmes', async (c) => {
+  const { DB } = c.env
+  const token = (c.env as any).AWIN_API_TOKEN as string | undefined
+  if (!token) return c.json({ ok: false, error: 'AWIN_API_TOKEN não configurado' }, 400)
+
+  // Busca joined + notjoined em paralelo
+  const [rJoined, rNot] = await Promise.all([
+    awinGet(`/publishers/${AWIN_PUB_ID}/programmes?relationship=joined`, token),
+    awinGet(`/publishers/${AWIN_PUB_ID}/programmes?relationship=notjoined&countryCode=BR`, token),
+  ])
+
+  if (rJoined.error && rNot.error) {
+    return c.json({ ok: false, error: rJoined.error }, 502)
+  }
+
+  const joined   : any[] = rJoined.data ?? []
+  const notJoined: any[] = (rNot.data ?? []).filter(
+    (p: any) => p.primaryRegion?.name === 'Brazil'
+  )
+  const allProg = [
+    ...joined.map((p: any) => ({ ...p, relationship: 'joined' })),
+    ...notJoined.map((p: any) => ({ ...p, relationship: 'notjoined' })),
+  ]
+
+  if (allProg.length === 0) {
+    return c.json({ ok: false, error: 'Nenhum programa retornado pela Awin' }, 502)
+  }
+
+  // Upsert em lotes de 50
+  const stmts = allProg.map((p: any) =>
+    DB.prepare(`
+      INSERT INTO awin_programmes (id, name, logo_url, primary_region, status, relationship, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(id) DO UPDATE SET
+        name         = excluded.name,
+        logo_url     = COALESCE(NULLIF(excluded.logo_url,''), awin_programmes.logo_url),
+        status       = excluded.status,
+        relationship = excluded.relationship,
+        synced_at    = CURRENT_TIMESTAMP
+    `).bind(
+      p.id,
+      p.name,
+      p.logoUrl ?? p.logo ?? '',
+      p.primaryRegion?.name ?? 'Brazil',
+      p.status ?? 'Active',
+      p.relationship,
+    )
+  )
+
+  const CHUNK = 50
+  const chunks: (typeof stmts)[] = []
+  for (let i = 0; i < stmts.length; i += CHUNK) chunks.push(stmts.slice(i, i + CHUNK))
+  await Promise.all(chunks.map(chunk => DB.batch(chunk)))
+
+  // Atualiza awin_advertiser_id nas stores a partir do mapa hardcoded
+  const mapStmts = Object.entries(AWIN_STORE_MAP).map(([slug, advId]) =>
+    DB.prepare(`UPDATE stores SET awin_advertiser_id = ? WHERE slug = ?`).bind(advId, slug)
+  )
+  await DB.batch(mapStmts)
+
+  return c.json({
+    ok: true,
+    synced: allProg.length,
+    joined: joined.length,
+    not_joined_br: notJoined.length,
+  })
+})
+
+// ── POST /admin/api/awin/join-programme ──────────────────────────────────
+// Solicita participação em programa (atualiza relationship no banco)
+// Nota: a aprovação é feita no painel Awin, aqui apenas registramos o status local
+admin.post('/api/awin/join-programme', async (c) => {
+  const { DB } = c.env
+  const body         = await c.req.json().catch(() => ({})) as any
+  const advertiserId = parseInt(body.advertiser_id)
+  const storeSlug    = (body.store_slug || '').trim()
+
+  if (!advertiserId) return c.json({ ok: false, error: 'advertiser_id obrigatório' }, 400)
+
+  // Marca como 'pending' no banco local
+  await DB.prepare(`
+    UPDATE awin_programmes SET relationship = 'pending' WHERE id = ?
+  `).bind(advertiserId).run()
+
+  // Vincula ao store se fornecido
+  if (storeSlug) {
+    await DB.prepare(`
+      UPDATE stores SET awin_advertiser_id = ? WHERE slug = ?
+    `).bind(advertiserId, storeSlug).run()
+  }
+
+  return c.json({
+    ok: true,
+    advertiser_id: advertiserId,
+    message: 'Para concluir, acesse o painel Awin em: https://ui.awin.com/affiliate/programmes',
+    awin_url: `https://ui.awin.com/affiliate/programmes?advertiser=${advertiserId}`,
+  })
+})
+
+// ── POST /admin/api/awin/generate-link ───────────────────────────────────
+// Gera link de afiliado via Link Builder API
+// Body: { advertiser_id, url, shorten? } ou { store_slug, url, shorten? }
+admin.post('/api/awin/generate-link', async (c) => {
+  const token = (c.env as any).AWIN_API_TOKEN as string | undefined
+  if (!token) return c.json({ ok: false, error: 'AWIN_API_TOKEN não configurado' }, 400)
+
+  const { DB } = c.env
+  const body        = await c.req.json().catch(() => ({})) as any
+  const destUrl     = (body.url || '').trim()
+  const shorten     = !!body.shorten
+  let advertiserId  = parseInt(body.advertiser_id) || 0
+
+  if (!destUrl) return c.json({ ok: false, error: 'url obrigatório' }, 400)
+
+  // Resolve advertiser_id por store_slug se não fornecido
+  if (!advertiserId && body.store_slug) {
+    advertiserId = AWIN_STORE_MAP[body.store_slug] ?? 0
+    if (!advertiserId) {
+      const row = await DB.prepare(
+        `SELECT awin_advertiser_id FROM stores WHERE slug = ?`
+      ).bind(body.store_slug).first<{ awin_advertiser_id: number | null }>()
+      advertiserId = row?.awin_advertiser_id ?? 0
+    }
+  }
+
+  if (!advertiserId) return c.json({ ok: false, error: 'advertiser_id ou store_slug obrigatório' }, 400)
+
+  const result = await awinBuildLink(advertiserId, destUrl, token, shorten)
+  if (result.error) return c.json({ ok: false, error: result.error, advertiser_id: advertiserId }, 502)
+
+  return c.json({
+    ok: true,
+    advertiser_id: advertiserId,
+    original_url: destUrl,
+    affiliate_url: result.url,
+    short_url: result.shortUrl ?? null,
+  })
+})
+
+// ── POST /admin/api/awin/generate-batch ──────────────────────────────────
+// Gera links de afiliado em lote (até 100 por chamada)
+// Body: { links: [{ advertiser_id, url }], shorten? }
+admin.post('/api/awin/generate-batch', async (c) => {
+  const token = (c.env as any).AWIN_API_TOKEN as string | undefined
+  if (!token) return c.json({ ok: false, error: 'AWIN_API_TOKEN não configurado' }, 400)
+
+  const body    = await c.req.json().catch(() => ({})) as any
+  const links   = (body.links ?? []) as { advertiser_id: number; url: string }[]
+  const shorten = !!body.shorten
+
+  if (!Array.isArray(links) || links.length === 0) {
+    return c.json({ ok: false, error: 'links[] obrigatório' }, 400)
+  }
+  if (links.length > 100) {
+    return c.json({ ok: false, error: 'Máximo 100 links por batch' }, 400)
+  }
+
+  // Processa em paralelo (respeitando rate limit 20 req/min da Awin)
+  const BATCH = 10
+  const results: any[] = []
+  for (let i = 0; i < links.length; i += BATCH) {
+    const slice = links.slice(i, i + BATCH)
+    const batch = await Promise.all(
+      slice.map(async (item) => {
+        const r = await awinBuildLink(item.advertiser_id, item.url, token, shorten)
+        return { advertiser_id: item.advertiser_id, original_url: item.url, ...r }
+      })
+    )
+    results.push(...batch)
+    // Pequeno delay entre batches para respeitar rate limit
+    if (i + BATCH < links.length) await new Promise(r => setTimeout(r, 500))
+  }
+
+  const ok    = results.filter(r => r.url)
+  const failed = results.filter(r => !r.url)
+
+  return c.json({ ok: true, total: results.length, success: ok.length, failed: failed.length, results })
+})
+
+// ── POST /admin/api/awin/refresh-links ───────────────────────────────────
+// Regenera affiliate_url de todas as offers de lojas Awin no banco
+// Usa Link Builder API para obter links rastreados reais
+admin.post('/api/awin/refresh-links', async (c) => {
+  const { DB } = c.env
+  const token = (c.env as any).AWIN_API_TOKEN as string | undefined
+  if (!token) return c.json({ ok: false, error: 'AWIN_API_TOKEN não configurado' }, 400)
+
+  const body    = await c.req.json().catch(() => ({})) as any
+  const limit   = Math.min(parseInt(body.limit) || 20, 50)  // max 50 por run (rate limit)
+  const storeSlug = body.store_slug || null
+
+  // Busca offers de lojas Awin com URL de produto mas sem affiliate_url ou com affiliate_url antiga
+  let sql = `
+    SELECT o.id, o.product_url, o.affiliate_url, s.slug, s.awin_advertiser_id
+    FROM offers o
+    JOIN stores s ON s.id = o.store_id
+    WHERE s.affiliate_network = 'awin'
+      AND s.awin_advertiser_id IS NOT NULL
+      AND o.product_url IS NOT NULL AND o.product_url != ''
+      AND (o.affiliate_url IS NULL OR o.affiliate_url = '' OR o.affiliate_url NOT LIKE '%awin1.com%')
+  `
+  const binds: any[] = []
+  if (storeSlug) { sql += ` AND s.slug = ?`; binds.push(storeSlug) }
+  sql += ` ORDER BY o.updated_at ASC LIMIT ?`
+  binds.push(limit)
+
+  const { results: offers } = await DB.prepare(sql).bind(...binds)
+    .all<{ id: number; product_url: string; affiliate_url: string | null; slug: string; awin_advertiser_id: number }>()
+
+  if (offers.length === 0) {
+    // Conta total pendente para informar
+    const countRow = await DB.prepare(`
+      SELECT COUNT(*) as total FROM offers o
+      JOIN stores s ON s.id = o.store_id
+      WHERE s.affiliate_network = 'awin' AND s.awin_advertiser_id IS NOT NULL
+        AND o.product_url IS NOT NULL AND o.product_url != ''
+        AND (o.affiliate_url IS NULL OR o.affiliate_url = '' OR o.affiliate_url NOT LIKE '%awin1.com%')
+    `).first<{ total: number }>()
+    return c.json({ ok: true, processed: 0, updated: 0, has_more: false,
+      total_pending: countRow?.total ?? 0, message: 'Nenhuma offer Awin pendente' })
+  }
+
+  let updated = 0
+  const errors: { id: number; error: string }[] = []
+
+  // Processa em lotes de 5 (rate limit Awin: 20 req/min)
+  const BATCH = 5
+  for (let i = 0; i < offers.length; i += BATCH) {
+    const slice = offers.slice(i, i + BATCH)
+    await Promise.all(
+      slice.map(async (offer) => {
+        const result = await awinBuildLink(offer.awin_advertiser_id, offer.product_url, token, true)
+        if (result.url) {
+          await DB.prepare(
+            `UPDATE offers SET affiliate_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+          ).bind(result.shortUrl ?? result.url, offer.id).run()
+          updated++
+        } else {
+          errors.push({ id: offer.id, error: result.error ?? 'unknown' })
+        }
+      })
+    )
+    if (i + BATCH < offers.length) await new Promise(r => setTimeout(r, 400))
+  }
+
+  // Verifica se há mais pendentes
+  const countRow = await DB.prepare(`
+    SELECT COUNT(*) as total FROM offers o
+    JOIN stores s ON s.id = o.store_id
+    WHERE s.affiliate_network = 'awin' AND s.awin_advertiser_id IS NOT NULL
+      AND o.product_url IS NOT NULL AND o.product_url != ''
+      AND (o.affiliate_url IS NULL OR o.affiliate_url = '' OR o.affiliate_url NOT LIKE '%awin1.com%')
+  `).first<{ total: number }>()
+
+  return c.json({
+    ok: true,
+    processed: offers.length,
+    updated,
+    failed: errors.length,
+    has_more: (countRow?.total ?? 0) > 0,
+    total_pending: countRow?.total ?? 0,
+    errors: errors.slice(0, 5),
+  })
+})
+
+// ── GET /admin/api/awin/stats ─────────────────────────────────────────────
+// Estatísticas das offers Awin no banco
+admin.get('/api/awin/stats', async (c) => {
+  const { DB } = c.env
+
+  const [storeStats, linkStats, progStats] = await Promise.all([
+    DB.prepare(`
+      SELECT s.slug, s.name, s.awin_advertiser_id,
+             COUNT(o.id) as total_offers,
+             SUM(CASE WHEN o.affiliate_url LIKE '%awin1.com%' THEN 1 ELSE 0 END) as with_awin_link,
+             MIN(o.price) as min_price, MAX(o.price) as max_price
+      FROM stores s
+      LEFT JOIN offers o ON o.store_id = s.id
+      WHERE s.affiliate_network = 'awin' AND s.awin_advertiser_id IS NOT NULL
+      GROUP BY s.id ORDER BY total_offers DESC
+    `).all<any>(),
+
+    DB.prepare(`
+      SELECT
+        COUNT(*) as total_awin_offers,
+        SUM(CASE WHEN affiliate_url LIKE '%awin1.com%' THEN 1 ELSE 0 END) as with_awin_link,
+        SUM(CASE WHEN affiliate_url IS NULL OR affiliate_url = '' THEN 1 ELSE 0 END) as no_link
+      FROM offers o
+      JOIN stores s ON s.id = o.store_id
+      WHERE s.affiliate_network = 'awin'
+    `).first<any>(),
+
+    DB.prepare(`
+      SELECT COUNT(*) as total,
+             SUM(CASE WHEN relationship='joined' THEN 1 ELSE 0 END) as joined,
+             SUM(CASE WHEN relationship='notjoined' THEN 1 ELSE 0 END) as available,
+             SUM(CASE WHEN relationship='pending' THEN 1 ELSE 0 END) as pending
+      FROM awin_programmes
+    `).first<any>(),
+  ])
+
+  return c.json({
+    ok: true,
+    stores: storeStats.results,
+    links: linkStats,
+    programmes: progStats,
+  })
+})
+
 // ── Página HTML do Admin (SPA) ────────────────────────────
 admin.get('*', async (c) => {
   const path = new URL(c.req.url).pathname
@@ -4428,6 +4857,9 @@ function renderAdminSPA(): string {
       <div onclick="showSection('lomadee-import')" class="sidebar-link" data-section="lomadee-import">
         <span class="text-lg">🟠</span> Importar Lomadee
       </div>
+      <div onclick="showSection('awin-import')" class="sidebar-link" data-section="awin-import">
+        <span class="text-lg">🔵</span> Awin Afiliados
+      </div>
       <div onclick="showSection('ml-import')" class="sidebar-link" data-section="ml-import">
         <span class="text-lg">🟡</span> Importar do ML
       </div>
@@ -4490,5 +4922,4 @@ function renderAdminSPA(): string {
 </body>
 </html>`
 }
-
 export default admin

@@ -105,6 +105,7 @@ async function loadSection(name) {
     'affiliate-codes': ['🔗 Códigos Afiliados', 'Configure seus códigos por rede e gere links para todos os produtos'],
     'buscape-import': ['🛍️ Importar do Buscapé', 'Importa produtos e preços de múltiplas lojas via Buscapé — gera links afiliados automaticamente'],
     'lomadee-import': ['🟠 Importar Lomadee', 'Busca produtos e gera links afiliados automáticos via API da Lomadee (136 lojas parceiras)'],
+    'awin-import':    ['🔵 Awin — Rede de Afiliados', 'Gerencie programas, gere links rastreados e visualize estatísticas da rede Awin'],
   }
   const [title, subtitle] = titles[name] || ['Admin', '']
   document.getElementById('page-title').textContent = title
@@ -128,6 +129,7 @@ async function loadSection(name) {
     'affiliate-codes': renderAffiliateCodes,
     'buscape-import': renderBuscapeImport,
     'lomadee-import': renderLomadeeImport,
+    'awin-import':    renderAwinImport,
   }
   if (sections[name]) await sections[name](area)
 }
@@ -6232,6 +6234,468 @@ async function refreshBuscape() {
   `
 
   toast(`${res.imported + res.updated} oferta(s) atualizadas!`, 'success')
+}
+
+
+// ══════════════════════════════════════════════════════════════════════
+// AWIN — Rede de Afiliados
+// ══════════════════════════════════════════════════════════════════════
+
+async function renderAwinImport(area) {
+  area.innerHTML = `<div class="flex items-center justify-center h-40">
+    <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+  </div>`
+
+  const [statusRes, statsRes] = await Promise.all([
+    api('GET', '/admin/api/awin/status'),
+    api('GET', '/admin/api/awin/stats'),
+  ])
+
+  const ok          = statusRes?.ok
+  const pubName     = statusRes?.publisher_name ?? '—'
+  const pubId       = statusRes?.publisher_id ?? '—'
+  const stores      = statsRes?.stores ?? []
+  const links       = statsRes?.links ?? {}
+  const progs       = statsRes?.programmes ?? {}
+
+  // Cores por status de relacionamento
+  const relColor = { joined:'#22c55e', notjoined:'#94a3b8', pending:'#f59e0b' }
+  const relLabel = { joined:'Aprovado ✅', notjoined:'Disponível', pending:'Aguardando ⏳' }
+
+  area.innerHTML = `
+  <div class="space-y-6">
+
+    <!-- Hero card -->
+    <div class="rounded-2xl p-6 text-white" style="background:linear-gradient(135deg,#0073e6 0%,#0052a3 100%)">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="flex items-center gap-3 mb-1">
+            <span class="text-3xl">🔵</span>
+            <h2 class="text-xl font-bold">Awin — Rede Global de Afiliados</h2>
+            <span class="px-2 py-0.5 rounded-full text-xs font-semibold ${ok ? 'bg-green-400 text-green-900' : 'bg-red-400 text-red-900'}">
+              ${ok ? 'Conectado ✓' : '⚠ Token não configurado'}
+            </span>
+          </div>
+          <p class="text-blue-100 text-sm">Publisher: <strong>${pubName}</strong> (ID: ${pubId})</p>
+          <p class="text-blue-100 text-sm mt-1">250+ programas brasileiros disponíveis · Link Builder API</p>
+        </div>
+        <div class="text-right text-sm text-blue-200 space-y-1">
+          <div>Programas: <strong class="text-white">${progs.total ?? 0}</strong></div>
+          <div>Aprovados: <strong class="text-green-300">${progs.joined ?? 0}</strong></div>
+          <div>Disponíveis: <strong class="text-white">${progs.available ?? 0}</strong></div>
+          <div>Pendentes: <strong class="text-yellow-300">${progs.pending ?? 0}</strong></div>
+        </div>
+      </div>
+
+      <!-- Stats linha -->
+      <div class="mt-4 grid grid-cols-3 gap-3">
+        <div class="bg-white/10 rounded-xl p-3 text-center">
+          <div class="text-2xl font-bold">${links.total_awin_offers ?? 0}</div>
+          <div class="text-xs text-blue-200">Offers Awin no banco</div>
+        </div>
+        <div class="bg-white/10 rounded-xl p-3 text-center">
+          <div class="text-2xl font-bold text-green-300">${links.with_awin_link ?? 0}</div>
+          <div class="text-xs text-blue-200">Com link rastreado</div>
+        </div>
+        <div class="bg-white/10 rounded-xl p-3 text-center">
+          <div class="text-2xl font-bold text-yellow-300">${links.no_link ?? 0}</div>
+          <div class="text-xs text-blue-200">Sem link (pendentes)</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Lojas vinculadas -->
+    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+      <h3 class="font-semibold text-slate-700 mb-4">🏪 Lojas Awin Vinculadas</h3>
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-3" id="awin-stores-grid">
+        ${stores.length === 0 ? `
+          <div class="col-span-3 text-center text-slate-400 py-8">
+            Nenhuma loja Awin com offers ainda.<br>
+            <span class="text-xs">Importe produtos via Buscapé para Casas Bahia, Extra, Ponto, Fast Shop e Kabum.</span>
+          </div>` :
+          stores.map(s => `
+            <div class="border border-slate-200 rounded-xl p-4 hover:border-blue-300 transition-colors">
+              <div class="flex items-center justify-between mb-2">
+                <span class="font-medium text-slate-700 capitalize">${s.name ?? s.slug}</span>
+                <span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">ID ${s.awin_advertiser_id}</span>
+              </div>
+              <div class="grid grid-cols-2 gap-1 text-xs text-slate-500">
+                <div>Offers: <strong class="text-slate-700">${s.total_offers ?? 0}</strong></div>
+                <div>Com link: <strong class="text-green-600">${s.with_awin_link ?? 0}</strong></div>
+              </div>
+              <button onclick="awinTestLink('${s.slug}', ${s.awin_advertiser_id})"
+                class="mt-3 w-full text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg py-1.5 transition-colors">
+                🔗 Testar Link Builder
+              </button>
+            </div>
+          `).join('')
+        }
+      </div>
+    </div>
+
+    <!-- Ações principais em cards -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+      <!-- Sync programas -->
+      <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+        <h3 class="font-semibold text-slate-700 mb-1">📋 Sincronizar Programas</h3>
+        <p class="text-xs text-slate-500 mb-4">Importa todos os 250+ programas brasileiros da Awin API para o banco local. Necessário para associar lojas e solicitar parcerias.</p>
+        <button onclick="awinSyncProgrammes()"
+          class="w-full btn-primary bg-blue-600 hover:bg-blue-700 text-white rounded-xl py-2.5 font-medium text-sm transition-colors flex items-center justify-center gap-2">
+          <span id="sync-prog-spin" class="hidden animate-spin">⏳</span>
+          🔄 Sincronizar Programas
+        </button>
+        <div id="sync-prog-log" class="mt-3 hidden font-mono text-xs bg-slate-900 text-green-400 rounded-xl p-3 max-h-32 overflow-y-auto"></div>
+      </div>
+
+      <!-- Refresh links -->
+      <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+        <h3 class="font-semibold text-slate-700 mb-1">⚡ Gerar Links Rastreados</h3>
+        <p class="text-xs text-slate-500 mb-3">Usa a Link Builder API para gerar links <code>awin1.com</code> rastreados para todas as offers Awin pendentes.</p>
+        <div class="flex gap-2 mb-3">
+          <select id="awin-refresh-store" class="flex-1 text-xs border border-slate-200 rounded-lg px-2 py-1.5">
+            <option value="">Todas as lojas Awin</option>
+            ${stores.map(s => `<option value="${s.slug}">${s.name ?? s.slug}</option>`).join('')}
+          </select>
+          <input type="number" id="awin-refresh-limit" value="20" min="1" max="50"
+            class="w-20 text-xs border border-slate-200 rounded-lg px-2 py-1.5 text-center">
+        </div>
+        <button onclick="awinRefreshLinks()"
+          class="w-full bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl py-2.5 font-medium text-sm transition-colors flex items-center justify-center gap-2">
+          <span id="refresh-link-spin" class="hidden animate-spin">⏳</span>
+          ⚡ Gerar Links Awin
+        </button>
+        <div id="refresh-link-log" class="mt-3 hidden font-mono text-xs bg-slate-900 text-green-400 rounded-xl p-3 max-h-32 overflow-y-auto"></div>
+      </div>
+    </div>
+
+    <!-- Link Builder manual -->
+    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+      <h3 class="font-semibold text-slate-700 mb-1">🔗 Link Builder Manual</h3>
+      <p class="text-xs text-slate-500 mb-4">Gere um link de afiliado rastreado para qualquer URL de produto de uma loja Awin.</p>
+      <div class="flex flex-col gap-3">
+        <div class="flex gap-2">
+          <select id="awin-lb-store" class="w-44 text-sm border border-slate-200 rounded-xl px-3 py-2">
+            <option value="">— Loja —</option>
+            <option value="casasbahia" data-id="17629">Casas Bahia</option>
+            <option value="extra" data-id="17874">Extra</option>
+            <option value="ponto" data-id="17621">Ponto</option>
+            <option value="fastshop" data-id="17590">Fast Shop</option>
+            <option value="kabum" data-id="17729">Kabum</option>
+            <option value="centauro" data-id="17806">Centauro</option>
+          </select>
+          <input id="awin-lb-url" type="url" placeholder="https://www.casasbahia.com.br/produto/..."
+            class="flex-1 text-sm border border-slate-200 rounded-xl px-3 py-2 font-mono text-xs">
+          <label class="flex items-center gap-1 text-xs text-slate-600 whitespace-nowrap">
+            <input type="checkbox" id="awin-lb-shorten" checked> Encurtar
+          </label>
+        </div>
+        <button onclick="awinGenerateLink()"
+          class="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-xl py-2.5 font-medium text-sm transition-colors">
+          🔗 Gerar Link Afiliado
+        </button>
+        <div id="awin-lb-result" class="hidden bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2"></div>
+      </div>
+    </div>
+
+    <!-- Tabela de programas -->
+    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-semibold text-slate-700">📂 Programas no Banco</h3>
+        <div class="flex gap-2">
+          <input id="awin-prog-search" type="text" placeholder="Buscar programa..."
+            class="text-sm border border-slate-200 rounded-xl px-3 py-1.5 w-48"
+            oninput="awinSearchProgrammes()">
+          <select id="awin-prog-filter" class="text-sm border border-slate-200 rounded-xl px-3 py-1.5"
+            onchange="awinSearchProgrammes()">
+            <option value="all">Todos</option>
+            <option value="joined">Aprovados</option>
+            <option value="notjoined">Disponíveis</option>
+            <option value="pending">Pendentes</option>
+          </select>
+          <button onclick="awinLoadProgrammes()"
+            class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl px-3 py-1.5">
+            ↻ Carregar
+          </button>
+        </div>
+      </div>
+      <div id="awin-programmes-list" class="text-sm text-slate-400 text-center py-8">
+        Clique em "↻ Carregar" ou sincronize para ver os programas.
+      </div>
+    </div>
+
+    <!-- Info: Como solicitar parceria -->
+    <div class="bg-blue-50 border border-blue-200 rounded-2xl p-5">
+      <h4 class="font-semibold text-blue-800 mb-2">ℹ️ Como solicitar parceria com um anunciante</h4>
+      <ol class="text-sm text-blue-700 space-y-1 list-decimal list-inside">
+        <li>Acesse <a href="https://ui.awin.com/affiliate/programmes" target="_blank" class="underline font-medium">ui.awin.com/affiliate/programmes</a></li>
+        <li>Busque o anunciante (ex: "Casas Bahia BR") e clique em <strong>Join Programme</strong></li>
+        <li>Após aprovação (geralmente automática), os links rastreados passam a funcionar</li>
+        <li>Use o botão <strong>⚡ Gerar Links Awin</strong> acima para atualizar todas as offers do banco</li>
+      </ol>
+    </div>
+
+  </div>`
+}
+
+// ── Sync programas Awin ───────────────────────────────────────────────────
+async function awinSyncProgrammes() {
+  const log = document.getElementById('sync-prog-log')
+  const spin = document.getElementById('sync-prog-spin')
+  log.classList.remove('hidden')
+  if (spin) spin.classList.remove('hidden')
+  log.textContent = '⏳ Buscando programas da Awin API...'
+
+  const res = await api('POST', '/admin/api/awin/sync-programmes')
+  if (spin) spin.classList.add('hidden')
+
+  if (!res) { log.textContent = '❌ Erro ao sincronizar'; return }
+  if (!res.ok) {
+    log.textContent = `❌ ${res.error}`
+    return
+  }
+
+  log.textContent = `✅ Sincronizado!\n` +
+    `• Total: ${res.synced} programas\n` +
+    `• Aprovados (joined): ${res.joined}\n` +
+    `• Disponíveis BR: ${res.not_joined_br}\n\n` +
+    `Use "↻ Carregar" na tabela abaixo para ver os programas.`
+
+  // Reload stats
+  setTimeout(() => renderAwinImport(document.getElementById('content-area')), 1500)
+}
+
+// ── Refresh links Awin ────────────────────────────────────────────────────
+async function awinRefreshLinks() {
+  const log   = document.getElementById('refresh-link-log')
+  const spin  = document.getElementById('refresh-link-spin')
+  const store = document.getElementById('awin-refresh-store')?.value || ''
+  const limit = parseInt(document.getElementById('awin-refresh-limit')?.value) || 20
+
+  log.classList.remove('hidden')
+  if (spin) spin.classList.remove('hidden')
+  log.textContent = `⏳ Gerando links Awin (limit ${limit})${store ? ` para ${store}` : ''}...`
+
+  const body = { limit }
+  if (store) body.store_slug = store
+
+  const res = await api('POST', '/admin/api/awin/refresh-links', body)
+  if (spin) spin.classList.add('hidden')
+
+  if (!res) { log.textContent = '❌ Erro'; return }
+
+  const lines = [
+    res.ok ? `✅ Concluído!` : `❌ Erro`,
+    `• Processadas: ${res.processed}`,
+    `• Links gerados: ${res.updated}`,
+    `• Falhas: ${res.failed}`,
+    `• Pendentes restantes: ${res.total_pending}`,
+    res.has_more ? `\n⏭ Ainda há pendentes — rode novamente para continuar.` : `\n🎉 Nenhum pendente restante!`,
+  ]
+
+  if (res.errors?.length) {
+    lines.push(`\nErros (amostra):`)
+    res.errors.forEach(e => lines.push(`  • ID ${e.id}: ${e.error}`))
+  }
+
+  log.textContent = lines.join('\n')
+
+  if (res.updated > 0) {
+    setTimeout(() => renderAwinImport(document.getElementById('content-area')), 2000)
+  }
+}
+
+// ── Link Builder manual ───────────────────────────────────────────────────
+async function awinGenerateLink() {
+  const storeEl   = document.getElementById('awin-lb-store')
+  const urlEl     = document.getElementById('awin-lb-url')
+  const shortenEl = document.getElementById('awin-lb-shorten')
+  const result    = document.getElementById('awin-lb-result')
+
+  const storeSlug = storeEl?.value
+  const destUrl   = urlEl?.value?.trim()
+  const shorten   = shortenEl?.checked ?? true
+
+  if (!storeSlug) { showToast('Selecione uma loja', 'warn'); return }
+  if (!destUrl)   { showToast('Informe a URL do produto', 'warn'); return }
+
+  result.classList.remove('hidden')
+  result.innerHTML = '<div class="text-slate-400 animate-pulse text-xs">⏳ Gerando link...</div>'
+
+  const res = await api('POST', '/admin/api/awin/generate-link', { store_slug: storeSlug, url: destUrl, shorten })
+
+  if (!res?.ok) {
+    result.innerHTML = `<div class="text-red-600 text-sm font-medium">❌ ${res?.error ?? 'Erro ao gerar link'}</div>
+      <div class="text-xs text-slate-500 mt-1">Verifique se está inscrito no programa desta loja na Awin.</div>`
+    return
+  }
+
+  result.innerHTML = `
+    <div class="space-y-2">
+      <div class="flex items-center gap-2">
+        <span class="text-xs font-medium text-slate-500 w-28">URL Original:</span>
+        <a href="${res.original_url}" target="_blank" class="text-xs text-blue-600 hover:underline truncate font-mono">${res.original_url}</a>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-xs font-medium text-slate-500 w-28">Link Afiliado:</span>
+        <a href="${res.affiliate_url}" target="_blank" class="text-xs text-green-600 hover:underline font-mono flex-1 truncate">${res.affiliate_url}</a>
+        <button onclick="copyText('${res.affiliate_url}')" class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">Copiar</button>
+      </div>
+      ${res.short_url ? `
+      <div class="flex items-center gap-2">
+        <span class="text-xs font-medium text-slate-500 w-28">Short URL:</span>
+        <a href="${res.short_url}" target="_blank" class="text-xs text-purple-600 hover:underline font-mono flex-1">${res.short_url}</a>
+        <button onclick="copyText('${res.short_url}')" class="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded">Copiar</button>
+      </div>` : ''}
+      <div class="text-xs text-slate-400">Advertiser ID: ${res.advertiser_id}</div>
+    </div>`
+}
+
+// ── Testar link de uma loja (botão no card) ───────────────────────────────
+async function awinTestLink(storeSlug, advertiserId) {
+  // URLs de teste por loja
+  const testUrls = {
+    casasbahia : 'https://www.casasbahia.com.br/',
+    extra      : 'https://www.extra.com.br/',
+    ponto      : 'https://www.pontofrio.com.br/',
+    fastshop   : 'https://www.fastshop.com.br/',
+    kabum      : 'https://www.kabum.com.br/',
+    centauro   : 'https://www.centauro.com.br/',
+  }
+  const testUrl = testUrls[storeSlug] ?? `https://www.${storeSlug}.com.br/`
+
+  // Preenche o Link Builder com esses valores
+  const storeEl = document.getElementById('awin-lb-store')
+  const urlEl   = document.getElementById('awin-lb-url')
+  if (storeEl) storeEl.value = storeSlug
+  if (urlEl)   urlEl.value   = testUrl
+
+  showToast(`Loja ${storeSlug} selecionada no Link Builder ↓`, 'info')
+
+  // Scroll para o link builder
+  document.getElementById('awin-lb-url')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  await awinGenerateLink()
+}
+
+// ── Carregar programas do banco ───────────────────────────────────────────
+async function awinLoadProgrammes() {
+  const list   = document.getElementById('awin-programmes-list')
+  const search = document.getElementById('awin-prog-search')?.value?.trim() ?? ''
+  const filter = document.getElementById('awin-prog-filter')?.value ?? 'all'
+
+  list.innerHTML = '<div class="text-center py-8 text-slate-400 animate-pulse">⏳ Carregando...</div>'
+
+  const qs = new URLSearchParams({ relationship: filter })
+  if (search) qs.set('search', search)
+  const res = await api('GET', `/admin/api/awin/programmes?${qs}`)
+
+  if (!res?.ok || !res.programmes) {
+    list.innerHTML = '<div class="text-red-500 text-sm text-center py-4">Erro ao carregar. Sincronize primeiro.</div>'
+    return
+  }
+
+  if (res.programmes.length === 0) {
+    list.innerHTML = '<div class="text-slate-400 text-sm text-center py-6">Nenhum programa encontrado. Clique em "Sincronizar Programas".</div>'
+    return
+  }
+
+  const relColor = { joined:'bg-green-100 text-green-700', notjoined:'bg-slate-100 text-slate-600', pending:'bg-yellow-100 text-yellow-700' }
+  const relLabel = { joined:'Aprovado ✅', notjoined:'Disponível', pending:'Aguardando ⏳' }
+
+  list.innerHTML = `
+    <div class="text-xs text-slate-500 mb-3">${res.total} programa(s)</div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm border-collapse">
+        <thead>
+          <tr class="border-b border-slate-200 text-xs text-slate-500">
+            <th class="text-left py-2 pr-3">Programa</th>
+            <th class="text-left py-2 pr-3">ID</th>
+            <th class="text-left py-2 pr-3">Status</th>
+            <th class="text-left py-2 pr-3">Loja vinculada</th>
+            <th class="text-left py-2">Ação</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${res.programmes.map(p => `
+            <tr class="border-b border-slate-100 hover:bg-slate-50">
+              <td class="py-2 pr-3 font-medium text-slate-700">${p.name}</td>
+              <td class="py-2 pr-3 font-mono text-xs text-slate-500">${p.id}</td>
+              <td class="py-2 pr-3">
+                <span class="px-2 py-0.5 rounded-full text-xs font-medium ${relColor[p.relationship] ?? 'bg-slate-100 text-slate-600'}">
+                  ${relLabel[p.relationship] ?? p.relationship}
+                </span>
+              </td>
+              <td class="py-2 pr-3 text-xs text-slate-500">
+                ${p.store ? `<span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded font-medium">${p.store.name ?? p.store.slug}</span>` : '—'}
+              </td>
+              <td class="py-2">
+                ${p.relationship !== 'joined' ? `
+                  <a href="https://ui.awin.com/affiliate/programmes?advertiser=${p.id}" target="_blank"
+                    class="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded transition-colors">
+                    Solicitar →
+                  </a>` : `
+                  <button onclick="awinTestLinkById(${p.id})"
+                    class="text-xs bg-green-50 hover:bg-green-100 text-green-700 px-2 py-1 rounded transition-colors">
+                    🔗 Gerar Link
+                  </button>`
+                }
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`
+}
+
+// Alias para busca ao digitar
+function awinSearchProgrammes() {
+  clearTimeout(awinSearchProgrammes._t)
+  awinSearchProgrammes._t = setTimeout(awinLoadProgrammes, 400)
+}
+awinSearchProgrammes._t = null
+
+// Gera link por ID de advertiser (direto da tabela de programas)
+async function awinTestLinkById(advertiserId) {
+  const urlEl = document.getElementById('awin-lb-url')
+  if (urlEl) urlEl.value = `https://www.example.com/product?awin_test=${advertiserId}`
+
+  const res = await api('POST', '/admin/api/awin/generate-link', {
+    advertiser_id: advertiserId,
+    url: `https://www.example.com/product?awin_test=${advertiserId}`,
+    shorten: true,
+  })
+
+  if (!res?.ok) {
+    showToast(`❌ ${res?.error ?? 'Erro ao gerar link para advertiser ' + advertiserId}`, 'error')
+    return
+  }
+
+  showToast(`✅ Link gerado! ${res.short_url ?? res.affiliate_url}`, 'success')
+  // Mostra no link builder
+  const result = document.getElementById('awin-lb-result')
+  if (result) {
+    result.classList.remove('hidden')
+    result.innerHTML = `
+      <div class="space-y-2">
+        <div class="text-xs font-semibold text-slate-600">Advertiser ID: ${advertiserId}</div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-slate-500 w-28">Link Afiliado:</span>
+          <a href="${res.affiliate_url}" target="_blank" class="text-xs text-green-600 font-mono truncate flex-1">${res.affiliate_url}</a>
+          <button onclick="copyText('${res.affiliate_url}')" class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">Copiar</button>
+        </div>
+        ${res.short_url ? `
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-slate-500 w-28">Short URL:</span>
+          <a href="${res.short_url}" target="_blank" class="text-xs text-purple-600 font-mono flex-1">${res.short_url}</a>
+          <button onclick="copyText('${res.short_url}')" class="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded">Copiar</button>
+        </div>` : ''}
+      </div>`
+    result.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+}
+
+// Helper: copia texto para clipboard
+function copyText(text) {
+  navigator.clipboard.writeText(text).then(() => showToast('Copiado! ✓', 'success'))
 }
 
 // ── Boot ──────────────────────────────────────────────────
