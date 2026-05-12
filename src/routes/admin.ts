@@ -2756,10 +2756,11 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
   const body: any = await c.req.json().catch(() => ({}))
   const dryRun      = !!body.dry_run
   const steps       = (body.steps as string[] | undefined) ?? ['import', 'search', 'prices']
-  // limit por etapa: padrão 3 para search/prices (evita timeout no Worker)
-  // o front-end chama em loop até found/updated = 0
-  const searchLimit = Math.min(parseInt(body.search_limit) || 3, 5)
-  const pricesLimit = Math.min(parseInt(body.prices_limit) || 3, 5)
+  // limit por etapa: padrão 1 para evitar timeout no Worker (~30s wall clock)
+  // Cada chamada GeckoAPI leva ~5s → limit=1: ~10s max (PDP+PLP fallback)
+  // O front-end usa has_more para chamar em loop até acabar os produtos
+  const searchLimit = Math.min(parseInt(body.search_limit) || 1, 5)
+  const pricesLimit = Math.min(parseInt(body.prices_limit) || 1, 5)
 
   const PUBLISHER_ID = 'cfegdhabc31955'
   const MATT_TOOL    = '38524122'
@@ -2942,12 +2943,19 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
 
   // ─────────────────────────────────────────────────────────
   // HELPER: GeckoAPI /v1/extract — encapsula auth, retry e erro
+  // Retorna: { data, error, noCredits }
+  //   data      → payload útil (ou null se falhou)
+  //   error     → string descritiva do erro (ou null)
+  //   noCredits → true se INSUFFICIENT_CREDITS (para parar o loop)
   // ─────────────────────────────────────────────────────────
   const GECKO_BASE = 'https://api.geckoapi.com.br'
   const geckoKey   = (c.env as any).GECKO_API_KEY as string | undefined
 
-  async function geckoExtract(payload: Record<string, unknown>): Promise<any> {
-    if (!geckoKey) return null
+  type GeckoResult = { data: any; error: string | null; noCredits: boolean }
+
+  async function geckoExtract(payload: Record<string, unknown>): Promise<GeckoResult> {
+    const empty: GeckoResult = { data: null, error: null, noCredits: false }
+    if (!geckoKey) return { ...empty, error: 'GECKO_API_KEY não configurada' }
     try {
       const r = await fetch(`${GECKO_BASE}/v1/extract`, {
         method:  'POST',
@@ -2957,12 +2965,16 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
         },
         body: JSON.stringify(payload),
       })
-      if (!r.ok) return null
       const json: any = await r.json()
-      if (json.errorCode) return null
-      return json.data ?? null
-    } catch {
-      return null
+      if (json.errorCode === 'INSUFFICIENT_CREDITS') {
+        return { data: null, error: 'Créditos GeckoAPI esgotados — recarregue em geckoapi.com.br', noCredits: true }
+      }
+      if (json.errorCode || !r.ok) {
+        return { data: null, error: `GeckoAPI error: ${json.message || json.errorCode || r.status}`, noCredits: false }
+      }
+      return { data: json.data ?? null, error: null, noCredits: false }
+    } catch (e: any) {
+      return { data: null, error: `GeckoAPI exception: ${e?.message || 'unknown'}`, noCredits: false }
     }
   }
 
@@ -2983,6 +2995,13 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
       srch.error  = 'GECKO_API_KEY não configurada — defina o secret no Cloudflare Pages'
     } else {
       try {
+        // Conta total ainda sem link (para has_more)
+        const noLinkCount = await DB.prepare(`
+          SELECT COUNT(*) as n FROM products
+          WHERE is_active = 1 AND (ml_item_id IS NULL OR ml_item_id = '')
+        `).first<{ n: number }>()
+        srch.total_pending = noLinkCount?.n ?? 0
+
         const noLink = await DB.prepare(`
           SELECT id, name, brand, best_price FROM products
           WHERE is_active = 1
@@ -2995,12 +3014,21 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
             const keyword = prod.name.replace(/['"()\[\]]/g, '').trim()
 
             // GeckoAPI PLP: busca produtos no ML por keyword
-            // Resposta: { data: { items: [{ url, sku, name, price, ... }] } }
-            const data = await geckoExtract({
+            const { data, error: geckoErr, noCredits } = await geckoExtract({
               target:  'mercadolivre.com.br',
               type:    'plp',
               keyword,
             })
+
+            // Créditos esgotados → para o loop imediatamente
+            if (noCredits) {
+              srch.status = 'no_credits'
+              srch.error  = geckoErr!
+              srch.total_pending = srch.total_pending // mantém o count real
+              break
+            }
+
+            if (geckoErr || !data) { srch.skipped++; continue }
 
             const items: any[] = data?.items ?? []
             // Pega o 1º item com URL válida, SKU e preço positivo
@@ -3093,7 +3121,17 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
       prcs.error  = 'GECKO_API_KEY não configurada — defina o secret no Cloudflare Pages'
     } else {
       try {
-        // 5 produtos mais desatualizados (limita créditos e tempo do Worker)
+        // Conta total ainda com preço desatualizado (para has_more)
+        const staleCount = await DB.prepare(`
+          SELECT COUNT(*) as n FROM products
+          WHERE is_active = 1
+            AND ml_item_id IS NOT NULL AND ml_item_id != ''
+            AND (affiliate_updated_at IS NULL
+                 OR affiliate_updated_at < datetime('now', '-6 hours'))
+        `).first<{ n: number }>()
+        prcs.total_stale = staleCount?.n ?? 0
+
+        // Produtos mais desatualizados primeiro (limita créditos e tempo do Worker)
         const withId = await DB.prepare(`
           SELECT p.id, p.name, p.ml_item_id, p.affiliate_url, p.best_price,
                  o.product_url, o.id as offer_id
@@ -3102,8 +3140,8 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
           WHERE p.is_active = 1
             AND p.ml_item_id IS NOT NULL AND p.ml_item_id != ''
           ORDER BY p.affiliate_updated_at ASC NULLS FIRST
-          LIMIT 5
-        `).bind(storeId).all<any>()
+          LIMIT ?
+        `).bind(storeId, pricesLimit).all<any>()
 
         for (const prod of withId.results ?? []) {
           try {
@@ -3120,12 +3158,18 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
 
             // ── 1. Tentativa PDP ────────────────────────────
             // GeckoAPI PDP retorna { price, cashPrice, canonicalUrl, name, ... }
-            // Páginas de catálogo sem oferta selecionada retornam price=null
-            const pdpData = await geckoExtract({
+            const { data: pdpData, noCredits: pdpNoCredits, error: pdpErr } = await geckoExtract({
               target: 'mercadolivre.com.br',
               type:   'pdp',
               url:    productUrl,
             })
+
+            // Créditos esgotados → para o loop imediatamente
+            if (pdpNoCredits) {
+              prcs.status = 'no_credits'
+              prcs.error  = pdpErr!
+              break
+            }
 
             if (pdpData) {
               // Preferência: cashPrice (à vista) > price (com parcelamento)
@@ -3142,14 +3186,19 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
             }
 
             // ── 2. Fallback PLP (quando PDP não retornou preço) ──
-            // Busca pelo nome no ML e pega o 1º item com preço válido
             if (!newPrice && prod.name) {
               const keyword = (prod.name as string).replace(/['"()\[\]]/g, '').trim()
-              const plpData = await geckoExtract({
+              const { data: plpData, noCredits: plpNoCredits, error: plpErr } = await geckoExtract({
                 target:  'mercadolivre.com.br',
                 type:    'plp',
                 keyword,
               })
+
+              if (plpNoCredits) {
+                prcs.status = 'no_credits'
+                prcs.error  = plpErr!
+                break
+              }
 
               const items: any[] = plpData?.items ?? []
               const best = items.find((it: any) =>
@@ -3214,9 +3263,23 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
   // ─────────────────────────────────────────────────────────
   // Resultado final
   // ─────────────────────────────────────────────────────────
-  // has_more: informa ao front se vale chamar de novo
-  const searchHasMore = (report.search?.found ?? 0) >= searchLimit
-  const pricesHasMore = (report.prices?.updated ?? 0) + (report.prices?.unchanged ?? 0) >= pricesLimit
+  // has_more: informa ao front se ainda há produtos para processar
+  // Para o loop se créditos acabaram (no_credits) — não adianta chamar de novo
+  const searchNoCredits = report.search?.status === 'no_credits'
+  const pricesNoCredits = report.prices?.status === 'no_credits'
+
+  const searchPending   = (report.search?.total_pending ?? 0)
+  const searchProcessed = (report.search?.found ?? 0) + (report.search?.skipped ?? 0) + (report.search?.errors ?? 0)
+  const searchHasMore   = steps.includes('search')
+    && !searchNoCredits
+    && (searchPending - searchProcessed) > 0
+
+  const pricesStale     = (report.prices?.total_stale ?? 0)
+  const pricesProcessed = (report.prices?.updated ?? 0) + (report.prices?.unchanged ?? 0)
+    + (report.prices?.skipped ?? 0) + (report.prices?.errors ?? 0)
+  const pricesHasMore   = steps.includes('prices')
+    && !pricesNoCredits
+    && (pricesStale - pricesProcessed) > 0
 
   const totalActions =
     ((report.import?.imported ?? 0) + (report.import?.updated ?? 0)) +

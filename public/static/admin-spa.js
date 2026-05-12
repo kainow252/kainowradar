@@ -4701,118 +4701,162 @@ async function generateLinks(network, label) {
 }
 
 async function runAutoSync(opts) {
-  const steps = (opts && opts.steps) ? opts.steps : ['import', 'search', 'prices']
+  const steps   = (opts && opts.steps) ? opts.steps : ['import', 'search', 'prices']
+  const dryRun  = !!(opts && opts.dry_run)
   const log     = document.getElementById('aff-codes-log')
   const logText = document.getElementById('aff-codes-log-text')
   const timer   = document.getElementById('sync-timer')
 
   // Desabilita todos os botões do bot
   const btns = ['btn-auto-sync','btn-only-import','btn-only-search','btn-only-prices']
-  btns.forEach(id => { const b = document.getElementById(id); if (b) { b.disabled = true } })
+  btns.forEach(id => { const b = document.getElementById(id); if (b) b.disabled = true })
   document.getElementById('btn-auto-sync').innerHTML = '<span>⏳</span> Rodando...'
 
   log.classList.remove('hidden')
 
-  // Cronômetro
+  const LF = String.fromCharCode(10)
   const t0 = Date.now()
+
+  // Cronômetro global
   const timerInt = setInterval(() => {
     const s = ((Date.now() - t0) / 1000).toFixed(1)
     if (timer) timer.textContent = s + 's'
   }, 200)
 
-  // Log incremental — vai printando enquanto espera
-  const LF = String.fromCharCode(10)
-  const stepsLabel = {
-    import: '🛒 Etapa 1 — Importar 54 ofertas de /ofertas',
-    search: '🔍 Etapa 2 — Buscar no ML (produtos sem ID)',
-    prices: '💰 Etapa 3 — Atualizar preços (produtos com ID)',
+  // ── Acumuladores globais para o loop ─────────────────────
+  let grandTotalActions  = 0
+  let grandImported      = 0
+  let grandUpdatedImp    = 0
+  let grandSearchFound   = 0
+  let grandPricesUpdated = 0
+  let grandPricesUnchanged = 0
+  let loopCount          = 0
+  let lastError          = null
+  const allSearchProducts = []
+
+  const appendLog = (txt) => {
+    logText.textContent += txt + LF
+    logText.scrollTop = logText.scrollHeight
   }
-  const running = steps.map(s => stepsLabel[s] || s).join(LF)
-  logText.textContent = '🚀 Iniciando Bot Automático ML...' + LF + '────────────────────────────────' + LF + running + LF + LF + '⏳ Aguardando resposta...'
 
-  const res = await api('POST', '/admin/api/affiliate-bot/auto-sync', { steps })
+  logText.textContent = '🚀 Iniciando Bot Automático ML...' + LF +
+    '────────────────────────────────' + LF +
+    '📌 Etapas: ' + steps.join(', ') + LF +
+    '⚡ Limit=1 por chamada · loop automático com has_more' + LF + LF
 
+  // ── Loop principal ────────────────────────────────────────
+  // Continua chamando o backend enquanto has_more = true
+  // Limite de segurança: 60 iterações (~60 produtos por sessão)
+  const MAX_LOOPS = 60
+  let hasMore = true
+
+  while (hasMore && loopCount < MAX_LOOPS) {
+    loopCount++
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1)
+    appendLog(`⏳ Rodada ${loopCount} (${elapsed}s)...`)
+
+    const res = await api('POST', '/admin/api/affiliate-bot/auto-sync', {
+      steps,
+      dry_run:       dryRun,
+      search_limit:  1,
+      prices_limit:  1,
+    })
+
+    if (!res) {
+      lastError = 'Erro de rede'
+      appendLog('❌ Erro de rede — abortando loop')
+      break
+    }
+    if (!res.ok && !res.report) {
+      lastError = res.error || 'Erro desconhecido'
+      appendLog('❌ ' + lastError)
+      break
+    }
+
+    // Acumula métricas
+    const r = res.report || {}
+    if (r.import) {
+      grandImported   += (r.import.imported || 0)
+      grandUpdatedImp += (r.import.updated  || 0)
+      if (r.import.status === 'blocked') appendLog('  ⛔ import: bot challenge detectado')
+      else if (r.import.status === 'error') appendLog('  ❌ import: ' + (r.import.error || 'erro'))
+    }
+    if (r.search) {
+      grandSearchFound += (r.search.found || 0)
+      if (r.search.products) allSearchProducts.push(...r.search.products)
+      const pending = r.search.total_pending ?? '?'
+      if (r.search.status === 'no_credits') {
+        appendLog('  🪙 search: créditos GeckoAPI esgotados — recarregue em geckoapi.com.br')
+        lastError = r.search.error || 'Créditos esgotados'
+      } else {
+        appendLog(`  🔍 search: +${r.search.found||0} encontrado(s) | ${r.search.skipped||0} skip | pendentes: ${pending}`)
+      }
+    }
+    if (r.prices) {
+      grandPricesUpdated   += (r.prices.updated   || 0)
+      grandPricesUnchanged += (r.prices.unchanged || 0)
+      const stale = r.prices.total_stale ?? '?'
+      if (r.prices.status === 'no_credits') {
+        appendLog('  🪙 prices: créditos GeckoAPI esgotados — recarregue em geckoapi.com.br')
+        lastError = r.prices.error || 'Créditos esgotados'
+      } else {
+        appendLog(`  💰 prices: +${r.prices.updated||0} atualizado(s) | ${r.prices.skipped||0} skip | desatualiz.: ${stale}`)
+      }
+    }
+
+    grandTotalActions += (res.total_actions || 0)
+    hasMore = !!res.has_more
+
+    // Créditos esgotados → para o loop (não adianta continuar)
+    const noCredits = (r.search?.status === 'no_credits') || (r.prices?.status === 'no_credits')
+    if (noCredits) {
+      appendLog('  🛑 Loop interrompido — sem créditos GeckoAPI')
+      break
+    }
+
+    if (!hasMore) {
+      appendLog('  ✅ has_more=false — todos os produtos processados!')
+    }
+  }
+
+  // ── Finaliza ─────────────────────────────────────────────
   clearInterval(timerInt)
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1)
   if (timer) timer.textContent = elapsed + 's'
 
-  // Restaura botões
   btns.forEach(id => { const b = document.getElementById(id); if (b) b.disabled = false })
   document.getElementById('btn-auto-sync').innerHTML = '<span>🚀</span> Rodar Bot Completo'
 
-  if (!res) {
-    logText.textContent = '❌ Erro de rede ao chamar o bot'
-    toast('Erro de rede', 'error')
-    return
+  // Resumo final
+  appendLog('')
+  appendLog('════════════════════════════════')
+  appendLog('🏁 RESUMO FINAL — ' + elapsed + 's · ' + loopCount + ' rodada(s)')
+  appendLog('────────────────────────────────')
+  if (steps.includes('import'))  appendLog('  🛒 Importados  : ' + grandImported + '  |  Atualizados: ' + grandUpdatedImp)
+  if (steps.includes('search'))  appendLog('  🔍 Vinculados  : ' + grandSearchFound)
+  if (steps.includes('prices')) {
+    appendLog('  💹 Preços alt. : ' + grandPricesUpdated)
+    appendLog('  ═  Preços igua.: ' + grandPricesUnchanged)
   }
-  if (!res.ok && !res.report) {
-    logText.textContent = '❌ ' + (res.error || 'Erro desconhecido')
-    toast('Erro: ' + (res.error || ''), 'error')
-    return
-  }
+  appendLog('  🎯 Total ações : ' + grandTotalActions)
+  if (dryRun)    appendLog('  🧪 DRY RUN — nada foi salvo')
+  if (lastError) appendLog('  ❌ Último erro : ' + lastError)
+  if (loopCount >= MAX_LOOPS) appendLog('  ⚠  Limite de ' + MAX_LOOPS + ' rodadas atingido')
 
-  // Monta log completo
-  const r = res.report || {}
-  const lines = [
-    '✅ Bot finalizado em ' + elapsed + 's',
-    '════════════════════════════════',
-  ]
-
-  // Etapa import
-  if (r.import) {
-    const i = r.import
-    lines.push('', '🛒 IMPORTAR /ofertas')
-    lines.push('  Status     : ' + (i.status === 'blocked' ? '⛔ Bot challenge!' : i.status === 'error' ? '❌ ' + (i.error||'erro') : '✅ OK'))
-    if (i.html_kb)      lines.push('  HTML       : ' + i.html_kb + ' KB')
-    if (i.total_found)  lines.push('  Itens JSON : ' + i.total_found)
-    lines.push('  📦 Novos   : ' + (i.imported || 0))
-    lines.push('  🔄 Atualiz.: ' + (i.updated  || 0))
-    lines.push('  ⏭  Skipped : ' + (i.skipped  || 0))
-    if (i.errors)       lines.push('  ⚠  Erros   : ' + i.errors)
+  if (allSearchProducts.length > 0) {
+    appendLog('')
+    appendLog('  🔗 Produtos vinculados nesta sessão:')
+    allSearchProducts.slice(0, 10).forEach(p => {
+      appendLog('    • ' + p.name + ' → ' + p.ml_id + (p.price ? '  R$' + p.price : ''))
+    })
+    if (allSearchProducts.length > 10) appendLog('    ... e mais ' + (allSearchProducts.length - 10))
   }
 
-  // Etapa search
-  if (r.search) {
-    const s = r.search
-    lines.push('', '🔍 BUSCA POR NOME')
-    lines.push('  Status     : ' + (s.status === 'error' ? '❌ ' + (s.error||'erro') : '✅ OK'))
-    lines.push('  Encontrados: ' + (s.found   || 0))
-    lines.push('  ⏭  Skipped : ' + (s.skipped || 0))
-    if (s.errors)       lines.push('  ⚠  Erros   : ' + s.errors)
-    if (s.products && s.products.length > 0) {
-      lines.push('  Vinculados :')
-      s.products.slice(0, 5).forEach(p => {
-        lines.push('    • ' + p.name + ' → ' + p.ml_id + (p.price ? ' R$' + p.price : ''))
-      })
-      if (s.products.length > 5) lines.push('    ... e mais ' + (s.products.length - 5))
-    }
-  }
-
-  // Etapa prices
-  if (r.prices) {
-    const p = r.prices
-    lines.push('', '💰 ATUALIZAÇÃO DE PREÇOS')
-    lines.push('  Status      : ' + (p.status === 'error' ? '❌ ' + (p.error||'erro') : '✅ OK'))
-    lines.push('  💹 Alterados: ' + (p.updated   || 0))
-    lines.push('  ═  Iguais   : ' + (p.unchanged || 0))
-    lines.push('  ⏭  Skipped  : ' + (p.skipped  || 0))
-    if (p.errors)       lines.push('  ⚠  Erros    : ' + p.errors)
-  }
-
-  lines.push('', '════════════════════════════════')
-  lines.push('🏁 Total de ações: ' + (res.total_actions || 0))
-  if (res.dry_run) lines.push('🧪 DRY RUN — nada foi salvo no banco')
-  if (res.tip)     lines.push('💡 ' + res.tip)
-
-  logText.textContent = lines.filter(l => l !== null && l !== undefined).join(LF)
-
-  // Scroll automático pro fim do log
   logText.scrollTop = logText.scrollHeight
+  toast('🤖 Bot: ' + grandTotalActions + ' ações em ' + loopCount + ' rodadas (' + elapsed + 's)',
+        grandTotalActions > 0 ? 'success' : 'info')
 
-  const total = res.total_actions || 0
-  toast('🤖 Bot: ' + total + ' ações executadas', total > 0 ? 'success' : 'info')
-
-  if (total > 0) {
+  if (grandTotalActions > 0) {
     setTimeout(() => renderAffiliateCodes(document.getElementById('content-area')), 2000)
   }
 }
