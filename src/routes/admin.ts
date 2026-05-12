@@ -4951,4 +4951,277 @@ function renderAdminSPA(): string {
 </body>
 </html>`
 }
+// ════════════════════════════════════════════════════════════════════════════
+// ██  PRICE SYNC BOT — Busca preços reais via ML API (client_credentials)
+// ════════════════════════════════════════════════════════════════════════════
+// Funciona 100% automático com os secrets ML_APP_ID + ML_SECRET do Cloudflare.
+// Usa multi-get do ML: até 20 IDs por chamada → muito rápido.
+// Atualiza: best_price, image_url, offer (price + in_stock), offer_count.
+// Auto-triggered pela homepage a cada 6h via waitUntil (sem cron externo).
+// ─────────────────────────────────────────────────────────────────────────
+
+const PRICE_SYNC_ML_API    = 'https://api.mercadolibre.com'
+const PRICE_SYNC_PUB_ID    = 'cfegdhabc31955'
+const PRICE_SYNC_MATT_TOOL = '38524122'
+const PRICE_SYNC_STORE_ID  = 3   // Mercado Livre store_id no banco
+
+// Helper interno: obtém token ML via client_credentials (cacheado no KV por 5h)
+async function getPriceSyncToken(env: any): Promise<string | null> {
+  const CACHE  = env.CACHE as KVNamespace | undefined
+  const appId  = (env.ML_APP_ID  as string) || '3098423019766450'
+  const secret = (env.ML_SECRET  as string) || ''
+  if (!secret) return null
+
+  // 1. Tenta cache KV
+  const cached = await CACHE?.get('ml_app_token').catch(() => null)
+  if (cached) return cached
+
+  // 2. Gera novo token via client_credentials
+  try {
+    const res = await fetch(`${PRICE_SYNC_ML_API}/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type:    'client_credentials',
+        client_id:     appId,
+        client_secret: secret,
+      }),
+    })
+    if (!res.ok) return null
+    const td: any = await res.json()
+    if (!td.access_token) return null
+    // Cacheia por 5h (token dura 6h no ML)
+    await CACHE?.put('ml_app_token', td.access_token, { expirationTtl: 18000 }).catch(() => {})
+    return td.access_token
+  } catch {
+    return null
+  }
+}
+
+// POST /admin/api/price-sync/run
+// Busca preços reais de todos os produtos ML e atualiza o banco
+// Parâmetros body: { limit?: number (default 60), force?: bool }
+admin.post('/api/price-sync/run', async (c) => {
+  const { DB, CACHE } = c.env
+  const body: any = await c.req.json().catch(() => ({}))
+  const LIMIT = Math.min(Math.max(parseInt(body.limit) || 60, 1), 200)
+  const FORCE = !!body.force  // força mesmo que synced recentemente
+
+  // Throttle: só roda se último sync foi há mais de 10min (evita spam)
+  if (!FORCE) {
+    const lastRun = await (CACHE as KVNamespace | undefined)?.get('price_sync_last_run').catch(() => null)
+    if (lastRun) {
+      const elapsed = Date.now() - parseInt(lastRun)
+      if (elapsed < 10 * 60 * 1000) {
+        return c.json({ ok: true, skipped: true, reason: 'Sync rodou há menos de 10 min. Use force:true para forçar.' })
+      }
+    }
+  }
+
+  const token = await getPriceSyncToken(c.env)
+  if (!token) {
+    return c.json({ ok: false, error: 'Sem token ML. Configure ML_APP_ID e ML_SECRET no Cloudflare.' }, 400)
+  }
+
+  // Busca produtos com ml_item_id
+  const { results: products } = await DB.prepare(`
+    SELECT id, name, ml_item_id, best_price, image_url, affiliate_url
+    FROM products
+    WHERE is_active = 1
+      AND ml_item_id IS NOT NULL AND ml_item_id != ''
+    ORDER BY updated_at ASC
+    LIMIT ?
+  `).bind(LIMIT).all<any>()
+
+  if (!products.length) {
+    return c.json({ ok: true, updated: 0, errors: 0, message: 'Nenhum produto com ml_item_id encontrado.' })
+  }
+
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'User-Agent': 'KainowRadar/1.0',
+  }
+
+  let updated = 0, unchanged = 0, errors = 0, inactived = 0
+  const errorList: string[] = []
+
+  // Processa em lotes de 20 (limite do multi-get do ML)
+  const BATCH = 20
+  for (let i = 0; i < products.length; i += BATCH) {
+    const batch = products.slice(i, i + BATCH)
+    const ids   = batch.map((p: any) => p.ml_item_id).join(',')
+
+    try {
+      const res = await fetch(
+        `${PRICE_SYNC_ML_API}/items?ids=${ids}&attributes=id,title,price,thumbnail,permalink,status,available_quantity,condition`,
+        { headers, signal: AbortSignal.timeout(15000) }
+      )
+      if (!res.ok) {
+        errors += batch.length
+        errorList.push(`Batch ${i/BATCH+1}: HTTP ${res.status}`)
+        continue
+      }
+
+      const data: any[] = await res.json()
+
+      for (const entry of data) {
+        const item    = entry.body
+        const mlId    = item?.id
+        const product = batch.find((p: any) => p.ml_item_id === mlId)
+        if (!product) continue
+
+        // Item pausado ou encerrado → desativa produto
+        if (item.status && item.status !== 'active' && item.status !== 'paused') {
+          await DB.prepare(`UPDATE products SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+            .bind(product.id).run()
+          inactived++
+          continue
+        }
+
+        const price     = item.price        ?? null
+        const inStock   = (item.available_quantity ?? 0) > 0 ? 1 : 0
+        const image     = item.thumbnail    || product.image_url || null
+        const permalink = item.permalink    || null
+        const affUrl    = permalink
+          ? `${permalink}?matt_word=${PRICE_SYNC_PUB_ID}&matt_tool=${PRICE_SYNC_MATT_TOOL}&forceInApp=true`
+          : product.affiliate_url
+
+        if (price === null) {
+          errors++
+          errorList.push(`${mlId}: sem preço na resposta`)
+          continue
+        }
+
+        // Atualiza produto
+        await DB.prepare(`
+          UPDATE products SET
+            best_price          = ?,
+            best_store_id       = ${PRICE_SYNC_STORE_ID},
+            image_url           = COALESCE(?, image_url),
+            affiliate_url       = COALESCE(?, affiliate_url),
+            affiliate_updated_at = CURRENT_TIMESTAMP,
+            updated_at          = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(price, image, affUrl, product.id).run()
+
+        // Upsert offer
+        const existingOffer = await DB.prepare(
+          `SELECT id FROM offers WHERE product_id = ? AND store_id = ${PRICE_SYNC_STORE_ID} LIMIT 1`
+        ).bind(product.id).first<{ id: number }>()
+
+        if (existingOffer) {
+          await DB.prepare(`
+            UPDATE offers SET
+              price        = ?,
+              in_stock     = ?,
+              image_url    = COALESCE(?, image_url),
+              affiliate_url = COALESCE(?, affiliate_url),
+              last_updated = CURRENT_TIMESTAMP,
+              is_active    = 1
+            WHERE id = ?
+          `).bind(price, inStock, image, affUrl, existingOffer.id).run()
+        } else {
+          await DB.prepare(`
+            INSERT INTO offers
+              (product_id, store_id, external_id, title, price, in_stock,
+               image_url, affiliate_url, source, is_active, last_updated)
+            VALUES (?, ${PRICE_SYNC_STORE_ID}, ?, ?, ?, ?, ?, ?, 'mercadolivre', 1, CURRENT_TIMESTAMP)
+          `).bind(product.id, mlId, product.name, price, inStock, image, affUrl).run()
+        }
+
+        // Atualiza offer_count
+        await DB.prepare(`
+          UPDATE products SET
+            offer_count = (SELECT COUNT(*) FROM offers WHERE product_id = ? AND is_active = 1),
+            best_price  = (SELECT MIN(price) FROM offers WHERE product_id = ? AND is_active = 1 AND in_stock = 1 AND price > 0)
+          WHERE id = ?
+        `).bind(product.id, product.id, product.id).run()
+
+        updated++
+      }
+    } catch (e: any) {
+      errors += batch.length
+      errorList.push(`Batch ${i/BATCH+1}: ${e.message}`)
+    }
+
+    // Pausa entre lotes para não sobrecarregar a API
+    if (i + BATCH < products.length) {
+      await new Promise(r => setTimeout(r, 300))
+    }
+  }
+
+  // Registra timestamp do último sync
+  await (CACHE as KVNamespace | undefined)
+    ?.put('price_sync_last_run', String(Date.now()), { expirationTtl: 86400 })
+    .catch(() => {})
+
+  // Atualiza status na api_configs
+  await DB.prepare(`
+    UPDATE api_configs SET
+      last_sync_at     = CURRENT_TIMESTAMP,
+      last_sync_status = ?,
+      last_sync_count  = ?
+    WHERE id = 'mercadolivre'
+  `).bind(errors === 0 ? 'ok' : `ok_with_${errors}_errors`, updated).run().catch(() => {})
+
+  return c.json({
+    ok:        true,
+    total:     products.length,
+    updated,
+    unchanged,
+    inactived,
+    errors,
+    errors_detail: errorList.slice(0, 10),
+    token_source:  token ? 'client_credentials' : 'none',
+    message: `✅ ${updated} preços atualizados · ${inactived} desativados · ${errors} erros`,
+  })
+})
+
+// GET /admin/api/price-sync/status
+// Retorna estado atual do sync (último run, stats, produtos pendentes)
+admin.get('/api/price-sync/status', async (c) => {
+  const { DB, CACHE } = c.env
+
+  const [lastRun, tokenCached, counts] = await Promise.all([
+    (CACHE as KVNamespace | undefined)?.get('price_sync_last_run').catch(() => null),
+    (CACHE as KVNamespace | undefined)?.get('ml_app_token').catch(() => null),
+    DB.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN ml_item_id IS NOT NULL AND ml_item_id != '' THEN 1 ELSE 0 END) as with_ml_id,
+        SUM(CASE WHEN best_price IS NOT NULL AND best_price > 0 THEN 1 ELSE 0 END) as with_price,
+        SUM(CASE WHEN best_price IS NULL OR best_price = 0 THEN 1 ELSE 0 END) as no_price,
+        SUM(CASE WHEN offer_count > 0 THEN 1 ELSE 0 END) as with_offers
+      FROM products WHERE is_active = 1
+    `).first<any>(),
+  ])
+
+  const apiCfg = await DB.prepare(
+    `SELECT last_sync_at, last_sync_status, last_sync_count FROM api_configs WHERE id = 'mercadolivre'`
+  ).first<any>().catch(() => null)
+
+  const lastRunMs  = lastRun ? parseInt(lastRun) : null
+  const minutesAgo = lastRunMs ? Math.round((Date.now() - lastRunMs) / 60000) : null
+
+  return c.json({
+    ok: true,
+    token_configured: !!(c.env as any).ML_SECRET,
+    token_cached:     !!tokenCached,
+    last_run_at:      lastRunMs ? new Date(lastRunMs).toISOString() : null,
+    last_run_minutes_ago: minutesAgo,
+    last_sync_status: apiCfg?.last_sync_status ?? null,
+    last_sync_count:  apiCfg?.last_sync_count  ?? null,
+    products: {
+      total:      counts?.total      ?? 0,
+      with_ml_id: counts?.with_ml_id ?? 0,
+      with_price: counts?.with_price ?? 0,
+      no_price:   counts?.no_price   ?? 0,
+      with_offers: counts?.with_offers ?? 0,
+    },
+    next_auto_sync: minutesAgo !== null && minutesAgo < 360
+      ? `em ~${360 - minutesAgo} min`
+      : 'na próxima visita à homepage',
+  })
+})
+
 export default admin

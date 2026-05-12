@@ -319,10 +319,12 @@ app.get('/', async (c) => {
   // Isso faz o sistema ser autônomo — sem cron externo, sem API externa
   const editorialExpired = editorials.length === 0 ||
     (editorials[0]?.valid_until && new Date(editorials[0].valid_until) < new Date())
+
+  const host  = c.req.header('host') || 'localhost:3000'
+  const proto = host.includes('localhost') ? 'http' : 'https'
+
   if (editorialExpired) {
-    // Dispara regeneração em background via fetch interno (não bloqueia a resposta ao usuário)
-    const host = c.req.header('host') || 'localhost:3000'
-    const proto = host.includes('localhost') ? 'http' : 'https'
+    // Dispara regeneração do editorial em background
     c.executionCtx.waitUntil(
       fetch(`${proto}://${host}/api/editorial/generate`, {
         method: 'POST',
@@ -330,6 +332,29 @@ app.get('/', async (c) => {
       }).catch(() => {/* silencioso */})
     )
   }
+
+  // ── Auto Price Sync ────────────────────────────────────────────────────
+  // Dispara sync de preços ML em background a cada ~6h (sem cron externo).
+  // Usa KV para throttle: só roda se último sync foi há mais de 6h.
+  // Não bloqueia a resposta ao usuário (waitUntil).
+  const priceSyncKV   = c.env.CACHE as KVNamespace | undefined
+  const lastPriceSync = await priceSyncKV?.get('price_sync_last_run').catch(() => null)
+  const priceSyncAge  = lastPriceSync ? Date.now() - parseInt(lastPriceSync) : Infinity
+  const SIX_HOURS_MS  = 6 * 60 * 60 * 1000
+
+  if (priceSyncAge > SIX_HOURS_MS) {
+    c.executionCtx.waitUntil(
+      fetch(`${proto}://${host}/admin/api/price-sync/run`, {
+        method:  'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${(c.env as any).ADMIN_SECRET || ''}`,
+        },
+        body: JSON.stringify({ limit: 60 }),
+      }).catch(() => {/* silencioso */})
+    )
+  }
+  // ──────────────────────────────────────────────────────────────────────
 
   // Extrai slots editoriais por nome
   const eBannerMain = editorials.find((e: any) => e.slot === 'banner_main')
