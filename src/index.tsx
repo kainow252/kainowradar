@@ -295,12 +295,13 @@ app.get('/', async (c) => {
       ORDER BY p.created_at DESC, p.offer_count DESC LIMIT 8
     `).all(),
     DB.prepare(`
-      SELECT p.*, s.name as best_store_name, o.discount_percent as top_discount
+      SELECT p.*, s.name as best_store_name,
+             COALESCE(o.discount_percent, 0) as top_discount
       FROM products p
       LEFT JOIN stores s ON s.id = p.best_store_id
-      JOIN offers o ON o.product_id = p.id AND o.store_id = p.best_store_id AND o.is_active = 1
-      WHERE p.is_active = 1 AND o.discount_percent > 0
-      ORDER BY o.discount_percent DESC LIMIT 8
+      LEFT JOIN offers o ON o.product_id = p.id AND o.store_id = p.best_store_id AND o.is_active = 1
+      WHERE p.is_active = 1 AND p.best_price IS NOT NULL AND p.offer_count > 0
+      ORDER BY COALESCE(o.discount_percent, 0) DESC, p.created_at DESC LIMIT 8
     `).all(),
     DB.prepare(`SELECT * FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all(),
     DB.prepare(`SELECT id, name, slug, logo_url FROM stores WHERE is_active = 1 ORDER BY name ASC LIMIT 100`).all(),

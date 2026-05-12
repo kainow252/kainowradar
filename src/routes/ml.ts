@@ -1028,11 +1028,22 @@ ml.post('/import-url', async (c) => {
       const res = await DB.prepare(`
         INSERT INTO products
           (name, slug, ml_item_id, affiliate_url, affiliate_updated_at,
-           best_price, is_active, category, created_at, updated_at)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+           best_price, offer_count, is_active, source, category, created_at, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, NULL, 0, 1, 'mercadolivre', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       `).bind(productName, slug, mlId, aff_url, categoryHint).run()
 
       const newId = res.meta?.last_row_id as number
+
+      // Cria offer placeholder para o produto aparecer no site
+      // (sem preço real ainda — será atualizado pelo sync de preços)
+      await DB.prepare(`
+        INSERT INTO offers (product_id, store_id, external_id, title, price, affiliate_url, is_active, in_stock, source, last_updated)
+        VALUES (?, 3, ?, ?, 0, ?, 1, 1, 'mercadolivre', CURRENT_TIMESTAMP)
+      `).bind(newId, mlId, productName, aff_url).run()
+
+      // Atualiza offer_count do produto
+      await DB.prepare(`UPDATE products SET offer_count = 1, best_store_id = 3 WHERE id = ?`).bind(newId).run()
+
       created++
       details.push({ ml_id: mlId, name: productName, action: 'created', product_id: newId, affiliate_url: aff_url })
     } catch (e: any) {
@@ -1042,11 +1053,22 @@ ml.post('/import-url', async (c) => {
         const res = await DB.prepare(`
           INSERT INTO products
             (name, slug, ml_item_id, affiliate_url, affiliate_updated_at,
-             best_price, is_active, category, created_at, updated_at)
-          VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, 0, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+             best_price, offer_count, is_active, source, category, created_at, updated_at)
+          VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, NULL, 0, 1, 'mercadolivre', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         `).bind(productName, slugUniq, mlId, aff_url, categoryHint).run()
+
+        const newId = res.meta?.last_row_id as number
+
+        // Cria offer placeholder
+        await DB.prepare(`
+          INSERT INTO offers (product_id, store_id, external_id, title, price, affiliate_url, is_active, in_stock, source, last_updated)
+          VALUES (?, 3, ?, ?, 0, ?, 1, 1, 'mercadolivre', CURRENT_TIMESTAMP)
+        `).bind(newId, mlId, productName, aff_url).run()
+
+        await DB.prepare(`UPDATE products SET offer_count = 1, best_store_id = 3 WHERE id = ?`).bind(newId).run()
+
         created++
-        details.push({ ml_id: mlId, name: productName, action: 'created', product_id: res.meta?.last_row_id, affiliate_url: aff_url })
+        details.push({ ml_id: mlId, name: productName, action: 'created', product_id: newId, affiliate_url: aff_url })
       } catch (e2: any) {
         parseErrors.push(`Erro ao salvar ${mlId}: ${e2.message}`)
       }
