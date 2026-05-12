@@ -4276,14 +4276,24 @@ const AWIN_BASE    = 'https://api.awin.com'
 const AWIN_PUB_ID  = 2892017
 
 // Mapa slug → advertiser ID (fallback hardcoded para as lojas principais)
+// Atualizado com todos os programas verificados na Awin BR (migration 0026)
 const AWIN_STORE_MAP: Record<string, number> = {
-  casasbahia : 17629,
-  extra      : 17874,
-  ponto      : 17621,
-  pontofrio  : 17621,
-  fastshop   : 17590,
-  kabum      : 17729,
-  centauro   : 17806,
+  // ── Lojas originais ──────────────────────────────────────
+  casasbahia   : 17629,
+  extra        : 17874,
+  ponto        : 17621,
+  pontofrio    : 17621,
+  fastshop     : 17590,
+  kabum        : 17729,
+  centauro     : 17806,
+  // ── Novas lojas mapeadas (migration 0026) ────────────────
+  carrefour    : 17665,
+  dafiti       : 17697,
+  madeiramadeira: 17762,
+  renner       : 17801,
+  riachuelo    : 86587,
+  samsung      : 25539,
+  tok_stok     : 36382,
 }
 
 // Helper GET autenticado na Awin
