@@ -4719,238 +4719,6 @@ admin.get('/api/awin/stats', async (c) => {
   })
 })
 
-// ── Página HTML do Admin (SPA) ────────────────────────────
-admin.get('*', async (c) => {
-  const path = new URL(c.req.url).pathname
-  return c.html(renderAdminSPA())
-})
-
-// ── Helpers ───────────────────────────────────────────────
-async function hashIP(ip: string): Promise<string> {
-  const encoder = new TextEncoder()
-  const data = encoder.encode(ip + 'salt_admin')
-  const hash = await crypto.subtle.digest('SHA-256', data)
-  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 16)
-}
-
-function renderAdminSPA(): string {
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Admin — KainowRadar</title>
-  <script src="https://cdn.tailwindcss.com"><\/script>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"><\/script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: { sans: ['Inter', 'sans-serif'] },
-          colors: {
-            brand: { 50:'#eff6ff', 100:'#dbeafe', 500:'#3b82f6', 600:'#2563eb', 700:'#1d4ed8', 900:'#1e3a8a' }
-          }
-        }
-      }
-    }
-  <\/script>
-  <style>
-    body { font-family: 'Inter', sans-serif; }
-    .sidebar-link { @apply flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-slate-300 hover:bg-white/10 hover:text-white transition-all cursor-pointer; }
-    .sidebar-link.active { @apply bg-white/15 text-white; }
-    .stat-card { @apply bg-white rounded-2xl p-5 border border-slate-100 shadow-sm; }
-    .table-th { @apply px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide bg-slate-50; }
-    .table-td { @apply px-4 py-3 text-sm text-slate-700 border-b border-slate-50; }
-    .badge-green { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700; }
-    .badge-red   { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700; }
-    .badge-yellow{ @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-700; }
-    .badge-blue  { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700; }
-    .btn-primary { @apply bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-all; }
-    .btn-secondary { @apply bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium px-4 py-2 rounded-xl transition-all; }
-    .btn-danger { @apply bg-red-50 hover:bg-red-100 text-red-600 text-sm font-medium px-3 py-1.5 rounded-lg transition-all; }
-    .btn-success { @apply bg-green-50 hover:bg-green-100 text-green-600 text-sm font-medium px-3 py-1.5 rounded-lg transition-all; }
-    .input { @apply w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent; }
-    .section { @apply space-y-6; }
-    #toast { position:fixed;bottom:1.5rem;right:1.5rem;padding:.75rem 1.25rem;background:#1e293b;color:white;border-radius:.75rem;font-size:.875rem;font-weight:500;z-index:9999;opacity:0;transform:translateY(8px);transition:all .25s;pointer-events:none; }
-    #toast.show { opacity:1;transform:translateY(0); }
-    .skeleton { background:linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:.5rem; }
-    @keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
-    .toggle-switch { position:relative;display:inline-block;width:44px;height:24px; }
-    .toggle-switch input { opacity:0;width:0;height:0; }
-    .toggle-slider { position:absolute;cursor:pointer;inset:0;background:#cbd5e1;border-radius:24px;transition:.3s; }
-    .toggle-slider:before { position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background:white;border-radius:50%;transition:.3s; }
-    input:checked + .toggle-slider { background:#2563eb; }
-    input:checked + .toggle-slider:before { transform:translateX(20px); }
-    .modal-backdrop { position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:center;justify-content:center; }
-    .modal { background:white;border-radius:1.25rem;padding:1.5rem;width:100%;max-width:500px;box-shadow:0 25px 60px rgba(0,0,0,.2); }
-  </style>
-</head>
-<body class="bg-slate-50 antialiased">
-
-<!-- ── Login Screen ─────────────────────────────────────── -->
-<div id="login-screen" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-blue-900 p-4">
-  <div class="w-full max-w-sm">
-    <div class="text-center mb-8">
-      <div class="flex items-center justify-center gap-3 mb-3">
-        <div class="w-14 h-14 bg-gradient-to-br from-blue-500 to-blue-700 rounded-2xl flex items-center justify-center shadow-xl">
-          <svg viewBox="0 0 24 24" class="w-9 h-9" fill="white" xmlns="http://www.w3.org/2000/svg">
-            <path d="M5 3h3v7.5l7-7.5h4L11 11l8.5 10H15l-7-8.5V21H5V3z"/>
-          </svg>
-        </div>
-      </div>
-      <h1 class="text-2xl font-black text-white tracking-tight"><span class="text-white">Kainow</span><span class="text-yellow-300">Radar</span></h1>
-      <p class="text-slate-400 text-sm mt-1">Painel Administrativo</p>
-    </div>
-    <div class="bg-white rounded-2xl p-6 shadow-2xl">
-      <h2 class="text-lg font-bold text-slate-800 mb-5">Entrar no painel</h2>
-      <div class="space-y-4">
-        <div>
-          <label class="block text-sm font-medium text-slate-600 mb-1.5">Senha de acesso</label>
-          <input type="password" id="login-password" class="input" placeholder="••••••••"
-            onkeydown="if(event.key==='Enter') doLogin()">
-        </div>
-        <div id="login-error" class="hidden text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2"></div>
-        <button onclick="doLogin()" id="login-btn"
-          class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl transition-all text-sm">
-          Entrar
-        </button>
-      </div>
-      <p class="text-xs text-slate-400 text-center mt-4">
-        Senha padrão em dev: <code class="bg-slate-100 px-1.5 py-0.5 rounded">admin123</code>
-      </p>
-    </div>
-  </div>
-</div>
-
-<!-- ── Admin App ─────────────────────────────────────────── -->
-<div id="admin-app" class="hidden min-h-screen flex">
-
-  <!-- Sidebar -->
-  <aside id="sidebar" class="w-64 bg-slate-900 min-h-screen flex flex-col fixed left-0 top-0 bottom-0 z-40">
-    <!-- Logo -->
-    <div class="p-5 border-b border-white/10">
-      <div class="flex items-center gap-3">
-        <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-700 rounded-xl flex items-center justify-center shadow-lg shrink-0">
-          <svg viewBox="0 0 24 24" class="w-6 h-6" fill="white" xmlns="http://www.w3.org/2000/svg">
-            <path d="M5 3h3v7.5l7-7.5h4L11 11l8.5 10H15l-7-8.5V21H5V3z"/>
-          </svg>
-        </div>
-        <div>
-          <div class="font-black text-sm tracking-tight"><span class="text-white">Kainow</span><span class="text-yellow-300">Radar</span></div>
-          <div class="text-slate-400 text-xs">Painel Admin</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Nav -->
-    <nav class="flex-1 p-3 space-y-1">
-      <div onclick="showSection('dashboard')" class="sidebar-link active" data-section="dashboard">
-        <span class="text-lg">📊</span> Dashboard
-      </div>
-      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Catálogo</div>
-      <div onclick="showSection('top-deals')" class="sidebar-link" data-section="top-deals">
-        <span class="text-lg">🏷️</span> Top Deals
-      </div>
-      <div onclick="showSection('products')" class="sidebar-link" data-section="products">
-        <span class="text-lg">📦</span> Produtos
-      </div>
-      <div onclick="showSection('offers')" class="sidebar-link" data-section="offers">
-        <span class="text-lg">💰</span> Ofertas
-      </div>
-      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Integrações</div>
-      <div onclick="showSection('stores')" class="sidebar-link" data-section="stores">
-        <span class="text-lg">🏪</span> Lojas Parceiras
-      </div>
-      <div onclick="showSection('api-configs')" class="sidebar-link" data-section="api-configs">
-        <span class="text-lg">🔌</span> APIs & Feeds
-      </div>
-      <div onclick="showSection('queue')" class="sidebar-link" data-section="queue">
-        <span class="text-lg">⚡</span> Fila de Preços
-      </div>
-      <div onclick="showSection('editorial')" class="sidebar-link" data-section="editorial">
-        <span class="text-lg">🤖</span> IA Editorial
-      </div>
-      <div onclick="showSection('footer')" class="sidebar-link" data-section="footer">
-        <span class="text-lg">🦶</span> Rodapé do Site
-      </div>
-      <div onclick="showSection('social')" class="sidebar-link" data-section="social">
-        <span class="text-lg">📣</span> Social Media
-      </div>
-      <div onclick="showSection('affiliate-bot')" class="sidebar-link" data-section="affiliate-bot">
-        <span class="text-lg">🤝</span> Bot Afiliados ML
-      </div>
-      <div onclick="showSection('buscape-import')" class="sidebar-link" data-section="buscape-import">
-        <span class="text-lg">🛒</span> Importar Buscapé
-      </div>
-      <div onclick="showSection('lomadee-import')" class="sidebar-link" data-section="lomadee-import">
-        <span class="text-lg">🟠</span> Importar Lomadee
-      </div>
-      <div onclick="showSection('awin-import')" class="sidebar-link" data-section="awin-import">
-        <span class="text-lg">🔵</span> Awin Afiliados
-      </div>
-      <div onclick="showSection('ml-import')" class="sidebar-link" data-section="ml-import">
-        <span class="text-lg">🟡</span> Importar do ML
-      </div>
-      <div onclick="showSection('affiliate-codes')" class="sidebar-link" data-section="affiliate-codes">
-        <span class="text-lg">🔗</span> Códigos Afiliados
-      </div>
-      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Análise</div>
-      <div onclick="showSection('analytics')" class="sidebar-link" data-section="analytics">
-        <span class="text-lg">📈</span> Analytics
-      </div>
-      <div onclick="showSection('users')" class="sidebar-link" data-section="users">
-        <span class="text-lg">👥</span> Usuários
-      </div>
-    </nav>
-
-    <!-- Footer sidebar -->
-    <div class="p-4 border-t border-white/10">
-      <div class="flex items-center justify-between">
-        <div class="text-sm text-slate-400">admin</div>
-        <button onclick="doLogout()" class="text-xs text-slate-400 hover:text-red-400 transition-colors">Sair →</button>
-      </div>
-      <a href="/" target="_blank" class="mt-2 block text-xs text-slate-500 hover:text-slate-300 transition-colors">
-        ← Ver site público
-      </a>
-    </div>
-  </aside>
-
-  <!-- Main Content -->
-  <main class="flex-1 ml-64 min-h-screen">
-    <!-- Top bar -->
-    <header class="bg-white border-b border-slate-100 sticky top-0 z-30 px-6 py-4">
-      <div class="flex items-center justify-between">
-        <div>
-          <h2 id="page-title" class="text-lg font-bold text-slate-900">Dashboard</h2>
-          <p id="page-subtitle" class="text-sm text-slate-500">Visão geral do sistema</p>
-        </div>
-        <div class="flex items-center gap-3">
-          <div id="sync-status" class="hidden items-center gap-2 text-sm text-green-600 bg-green-50 px-3 py-1.5 rounded-lg">
-            <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-            Sincronizando...
-          </div>
-          <button onclick="loadSection(App.currentSection)" class="btn-secondary">↻ Atualizar</button>
-        </div>
-      </div>
-    </header>
-
-    <!-- Content Area -->
-    <div id="content-area" class="p-6"></div>
-  </main>
-</div>
-
-<!-- Toast -->
-<div id="toast"></div>
-
-<!-- Modal container -->
-<div id="modal-container"></div>
-
-<\/script>
-<script src="/static/admin-spa.js"><\/script>
-</body>
-</html>`
-}
 // ════════════════════════════════════════════════════════════════════════════
 // ██  PRICE SYNC BOT — Busca preços reais via ML API (client_credentials)
 // ════════════════════════════════════════════════════════════════════════════
@@ -5223,5 +4991,239 @@ admin.get('/api/price-sync/status', async (c) => {
       : 'na próxima visita à homepage',
   })
 })
+
+
+// ── Página HTML do Admin (SPA) ────────────────────────────
+admin.get('*', async (c) => {
+  const path = new URL(c.req.url).pathname
+  return c.html(renderAdminSPA())
+})
+
+// ── Helpers ───────────────────────────────────────────────
+async function hashIP(ip: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(ip + 'salt_admin')
+  const hash = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 16)
+}
+
+function renderAdminSPA(): string {
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin — KainowRadar</title>
+  <script src="https://cdn.tailwindcss.com"><\/script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"><\/script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'sans-serif'] },
+          colors: {
+            brand: { 50:'#eff6ff', 100:'#dbeafe', 500:'#3b82f6', 600:'#2563eb', 700:'#1d4ed8', 900:'#1e3a8a' }
+          }
+        }
+      }
+    }
+  <\/script>
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .sidebar-link { @apply flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-slate-300 hover:bg-white/10 hover:text-white transition-all cursor-pointer; }
+    .sidebar-link.active { @apply bg-white/15 text-white; }
+    .stat-card { @apply bg-white rounded-2xl p-5 border border-slate-100 shadow-sm; }
+    .table-th { @apply px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide bg-slate-50; }
+    .table-td { @apply px-4 py-3 text-sm text-slate-700 border-b border-slate-50; }
+    .badge-green { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700; }
+    .badge-red   { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700; }
+    .badge-yellow{ @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-700; }
+    .badge-blue  { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700; }
+    .btn-primary { @apply bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-all; }
+    .btn-secondary { @apply bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium px-4 py-2 rounded-xl transition-all; }
+    .btn-danger { @apply bg-red-50 hover:bg-red-100 text-red-600 text-sm font-medium px-3 py-1.5 rounded-lg transition-all; }
+    .btn-success { @apply bg-green-50 hover:bg-green-100 text-green-600 text-sm font-medium px-3 py-1.5 rounded-lg transition-all; }
+    .input { @apply w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent; }
+    .section { @apply space-y-6; }
+    #toast { position:fixed;bottom:1.5rem;right:1.5rem;padding:.75rem 1.25rem;background:#1e293b;color:white;border-radius:.75rem;font-size:.875rem;font-weight:500;z-index:9999;opacity:0;transform:translateY(8px);transition:all .25s;pointer-events:none; }
+    #toast.show { opacity:1;transform:translateY(0); }
+    .skeleton { background:linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:.5rem; }
+    @keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+    .toggle-switch { position:relative;display:inline-block;width:44px;height:24px; }
+    .toggle-switch input { opacity:0;width:0;height:0; }
+    .toggle-slider { position:absolute;cursor:pointer;inset:0;background:#cbd5e1;border-radius:24px;transition:.3s; }
+    .toggle-slider:before { position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background:white;border-radius:50%;transition:.3s; }
+    input:checked + .toggle-slider { background:#2563eb; }
+    input:checked + .toggle-slider:before { transform:translateX(20px); }
+    .modal-backdrop { position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:center;justify-content:center; }
+    .modal { background:white;border-radius:1.25rem;padding:1.5rem;width:100%;max-width:500px;box-shadow:0 25px 60px rgba(0,0,0,.2); }
+  </style>
+</head>
+<body class="bg-slate-50 antialiased">
+
+<!-- ── Login Screen ─────────────────────────────────────── -->
+<div id="login-screen" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-blue-900 p-4">
+  <div class="w-full max-w-sm">
+    <div class="text-center mb-8">
+      <div class="flex items-center justify-center gap-3 mb-3">
+        <div class="w-14 h-14 bg-gradient-to-br from-blue-500 to-blue-700 rounded-2xl flex items-center justify-center shadow-xl">
+          <svg viewBox="0 0 24 24" class="w-9 h-9" fill="white" xmlns="http://www.w3.org/2000/svg">
+            <path d="M5 3h3v7.5l7-7.5h4L11 11l8.5 10H15l-7-8.5V21H5V3z"/>
+          </svg>
+        </div>
+      </div>
+      <h1 class="text-2xl font-black text-white tracking-tight"><span class="text-white">Kainow</span><span class="text-yellow-300">Radar</span></h1>
+      <p class="text-slate-400 text-sm mt-1">Painel Administrativo</p>
+    </div>
+    <div class="bg-white rounded-2xl p-6 shadow-2xl">
+      <h2 class="text-lg font-bold text-slate-800 mb-5">Entrar no painel</h2>
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-1.5">Senha de acesso</label>
+          <input type="password" id="login-password" class="input" placeholder="••••••••"
+            onkeydown="if(event.key==='Enter') doLogin()">
+        </div>
+        <div id="login-error" class="hidden text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2"></div>
+        <button onclick="doLogin()" id="login-btn"
+          class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl transition-all text-sm">
+          Entrar
+        </button>
+      </div>
+      <p class="text-xs text-slate-400 text-center mt-4">
+        Senha padrão em dev: <code class="bg-slate-100 px-1.5 py-0.5 rounded">admin123</code>
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- ── Admin App ─────────────────────────────────────────── -->
+<div id="admin-app" class="hidden min-h-screen flex">
+
+  <!-- Sidebar -->
+  <aside id="sidebar" class="w-64 bg-slate-900 min-h-screen flex flex-col fixed left-0 top-0 bottom-0 z-40">
+    <!-- Logo -->
+    <div class="p-5 border-b border-white/10">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-700 rounded-xl flex items-center justify-center shadow-lg shrink-0">
+          <svg viewBox="0 0 24 24" class="w-6 h-6" fill="white" xmlns="http://www.w3.org/2000/svg">
+            <path d="M5 3h3v7.5l7-7.5h4L11 11l8.5 10H15l-7-8.5V21H5V3z"/>
+          </svg>
+        </div>
+        <div>
+          <div class="font-black text-sm tracking-tight"><span class="text-white">Kainow</span><span class="text-yellow-300">Radar</span></div>
+          <div class="text-slate-400 text-xs">Painel Admin</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Nav -->
+    <nav class="flex-1 p-3 space-y-1">
+      <div onclick="showSection('dashboard')" class="sidebar-link active" data-section="dashboard">
+        <span class="text-lg">📊</span> Dashboard
+      </div>
+      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Catálogo</div>
+      <div onclick="showSection('top-deals')" class="sidebar-link" data-section="top-deals">
+        <span class="text-lg">🏷️</span> Top Deals
+      </div>
+      <div onclick="showSection('products')" class="sidebar-link" data-section="products">
+        <span class="text-lg">📦</span> Produtos
+      </div>
+      <div onclick="showSection('offers')" class="sidebar-link" data-section="offers">
+        <span class="text-lg">💰</span> Ofertas
+      </div>
+      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Integrações</div>
+      <div onclick="showSection('stores')" class="sidebar-link" data-section="stores">
+        <span class="text-lg">🏪</span> Lojas Parceiras
+      </div>
+      <div onclick="showSection('api-configs')" class="sidebar-link" data-section="api-configs">
+        <span class="text-lg">🔌</span> APIs & Feeds
+      </div>
+      <div onclick="showSection('queue')" class="sidebar-link" data-section="queue">
+        <span class="text-lg">⚡</span> Fila de Preços
+      </div>
+      <div onclick="showSection('editorial')" class="sidebar-link" data-section="editorial">
+        <span class="text-lg">🤖</span> IA Editorial
+      </div>
+      <div onclick="showSection('footer')" class="sidebar-link" data-section="footer">
+        <span class="text-lg">🦶</span> Rodapé do Site
+      </div>
+      <div onclick="showSection('social')" class="sidebar-link" data-section="social">
+        <span class="text-lg">📣</span> Social Media
+      </div>
+      <div onclick="showSection('affiliate-bot')" class="sidebar-link" data-section="affiliate-bot">
+        <span class="text-lg">🤝</span> Bot Afiliados ML
+      </div>
+      <div onclick="showSection('buscape-import')" class="sidebar-link" data-section="buscape-import">
+        <span class="text-lg">🛒</span> Importar Buscapé
+      </div>
+      <div onclick="showSection('lomadee-import')" class="sidebar-link" data-section="lomadee-import">
+        <span class="text-lg">🟠</span> Importar Lomadee
+      </div>
+      <div onclick="showSection('awin-import')" class="sidebar-link" data-section="awin-import">
+        <span class="text-lg">🔵</span> Awin Afiliados
+      </div>
+      <div onclick="showSection('ml-import')" class="sidebar-link" data-section="ml-import">
+        <span class="text-lg">🟡</span> Importar do ML
+      </div>
+      <div onclick="showSection('affiliate-codes')" class="sidebar-link" data-section="affiliate-codes">
+        <span class="text-lg">🔗</span> Códigos Afiliados
+      </div>
+      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Análise</div>
+      <div onclick="showSection('analytics')" class="sidebar-link" data-section="analytics">
+        <span class="text-lg">📈</span> Analytics
+      </div>
+      <div onclick="showSection('users')" class="sidebar-link" data-section="users">
+        <span class="text-lg">👥</span> Usuários
+      </div>
+    </nav>
+
+    <!-- Footer sidebar -->
+    <div class="p-4 border-t border-white/10">
+      <div class="flex items-center justify-between">
+        <div class="text-sm text-slate-400">admin</div>
+        <button onclick="doLogout()" class="text-xs text-slate-400 hover:text-red-400 transition-colors">Sair →</button>
+      </div>
+      <a href="/" target="_blank" class="mt-2 block text-xs text-slate-500 hover:text-slate-300 transition-colors">
+        ← Ver site público
+      </a>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="flex-1 ml-64 min-h-screen">
+    <!-- Top bar -->
+    <header class="bg-white border-b border-slate-100 sticky top-0 z-30 px-6 py-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 id="page-title" class="text-lg font-bold text-slate-900">Dashboard</h2>
+          <p id="page-subtitle" class="text-sm text-slate-500">Visão geral do sistema</p>
+        </div>
+        <div class="flex items-center gap-3">
+          <div id="sync-status" class="hidden items-center gap-2 text-sm text-green-600 bg-green-50 px-3 py-1.5 rounded-lg">
+            <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+            Sincronizando...
+          </div>
+          <button onclick="loadSection(App.currentSection)" class="btn-secondary">↻ Atualizar</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Content Area -->
+    <div id="content-area" class="p-6"></div>
+  </main>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<!-- Modal container -->
+<div id="modal-container"></div>
+
+<\/script>
+<script src="/static/admin-spa.js"><\/script>
+</body>
+</html>`
+}
 
 export default admin
