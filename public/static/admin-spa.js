@@ -104,6 +104,7 @@ async function loadSection(name) {
     'ml-import': ['🟡 Importar do ML', 'Importa produtos reais do Mercado Livre para o banco de dados'],
     'affiliate-codes': ['🔗 Códigos Afiliados', 'Configure seus códigos por rede e gere links para todos os produtos'],
     'buscape-import': ['🛍️ Importar do Buscapé', 'Importa produtos e preços de múltiplas lojas via Buscapé — gera links afiliados automaticamente'],
+    'lomadee-import': ['🟠 Importar Lomadee', 'Busca produtos e gera links afiliados automáticos via API da Lomadee (136 lojas parceiras)'],
   }
   const [title, subtitle] = titles[name] || ['Admin', '']
   document.getElementById('page-title').textContent = title
@@ -126,6 +127,7 @@ async function loadSection(name) {
     'ml-import': renderMLImport,
     'affiliate-codes': renderAffiliateCodes,
     'buscape-import': renderBuscapeImport,
+    'lomadee-import': renderLomadeeImport,
   }
   if (sections[name]) await sections[name](area)
 }
@@ -5182,6 +5184,295 @@ async function refreshOneBuscape(url, name) {
     setTimeout(() => renderBuscapeImport(document.getElementById('content-area')), 800)
   } else {
     toast(`❌ ${res?.error || 'Erro'}`, 'error')
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// LOMADEE — API oficial (136 lojas, link afiliado automático)
+// ══════════════════════════════════════════════════════════
+async function renderLomadeeImport(area) {
+  const status = await api('GET', '/admin/api/lomadee/status') || {}
+
+  area.innerHTML = `
+    <div class="section space-y-6">
+
+      <!-- Hero -->
+      <div class="stat-card" style="background:linear-gradient(135deg,#e85d04 0%,#9c2a00 100%);color:#fff;border:none">
+        <div class="flex items-center gap-4 flex-wrap">
+          <div class="text-5xl">🟠</div>
+          <div class="flex-1">
+            <h2 class="text-2xl font-bold">Lomadee / Social Soul</h2>
+            <p class="text-orange-100 text-sm mt-1">
+              API oficial de afiliados — <strong>${status.api_total_brands || '136'}+ lojas parceiras</strong>
+              com link rastreado gerado automaticamente.
+              Cada clique gera comissão diretamente na sua conta Lomadee.
+            </p>
+          </div>
+          <div class="text-right flex-shrink-0">
+            ${status.configured
+              ? `<span class="bg-green-400 text-green-900 font-bold px-3 py-1.5 rounded-lg text-sm">✅ API Conectada</span>
+                 <p class="text-orange-200 text-xs mt-1">${status.db_stores_synced || 0} lojas · ${status.db_offers_imported || 0} ofertas</p>`
+              : `<span class="bg-red-400 text-red-900 font-bold px-3 py-1.5 rounded-lg text-sm">⚠️ API Key Faltando</span>`
+            }
+          </div>
+        </div>
+        ${!status.configured ? `
+          <div class="mt-3 bg-black/20 rounded-xl p-3 text-sm text-orange-100">
+            <strong>Configure:</strong> No painel Cloudflare Pages → Settings → Environment Variables → adicione
+            <code class="bg-black/30 px-1.5 py-0.5 rounded font-mono">LOMADEE_API_KEY</code>
+            com o seu Token da Lomadee.
+          </div>` : ''}
+      </div>
+
+      ${!status.configured ? '' : `
+      <!-- Sincronizar lojas -->
+      <div class="stat-card">
+        <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
+          <div>
+            <h3 class="font-bold text-slate-800">🏪 1. Sincronizar Lojas Parceiras</h3>
+            <p class="text-sm text-slate-500">Importa todas as marcas da Lomadee para a tabela <code>stores</code> com a rede <code>lomadee-api</code></p>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="lomadeeSyncBrands()" id="btn-lom-sync"
+              class="btn-primary flex items-center gap-2"
+              style="background:linear-gradient(135deg,#e85d04,#9c2a00)">
+              🏪 Sincronizar ${status.api_total_brands || '136'} lojas
+            </button>
+            <button onclick="lomadeeLoadBrands()" class="btn-secondary text-sm">👁 Ver lista</button>
+          </div>
+        </div>
+        <div id="lom-brands-log" class="hidden">
+          <div class="bg-slate-950 text-green-400 rounded-xl p-3 font-mono text-xs leading-relaxed max-h-48 overflow-y-auto whitespace-pre-wrap border border-slate-800"
+               id="lom-brands-log-text">Aguardando…</div>
+        </div>
+        <div id="lom-brands-list" class="hidden mt-3"></div>
+      </div>
+
+      <!-- Buscar e importar produtos -->
+      <div class="stat-card">
+        <h3 class="font-bold text-slate-800 mb-3">🔍 2. Buscar e Importar Produtos</h3>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+          <div class="md:col-span-2">
+            <label class="label">Termo de busca</label>
+            <input type="text" id="lom-search"
+              placeholder="ex: air fryer, notebook, smartphone..."
+              class="input"
+              onkeydown="if(event.key==='Enter') lomadeeSearch(false)">
+          </div>
+          <div>
+            <label class="label">Loja (opcional)</label>
+            <select id="lom-org-select" class="input text-sm">
+              <option value="">Todas as lojas</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <div>
+            <label class="label">Preço mín (R$)</label>
+            <input type="number" id="lom-price-min" placeholder="0" class="input text-sm">
+          </div>
+          <div>
+            <label class="label">Preço máx (R$)</label>
+            <input type="number" id="lom-price-max" placeholder="9999" class="input text-sm">
+          </div>
+          <div>
+            <label class="label">Qtd por busca</label>
+            <select id="lom-limit" class="input text-sm">
+              <option value="10">10 produtos</option>
+              <option value="20" selected>20 produtos</option>
+              <option value="50">50 produtos</option>
+              <option value="100">100 produtos</option>
+            </select>
+          </div>
+          <div class="flex flex-col justify-end gap-2">
+            <button onclick="lomadeeSearch(true)" class="btn-secondary text-sm">🔍 Simular</button>
+            <button onclick="lomadeeSearch(false)" id="btn-lom-import"
+              class="btn-primary text-sm"
+              style="background:linear-gradient(135deg,#e85d04,#9c2a00)">
+              ⬇️ Importar
+            </button>
+          </div>
+        </div>
+
+        <!-- Terminal de resultado -->
+        <div id="lom-import-log" class="hidden">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">📟 Log de Importação</span>
+            <button onclick="document.getElementById('lom-import-log').classList.add('hidden')"
+              class="text-xs text-slate-400 hover:text-slate-600">✕</button>
+          </div>
+          <div id="lom-import-log-text"
+            class="bg-slate-950 text-green-400 rounded-xl p-4 font-mono text-xs leading-relaxed min-h-[120px] max-h-80 overflow-y-auto whitespace-pre-wrap border border-slate-800">
+            Aguardando…
+          </div>
+        </div>
+      </div>
+
+      <!-- Como funciona -->
+      <div class="stat-card border border-orange-100 bg-orange-50">
+        <h3 class="font-bold text-orange-800 mb-3">💡 Como funciona o link afiliado</h3>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+          <div class="bg-white rounded-xl p-3">
+            <div class="font-semibold text-slate-700 mb-1">1️⃣ Produto encontrado</div>
+            <div class="text-slate-500 text-xs">A API retorna nome, preço, imagem, EAN e URL da loja</div>
+          </div>
+          <div class="bg-white rounded-xl p-3">
+            <div class="font-semibold text-slate-700 mb-1">2️⃣ Shortlink gerado</div>
+            <div class="text-slate-500 text-xs">
+              <code class="bg-slate-100 px-1 rounded">POST /affiliate/shortener/url</code>
+              cria um link rastreado automaticamente com seu ID de afiliado
+            </div>
+          </div>
+          <div class="bg-white rounded-xl p-3">
+            <div class="font-semibold text-slate-700 mb-1">3️⃣ Comissão automática</div>
+            <div class="text-slate-500 text-xs">
+              Quando o usuário clica e compra, a Lomadee registra e paga a comissão na sua conta
+            </div>
+          </div>
+        </div>
+        <p class="text-xs text-orange-700 mt-3">
+          ⚠️ O link só gera comissão se sua conta Lomadee estiver aprovada pela loja. Verifique em
+          <a href="https://app.lomadee.com" target="_blank" class="underline font-semibold">app.lomadee.com</a>.
+        </p>
+      </div>
+      `}
+
+    </div>
+  `
+
+  // Popula o select de lojas com as que já foram sincronizadas
+  if (status.configured && status.db_stores_synced > 0) {
+    const storesData = await api('GET', '/admin/api/lomadee/brands?limit=100') || {}
+    const sel = document.getElementById('lom-org-select')
+    if (sel && storesData.brands) {
+      storesData.brands.forEach(b => {
+        const opt = document.createElement('option')
+        opt.value = b.id
+        opt.textContent = `${b.name} (${b.commission}%)`
+        sel.appendChild(opt)
+      })
+    }
+  }
+}
+
+// ── Sincronizar todas as lojas Lomadee → banco ────────────
+async function lomadeeSyncBrands() {
+  const btn = document.getElementById('btn-lom-sync')
+  const logEl  = document.getElementById('lom-brands-log')
+  const logText = document.getElementById('lom-brands-log-text')
+  if (btn) btn.disabled = true
+  logEl?.classList.remove('hidden')
+  if (logText) logText.textContent = '⏳ Sincronizando lojas da Lomadee…\n'
+
+  const t0 = Date.now()
+  const res = await api('POST', '/admin/api/lomadee/sync-brands')
+  const elapsed = ((Date.now()-t0)/1000).toFixed(1)
+
+  if (btn) btn.disabled = false
+
+  if (!res?.ok) {
+    if (logText) logText.textContent += `❌ ${res?.error || 'Erro desconhecido'}`
+    toast('Erro ao sincronizar lojas', 'error')
+    return
+  }
+
+  if (logText) logText.textContent = `✅ ${res.synced} loja(s) sincronizada(s) em ${elapsed}s\nRecarregando página…`
+  toast(`🏪 ${res.synced} lojas importadas!`, 'success')
+  setTimeout(() => renderLomadeeImport(document.getElementById('content-area')), 1200)
+}
+
+// ── Listar lojas (sem sincronizar) ────────────────────────
+async function lomadeeLoadBrands() {
+  const listEl = document.getElementById('lom-brands-list')
+  if (!listEl) return
+  listEl.classList.remove('hidden')
+  listEl.innerHTML = '<div class="text-slate-500 text-sm">Carregando…</div>'
+
+  const data = await api('GET', '/admin/api/lomadee/brands?limit=100') || {}
+  const brands = data.brands || []
+
+  listEl.innerHTML = `
+    <h4 class="font-semibold text-slate-700 mb-2 text-sm">${data.total || brands.length} lojas disponíveis na Lomadee:</h4>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 max-h-64 overflow-y-auto pr-1">
+      ${brands.map(b => `
+        <div class="flex items-center gap-2 p-2 rounded-lg text-xs ${b.in_db ? 'bg-green-50 border border-green-200' : 'bg-slate-50 border border-slate-200'}">
+          ${b.logo ? `<img src="${b.logo}" class="w-6 h-6 object-contain rounded flex-shrink-0" onerror="this.style.display='none'">` : '<span class="w-6 h-6 bg-orange-100 rounded flex-shrink-0 flex items-center justify-center text-xs">🏪</span>'}
+          <div class="min-w-0">
+            <div class="font-semibold text-slate-700 truncate">${b.name}</div>
+            <div class="text-slate-400">${b.commission}% · ${b.in_db ? '✅ no banco' : '➕ não sync'}</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `
+}
+
+// ── Buscar/importar produtos da Lomadee ───────────────────
+async function lomadeeSearch(dryRun) {
+  const search   = (document.getElementById('lom-search')?.value || '').trim()
+  const orgId    = document.getElementById('lom-org-select')?.value || ''
+  const priceMin = parseFloat(document.getElementById('lom-price-min')?.value || '0') || null
+  const priceMax = parseFloat(document.getElementById('lom-price-max')?.value || '0') || null
+  const limit    = parseInt(document.getElementById('lom-limit')?.value || '20')
+
+  if (!search && !orgId) { toast('Digite um termo de busca ou selecione uma loja', 'warning'); return }
+
+  const btn    = document.getElementById('btn-lom-import')
+  const logEl  = document.getElementById('lom-import-log')
+  const logText = document.getElementById('lom-import-log-text')
+
+  if (!dryRun && btn) btn.disabled = true
+  logEl?.classList.remove('hidden')
+  if (logText) logText.textContent = `⏳ ${dryRun ? 'Simulando' : 'Importando'} produtos Lomadee…\n`
+
+  const LF = '\n'
+  const t0 = Date.now()
+
+  const res = await api('POST', '/admin/api/lomadee/import', {
+    search: search || undefined,
+    org_id: orgId || undefined,
+    price_min: priceMin,
+    price_max: priceMax,
+    limit,
+    dry_run: dryRun,
+  })
+
+  const elapsed = ((Date.now()-t0)/1000).toFixed(1)
+  if (!dryRun && btn) btn.disabled = false
+
+  if (!res?.ok) {
+    if (logText) logText.textContent += `❌ ${res?.error || 'Erro desconhecido'}`
+    toast(res?.error || 'Erro na importação Lomadee', 'error')
+    return
+  }
+
+  const lines = []
+  lines.push(`${dryRun ? '🔍 SIMULAÇÃO' : '✅ IMPORTADO'} em ${elapsed}s`)
+  lines.push(`   ${res.imported || 0} novo(s) · ${res.updated || 0} atualizado(s) · Total API: ${res.api_total || '?'}`)
+  lines.push('')
+
+  const icons = { new_product:'🆕', new_offer:'➕', updated:'🔄', dry_run:'🔍', store_not_synced:'⚠️', no_option:'📭', price_zero:'💀' }
+  ;(res.products || []).forEach(p => {
+    const icon  = icons[p.status] || '❓'
+    const price = p.price ? `R$ ${Number(p.price).toFixed(2).replace('.',',')}` : '—'
+    const store = (p.store || '').slice(0,18).padEnd(18)
+    lines.push(`  ${icon} ${store} ${price.padStart(12)}  ${(p.name || '').slice(0,45)}`)
+    if (p.affiliate_url && dryRun) {
+      lines.push(`     🔗 ${p.affiliate_url.slice(0,80)}`)
+    }
+    if (p.status === 'store_not_synced') {
+      lines.push(`     ⚠️  Loja não sincronizada — clique em "Sincronizar lojas" primeiro`)
+    }
+  })
+
+  if (res.tip) lines.push('', '💡 ' + res.tip)
+  if (logText) logText.textContent = lines.join(LF)
+
+  if (!dryRun) {
+    toast(`🟠 Lomadee: ${res.imported} importado(s) · ${res.updated} atualizado(s)`,
+      res.total > 0 ? 'success' : 'warning')
+  } else {
+    toast(`🔍 Simulação: ${(res.products||[]).length} produto(s) encontrado(s)`, 'info')
   }
 }
 

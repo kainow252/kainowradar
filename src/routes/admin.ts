@@ -13,6 +13,7 @@ type AdminBindings = Bindings & {
   ML_APP_ID?: string
   ML_SECRET?: string
   GECKO_API_KEY?: string
+  LOMADEE_API_KEY?: string
 }
 
 const admin = new Hono<{ Bindings: AdminBindings }>()
@@ -3731,6 +3732,376 @@ admin.post('/api/affiliate-bot/refresh-buscape', async (c) => {
 })
 
 // ============================================================
+// LOMADEE — Integração API (136 lojas afiliadas com link automático)
+// Base: https://api-beta.lomadee.com.br/affiliate
+// Auth: x-api-key header
+// ============================================================
+
+const LOMADEE_BASE = 'https://api-beta.lomadee.com.br/affiliate'
+
+// Helper: chama a API Lomadee com autenticação
+async function lomadeeGet(path: string, apiKey: string): Promise<{ data: any; error: string | null }> {
+  try {
+    const r = await fetch(`${LOMADEE_BASE}${path}`, {
+      headers: { 'x-api-key': apiKey },
+      signal: AbortSignal.timeout(12000),
+    })
+    const json: any = await r.json()
+    if (!r.ok) return { data: null, error: `Lomadee ${r.status}: ${json.message || json.error || r.statusText}` }
+    return { data: json, error: null }
+  } catch (e: any) {
+    return { data: null, error: `Lomadee timeout/erro: ${e?.message || 'unknown'}` }
+  }
+}
+
+// Helper: gera shortlink afiliado para uma URL + orgId
+async function lomadeeShorten(orgId: string, url: string, apiKey: string): Promise<string | null> {
+  try {
+    const r = await fetch(`${LOMADEE_BASE}/shortener/url`, {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ organizationId: orgId, type: 'Custom', url }),
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!r.ok) return null
+    const json: any = await r.json()
+    // Resposta: array de channels, cada um com shortUrls[]
+    const channels = Array.isArray(json) ? json : (json.type ?? json.channels ?? [])
+    for (const ch of channels) {
+      const urls: string[] = ch.shortUrls ?? []
+      if (urls.length > 0) return urls[0]
+    }
+    return null
+  } catch { return null }
+}
+
+// ── GET /admin/api/lomadee/brands — Lista e sincroniza lojas ─
+admin.get('/api/lomadee/brands', async (c) => {
+  const { DB } = c.env
+  const apiKey = (c.env as any).LOMADEE_API_KEY as string | undefined
+  if (!apiKey) return c.json({ ok: false, error: 'LOMADEE_API_KEY não configurada' }, 400)
+
+  const page  = parseInt(c.req.query('page')  || '1')
+  const limit = Math.min(parseInt(c.req.query('limit') || '100'), 100)
+  const sync  = c.req.query('sync') === '1'  // ?sync=1 → salva no banco
+
+  const { data, error } = await lomadeeGet(`/brands?page=${page}&limit=${limit}`, apiKey)
+  if (error || !data) return c.json({ ok: false, error }, 502)
+
+  const brands: any[] = data.data ?? []
+  const pagination = data.pagination ?? {}
+  let synced = 0
+
+  if (sync) {
+    for (const b of brands) {
+      const slug = 'lom-' + (b.slug || b.id).replace(/[^a-z0-9-]/gi, '-').toLowerCase().slice(0, 40)
+      const comm = b.commission?.value ?? 0
+
+      // Upsert: insere se não existe (pelo lomadee_org_id), ou atualiza
+      const existing = await DB.prepare(
+        `SELECT id FROM stores WHERE lomadee_org_id = ? LIMIT 1`
+      ).bind(b.id).first<{ id: number }>()
+
+      if (existing) {
+        await DB.prepare(`
+          UPDATE stores SET name=?, logo_url=COALESCE(NULLIF(?,  ''), logo_url),
+            commission_rate=?, lomadee_org_id=?, is_active=1 WHERE id=?
+        `).bind(b.name, b.logo ?? '', comm, b.id, existing.id).run()
+      } else {
+        await DB.prepare(`
+          INSERT OR IGNORE INTO stores
+            (slug, name, logo_url, affiliate_network, deeplink_base, commission_rate, lomadee_org_id, is_active)
+          VALUES (?, ?, ?, 'lomadee-api', ?, ?, ?, 1)
+        `).bind(slug, b.name, b.logo ?? '', b.site ?? '', comm, b.id).run()
+      }
+      synced++
+    }
+  }
+
+  // Enriquece com status "já no banco" para o frontend
+  const orgIds = brands.map((b: any) => `'${b.id}'`).join(',')
+  const inDb = orgIds.length > 0
+    ? await DB.prepare(`SELECT lomadee_org_id FROM stores WHERE lomadee_org_id IN (${orgIds})`).all<any>()
+    : { results: [] }
+  const inDbSet = new Set((inDb.results ?? []).map((r: any) => r.lomadee_org_id))
+
+  return c.json({
+    ok: true,
+    total: pagination.total ?? brands.length,
+    page: pagination.page ?? page,
+    totalPages: pagination.totalPages ?? 1,
+    synced,
+    brands: brands.map((b: any) => ({
+      id:        b.id,
+      name:      b.name,
+      slug:      b.slug,
+      logo:      b.logo,
+      site:      b.site,
+      segment:   b.segment,
+      commission: b.commission?.value ?? 0,
+      in_db:     inDbSet.has(b.id),
+    })),
+  })
+})
+
+// ── POST /admin/api/lomadee/sync-brands — Salva todas as lojas
+// Usa batch INSERT via D1 batch() — uma transação para todas as lojas
+// evita o timeout de 30s do Worker (antes: 136 queries sequenciais)
+admin.post('/api/lomadee/sync-brands', async (c) => {
+  const { DB } = c.env
+  const apiKey = (c.env as any).LOMADEE_API_KEY as string | undefined
+  if (!apiKey) return c.json({ ok: false, error: 'LOMADEE_API_KEY não configurada' }, 400)
+
+  // Busca todas as páginas de marcas (paralelo: pg1 + pg2)
+  const [p1, p2] = await Promise.all([
+    lomadeeGet('/brands?page=1&limit=100', apiKey),
+    lomadeeGet('/brands?page=2&limit=100', apiKey),
+  ])
+
+  const allBrands: any[] = [
+    ...(p1.data?.data ?? []),
+    ...(p2.data?.data ?? []),
+  ]
+
+  if (allBrands.length === 0) {
+    return c.json({ ok: false, error: p1.error ?? 'Nenhuma marca retornada' }, 502)
+  }
+
+  // Monta statements D1 — INSERT ON CONFLICT para upsert eficiente
+  // slug único = 'lom-' + primeiros 40 chars do slug da Lomadee
+  const stmts = allBrands.map(b => {
+    const slug = ('lom-' + (b.slug || b.id).replace(/[^a-z0-9-]/gi, '-').toLowerCase()).slice(0, 44)
+    const comm = b.commission?.value ?? 0
+    return DB.prepare(`
+      INSERT INTO stores (slug, name, logo_url, affiliate_network, deeplink_base, commission_rate, lomadee_org_id, is_active)
+      VALUES (?, ?, ?, 'lomadee-api', ?, ?, ?, 1)
+      ON CONFLICT(slug) DO UPDATE SET
+        name            = excluded.name,
+        logo_url        = COALESCE(NULLIF(excluded.logo_url, ''), stores.logo_url),
+        commission_rate = excluded.commission_rate,
+        lomadee_org_id  = excluded.lomadee_org_id,
+        is_active       = 1
+    `).bind(slug, b.name, b.logo ?? '', b.site ?? '', comm, b.id)
+  })
+
+  // D1.batch() tem limite de 100 statements por chamada
+  // Divide em chunks de 50 e executa em paralelo (2 batches para 136 marcas)
+  const CHUNK = 50
+  const chunks: typeof stmts[] = []
+  for (let i = 0; i < stmts.length; i += CHUNK) chunks.push(stmts.slice(i, i + CHUNK))
+  await Promise.all(chunks.map(chunk => DB.batch(chunk)))
+
+  return c.json({ ok: true, synced: allBrands.length })
+})
+
+// ── POST /admin/api/lomadee/import — Busca e importa produtos ─
+// Body: { search, org_id?, price_min?, price_max?, limit?, dry_run? }
+admin.post('/api/lomadee/import', async (c) => {
+  const { DB } = c.env
+  const apiKey = (c.env as any).LOMADEE_API_KEY as string | undefined
+  if (!apiKey) return c.json({ ok: false, error: 'LOMADEE_API_KEY não configurada' }, 400)
+
+  const body    = await c.req.json().catch(() => ({})) as any
+  const search  = (body.search  || '').trim()
+  const orgId   = (body.org_id  || '').trim()
+  const priceMin = body.price_min ? Math.round(body.price_min * 100) : null
+  const priceMax = body.price_max ? Math.round(body.price_max * 100) : null
+  const limit   = Math.min(parseInt(body.limit) || 20, 100)
+  const dryRun  = !!body.dry_run
+
+  if (!search && !orgId) {
+    return c.json({ ok: false, error: 'Informe search (nome) ou org_id (loja)' }, 400)
+  }
+
+  // Monta query string
+  const qs = new URLSearchParams()
+  qs.set('limit', String(limit))
+  qs.set('page',  '1')
+  if (search) qs.set('search', search)
+  if (orgId)  qs.set('organizationIds', orgId)
+  if (priceMin !== null && priceMax !== null) qs.set('price', `${priceMin}:${priceMax}`)
+
+  const { data, error } = await lomadeeGet(`/products?${qs}`, apiKey)
+  if (error || !data) return c.json({ ok: false, error }, 502)
+
+  const products: any[] = data.data ?? []
+  if (products.length === 0) {
+    return c.json({ ok: true, imported: 0, updated: 0, total: 0, products: [],
+      tip: 'Nenhum produto encontrado. Tente um termo diferente.' })
+  }
+
+  // Busca mapa de stores lomadee no banco de uma vez
+  const { results: storesRows } = await DB.prepare(
+    `SELECT id, slug, name, lomadee_org_id FROM stores WHERE lomadee_org_id IS NOT NULL AND is_active = 1`
+  ).all<{ id: number; slug: string; name: string; lomadee_org_id: string }>()
+  const storeByOrgId = new Map(storesRows.map(s => [s.lomadee_org_id, s]))
+
+  let imported = 0, updated = 0
+  const resultItems: any[] = []
+
+  for (const prod of products) {
+    const orgIdProd = prod.organizationId as string
+    const store = storeByOrgId.get(orgIdProd)
+
+    // Pega a primeira opção (variante) com preço disponível
+    const option = (prod.options ?? []).find((o: any) =>
+      o.available && (o.pricing?.[0]?.price ?? 0) > 0
+    ) ?? prod.options?.[0]
+
+    if (!option) {
+      resultItems.push({ name: prod.name, status: 'no_option', store: store?.name ?? orgIdProd })
+      continue
+    }
+
+    const priceCents  = option.pricing?.[0]?.price ?? 0
+    const listCents   = option.pricing?.[0]?.listPrice ?? priceCents
+    const price       = priceCents / 100
+    const listPrice   = listCents  / 100
+    const ean         = option.ean ?? ''
+    const inStock     = (option.stocks?.[0]?.value ?? 0) > 0 || option.available === true
+    const imageUrl    = option.images?.[0]?.url ?? prod.images?.[0]?.url ?? ''
+    const productUrl  = prod.url ?? ''
+    const externalId  = option.id ?? prod.id
+
+    if (price <= 0) {
+      resultItems.push({ name: prod.name, status: 'price_zero', store: store?.name ?? orgIdProd })
+      continue
+    }
+
+    // Gera link afiliado via Lomadee shortener
+    let affiliateUrl = productUrl
+    if (!dryRun && productUrl) {
+      const short = await lomadeeShorten(orgIdProd, productUrl, apiKey)
+      if (short) affiliateUrl = short
+    }
+
+    if (dryRun) {
+      resultItems.push({
+        name: prod.name.slice(0, 60), ean, price,
+        store: store?.name ?? `org:${orgIdProd.slice(0,8)}`,
+        affiliate_url: affiliateUrl, status: 'dry_run',
+      })
+      continue
+    }
+
+    if (!store) {
+      resultItems.push({ name: prod.name.slice(0,50), status: 'store_not_synced', org_id: orgIdProd })
+      continue
+    }
+
+    // Upsert produto por EAN (se disponível) ou pelo lomadee product id
+    let productId: number | null = null
+    let isNew = false
+
+    if (ean) {
+      const ex = await DB.prepare(`SELECT id FROM products WHERE ean=? LIMIT 1`).bind(ean).first<{id:number}>()
+      if (ex) productId = ex.id
+    }
+    if (!productId) {
+      // Tenta pelo external_id + store_id na tabela offers
+      const ex = await DB.prepare(
+        `SELECT p.id FROM products p JOIN offers o ON o.product_id=p.id WHERE o.lomadee_id=? LIMIT 1`
+      ).bind(externalId).first<{id:number}>()
+      if (ex) productId = ex.id
+    }
+
+    const slugBase = prod.name.toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+      .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,80)
+    const slugSuffix = Math.random().toString(36).slice(2,6)
+
+    if (!productId) {
+      isNew = true
+      const ins = await DB.prepare(`
+        INSERT INTO products
+          (name, slug, brand, image_url, ean, best_price, offer_count, is_active, created_at, updated_at)
+        VALUES (?, ?, NULL, ?, ?, ?, 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).bind(prod.name, `${slugBase}-lom-${slugSuffix}`, imageUrl, ean || null, price).run()
+      productId = ins.meta.last_row_id as number
+    } else {
+      await DB.prepare(`
+        UPDATE products SET
+          name=?, image_url=COALESCE(NULLIF(?,  ''), image_url),
+          best_price=COALESCE(?,best_price), updated_at=CURRENT_TIMESTAMP
+        WHERE id=?
+      `).bind(prod.name, imageUrl, price, productId).run()
+    }
+
+    // Upsert oferta
+    const existOffer = await DB.prepare(
+      `SELECT id FROM offers WHERE product_id=? AND store_id=? AND external_id=? LIMIT 1`
+    ).bind(productId, store.id, externalId).first<{id:number}>()
+
+    if (existOffer) {
+      await DB.prepare(`
+        UPDATE offers SET price=?, affiliate_url=?, product_url=?,
+          image_url=COALESCE(NULLIF(?,  ''), image_url),
+          in_stock=?, lomadee_id=?, source='lomadee',
+          last_updated=CURRENT_TIMESTAMP, is_active=1
+        WHERE id=?
+      `).bind(price, affiliateUrl, productUrl, imageUrl, inStock?1:0, externalId, existOffer.id).run()
+      updated++
+      resultItems.push({ name: prod.name.slice(0,50), price, store: store.name,
+        affiliate_url: affiliateUrl, status:'updated' })
+    } else {
+      await DB.prepare(`
+        INSERT INTO offers
+          (product_id, store_id, external_id, title, price, original_price,
+           product_url, affiliate_url, image_url, in_stock,
+           lomadee_id, source, is_active, last_updated, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,'lomadee',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+      `).bind(productId, store.id, externalId, prod.name, price, listPrice,
+              productUrl, affiliateUrl, imageUrl, inStock?1:0, externalId).run()
+      imported++
+      resultItems.push({ name: prod.name.slice(0,50), price, store: store.name,
+        affiliate_url: affiliateUrl, status: isNew ? 'new_product' : 'new_offer' })
+    }
+
+    // Atualiza best_price do produto
+    await DB.prepare(`
+      UPDATE products SET
+        best_price=(SELECT MIN(price) FROM offers WHERE product_id=? AND is_active=1 AND in_stock=1),
+        offer_count=(SELECT COUNT(*) FROM offers WHERE product_id=? AND is_active=1),
+        updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).bind(productId, productId, productId).run()
+  }
+
+  return c.json({
+    ok: true, imported, updated, dry_run: dryRun,
+    total: imported + updated,
+    api_total: data.meta?.total ?? products.length,
+    products: resultItems,
+    tip: dryRun
+      ? `Simulação: ${resultItems.length} produto(s) encontrado(s) — rode sem dry_run para importar`
+      : `${imported} importado(s) · ${updated} atualizado(s) com link afiliado Lomadee`,
+  })
+})
+
+// ── GET /admin/api/lomadee/status — Verifica chave + stats ───
+admin.get('/api/lomadee/status', async (c) => {
+  const { DB } = c.env
+  const apiKey = (c.env as any).LOMADEE_API_KEY as string | undefined
+  if (!apiKey) return c.json({ ok: false, configured: false, error: 'LOMADEE_API_KEY não configurada' })
+
+  const { data, error } = await lomadeeGet('/brands?limit=1', apiKey)
+  if (error) return c.json({ ok: false, configured: true, error })
+
+  const [lomStores, lomOffers] = await Promise.all([
+    DB.prepare(`SELECT COUNT(*) as n FROM stores WHERE affiliate_network='lomadee-api'`).first<{n:number}>(),
+    DB.prepare(`SELECT COUNT(*) as n FROM offers WHERE source='lomadee'`).first<{n:number}>(),
+  ])
+
+  return c.json({
+    ok: true,
+    configured: true,
+    api_total_brands: data.pagination?.total ?? '?',
+    db_stores_synced: lomStores?.n ?? 0,
+    db_offers_imported: lomOffers?.n ?? 0,
+  })
+})
+
+// ============================================================
 // AFFILIATE RULES — Códigos de afiliado por rede
 // ============================================================
 
@@ -4053,6 +4424,9 @@ function renderAdminSPA(): string {
       </div>
       <div onclick="showSection('buscape-import')" class="sidebar-link" data-section="buscape-import">
         <span class="text-lg">🛒</span> Importar Buscapé
+      </div>
+      <div onclick="showSection('lomadee-import')" class="sidebar-link" data-section="lomadee-import">
+        <span class="text-lg">🟠</span> Importar Lomadee
       </div>
       <div onclick="showSection('ml-import')" class="sidebar-link" data-section="ml-import">
         <span class="text-lg">🟡</span> Importar do ML
