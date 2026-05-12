@@ -1646,7 +1646,7 @@ function renderFooterSection(opts: {
 
   return `
   <footer class="bg-gray-900 text-gray-400 mt-16 py-12">
-    <div class="max-w-7xl mx-auto px-4">
+    <div class="w-full px-6 md:px-10">
       <div class="grid grid-cols-2 md:grid-cols-4 gap-8 mb-8">
         <!-- Brand -->
         <div>

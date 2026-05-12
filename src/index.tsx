@@ -520,7 +520,7 @@ app.get('/', async (c) => {
 
   const storesHTML = `
     <section class="bg-white border-b border-gray-100 overflow-hidden">
-      <div class="max-w-7xl mx-auto px-4 pt-5 pb-3">
+      <div class="w-full px-4 pt-5 pb-3">
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
           <div class="flex items-center gap-2.5">
             <div class="w-1 h-5 bg-gradient-to-b from-blue-500 to-blue-700 rounded-full"></div>
@@ -698,7 +698,7 @@ app.get('/', async (c) => {
 
   const bannerHTML = `
     <section class="w-full" id="editorial-banners">
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-0 md:gap-4 py-0 md:py-6 md:px-4 lg:px-6">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-0 md:gap-4">
 
         <!-- Banner principal — gerado pela IA editorial -->
         <div class="md:col-span-2 promo-banner group cursor-pointer relative overflow-hidden rounded-none md:rounded-2xl p-6 md:p-8"
@@ -779,7 +779,7 @@ app.get('/', async (c) => {
   // ── MAIORES DESCONTOS ─────────────────────────────────────
   const dealsHTML = deals.length > 0 ? `
     <section class="py-8">
-      <div class="max-w-7xl mx-auto px-4">
+      <div class="w-full px-4 sm:px-6">
         <div class="flex items-center justify-between mb-5">
           <div class="flex items-center gap-3">
             <div class="w-1 h-7 bg-gradient-to-b from-red-500 to-orange-400 rounded-full"></div>
@@ -808,7 +808,7 @@ app.get('/', async (c) => {
   // No mobile este bloco fica oculto — as categorias aparecem no menu hambúrguer
   const catBlocksHTML = categories.length > 0 ? `
     <section class="hidden md:block bg-white border-y border-gray-100 py-8">
-      <div class="max-w-7xl mx-auto px-4">
+      <div class="w-full px-4 sm:px-6">
         <div class="flex items-center justify-between mb-5">
           <div class="flex items-center gap-3">
             <div class="w-1 h-7 bg-gradient-to-b from-blue-500 to-blue-700 rounded-full"></div>
@@ -831,7 +831,7 @@ app.get('/', async (c) => {
   // ── EM DESTAQUE ───────────────────────────────────────────
   const featuredHTML = featured.length > 0 ? `
     <section class="py-8">
-      <div class="max-w-7xl mx-auto px-4">
+      <div class="w-full px-4 sm:px-6">
         <div class="flex items-center justify-between mb-5">
           <div class="flex items-center gap-3">
             <div class="w-1 h-7 bg-gradient-to-b from-blue-500 to-indigo-600 rounded-full"></div>
@@ -852,7 +852,7 @@ app.get('/', async (c) => {
   // ── COMO FUNCIONA ─────────────────────────────────────────
   const howHTML = `
     <section class="how-section">
-      <div class="max-w-5xl mx-auto px-4 text-center">
+      <div class="w-full max-w-5xl mx-auto px-6 text-center">
         <h2 class="text-2xl font-black text-white mb-2">Como o KainowRadar funciona</h2>
         <p class="text-blue-200/70 text-sm mb-10">Simples, rápido e gratuito — sempre</p>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -896,8 +896,8 @@ app.get('/', async (c) => {
   } catch { /* tabela ainda não existe — ignora */ }
 
   const insightsHTML = insightRows.length > 0 ? `
-    <div class="max-w-7xl mx-auto px-4 pb-2">
-      <div class="bg-slate-900 rounded-2xl px-5 py-3 flex items-center gap-3 overflow-hidden">
+    <div class="w-full pb-2">
+      <div class="bg-slate-900 w-full px-5 py-3 flex items-center gap-3 overflow-hidden">
         <span class="flex-shrink-0 inline-flex items-center gap-1.5 bg-green-500/20 text-green-400 text-xs font-bold px-2.5 py-1 rounded-full border border-green-500/30">
           <span class="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"></span>
           Radar IA
