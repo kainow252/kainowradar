@@ -179,10 +179,50 @@ app.get('/go/:id', async (c) => {
   ).run().catch(() => {}) // ignora erro — não bloqueia o redirect
 
   // ── Determina URL de destino ─────────────────────────────
-  // Prioridade: affiliate_url salva na oferta > product_url > homepage
-  let dest = offer.affiliate_url || offer.product_url || '/'
+  // Prioridade:
+  //  1. affiliate_url salva na oferta (gerado no import)
+  //  2. Fallback dinâmico: reconstrói link afiliado via affiliate_rules
+  //  3. product_url (URL direta sem tracking)
+  //  4. Homepage
+  let dest = offer.affiliate_url || ''
 
-  // Garante que a URL é válida
+  // Fallback dinâmico: se affiliate_url está vazio, tenta reconstruir
+  // usando a rede de afiliado da loja + regra cadastrada no banco
+  if (!dest && offer.product_url) {
+    try {
+      const rule = await DB.prepare(`
+        SELECT publisher_id, extra_param, link_template
+        FROM affiliate_rules
+        WHERE network = ? AND is_active = 1 LIMIT 1
+      `).bind(offer.affiliate_network || '').first<any>()
+
+      const pubId = offer.affiliate_id || rule?.publisher_id || ''
+      const baseUrl = offer.product_url
+
+      if (rule?.link_template && pubId) {
+        // Para Buscapé: usa o redirect /lead?oid= como URL base
+        const trackingBase = (offer.source === 'buscape' && offer.buscape_oid)
+          ? `https://www.buscape.com.br/lead?oid=${offer.buscape_oid}&channel=11`
+          : baseUrl
+
+        dest = rule.link_template
+          .replace('{url}',   encodeURIComponent(trackingBase))
+          .replace('{pub}',   pubId)
+          .replace('{extra}', rule.extra_param ?? '')
+      } else if (offer.source === 'buscape' && offer.buscape_oid) {
+        // Sem regra de afiliado configurada: usa redirect Buscapé direto
+        dest = `https://www.buscape.com.br/lead?oid=${offer.buscape_oid}&channel=11`
+      } else {
+        dest = baseUrl
+      }
+    } catch {
+      dest = offer.product_url || '/'
+    }
+  }
+
+  if (!dest) dest = offer.product_url || '/'
+
+  // Garante que a URL é absoluta
   if (dest && !dest.startsWith('http')) dest = '/' + dest
 
   return c.redirect(dest, 302)
