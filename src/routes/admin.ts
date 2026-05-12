@@ -3299,6 +3299,438 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
 })
 
 // ============================================================
+// BUSCAPÉ — Importar produto + ofertas via scraping JSON-LD
+// ============================================================
+
+// ── POST /admin/api/affiliate-bot/import-buscape ─────────────
+// Recebe: { url: "https://www.buscape.com.br/..." }
+// 1. fetch(url) → HTML
+// 2. Parseia <script type="application/ld+json"> → Product + offers
+// 3. Parseia __NEXT_DATA__ → productID, entityID
+// 4. Para cada oferta: upsert em products + offers (com affiliate_url)
+// 5. Retorna: { imported, updated, offers[], product }
+admin.post('/api/affiliate-bot/import-buscape', async (c) => {
+  const { DB } = c.env
+  const body = await c.req.json().catch(() => ({})) as any
+  const url: string = (body.url || '').trim()
+
+  if (!url || !url.includes('buscape.com.br')) {
+    return c.json({ ok: false, error: 'URL inválida — precisa ser do buscape.com.br' }, 400)
+  }
+
+  // ── 1. Fetch HTML do Buscapé ─────────────────────────────────
+  let html = ''
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'pt-BR,pt;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+      },
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!resp.ok) {
+      return c.json({ ok: false, error: `Buscapé retornou HTTP ${resp.status}` }, 502)
+    }
+    html = await resp.text()
+  } catch (e: any) {
+    return c.json({ ok: false, error: `Erro ao buscar URL: ${e?.message || 'timeout'}` }, 502)
+  }
+
+  // ── 2. Parseia JSON-LD — Product com offers ──────────────────
+  // Buscapé usa Next.js e embute <script type="application/ld+json">
+  // com @graph contendo @type=Product + lista de offers
+  type BuscapeOffer = {
+    id: string          // OID da oferta
+    offeredBy: string   // Nome da loja (ex: "Casas Bahia")
+    price: number
+    image?: string
+    url?: string
+  }
+
+  type ProductLD = {
+    name: string
+    brand?: string
+    image?: string
+    description?: string
+    ean?: string
+    offers?: { offers?: BuscapeOffer[] }
+  }
+
+  let productLD: ProductLD | null = null
+  let rawOffers: BuscapeOffer[] = []
+
+  // Extrai todos os blocos JSON-LD
+  const ldMatches = html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)
+  for (const m of ldMatches) {
+    try {
+      const parsed: any = JSON.parse(m[1].trim())
+      // Pode vir como objeto direto ou como @graph
+      const nodes: any[] = parsed['@graph'] ? parsed['@graph'] : [parsed]
+      for (const node of nodes) {
+        if (node['@type'] === 'Product' && node.offers) {
+          productLD = node as ProductLD
+          // Buscapé aninha: offers.offers = array de ofertas
+          const offersNode = node.offers
+          rawOffers = Array.isArray(offersNode)
+            ? offersNode
+            : (offersNode?.offers ?? offersNode?.itemListElement ?? [])
+          break
+        }
+      }
+    } catch { /* ignora JSON mal-formado */ }
+    if (productLD) break
+  }
+
+  if (!productLD) {
+    return c.json({ ok: false, error: 'Produto não encontrado no JSON-LD desta página. Verifique se a URL é de um produto (PDP).' }, 422)
+  }
+
+  if (rawOffers.length === 0) {
+    return c.json({ ok: false, error: 'Nenhuma oferta encontrada no JSON-LD. O produto pode estar fora de estoque.' }, 422)
+  }
+
+  // ── 3. Parseia __NEXT_DATA__ — productID e entityID ──────────
+  let buscapeProductId: string | null = null
+  let buscapeEntityId: string | null = null
+  const nextDataMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/)
+  if (nextDataMatch) {
+    try {
+      const nd: any = JSON.parse(nextDataMatch[1])
+      // Navega pelos props do Next.js para encontrar productID
+      const pageProps = nd?.props?.pageProps ?? {}
+      buscapeProductId = (
+        pageProps?.product?.id ??
+        pageProps?.productId ??
+        pageProps?.product?.productID ??
+        nd?.query?.productSlug ??
+        null
+      )?.toString() ?? null
+      buscapeEntityId = (
+        pageProps?.product?.entityId ??
+        pageProps?.entityId ??
+        null
+      )?.toString() ?? null
+    } catch { /* ignora */ }
+  }
+
+  // Fallback: tenta extrair productId da URL
+  // Ex: /barbeador-philips/5600-abc123 → último segmento
+  if (!buscapeProductId) {
+    const urlSlug = url.split('/').filter(Boolean).pop() ?? ''
+    // Tenta formato "slug-PRODUCT_ID" (ex: modelo-abc-12345)
+    const slugId = urlSlug.match(/[a-f0-9]{8,}$/i)?.[0] ?? null
+    if (slugId) buscapeProductId = slugId
+  }
+
+  // ── 4. Monta slug e normaliza dados do produto ───────────────
+  const productName: string = (productLD.name || 'Produto Buscapé').trim()
+  const productBrand: string = (
+    (typeof productLD.brand === 'string' ? productLD.brand : (productLD.brand as any)?.name) ?? ''
+  ).trim()
+  const productImage: string = (
+    Array.isArray(productLD.image)
+      ? (productLD.image as any)[0]
+      : productLD.image
+  ) ?? ''
+  const productDesc: string = (productLD.description ?? '').trim()
+  const productEan: string = (productLD.ean ?? '').trim()
+
+  // Gera slug único a partir do nome
+  const slugBase = productName
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+  // Garante unicidade adicionando sufixo aleatório se slug já existir
+  const slugSuffix = Math.random().toString(36).slice(2, 6)
+  const slug = `${slugBase}-bscp-${slugSuffix}`
+
+  // ── 5. Upsert do produto no banco ────────────────────────────
+  // Tenta buscar por EAN primeiro, depois por buscape_product_id, depois cria novo
+  let productId: number | null = null
+  let isNewProduct = false
+
+  if (productEan) {
+    const existing = await DB.prepare(`SELECT id FROM products WHERE ean = ? LIMIT 1`)
+      .bind(productEan).first<{ id: number }>()
+    if (existing) productId = existing.id
+  }
+  if (!productId && buscapeProductId) {
+    const existing = await DB.prepare(`SELECT id FROM products WHERE buscape_product_id = ? LIMIT 1`)
+      .bind(buscapeProductId).first<{ id: number }>()
+    if (existing) productId = existing.id
+  }
+
+  // Menor preço das ofertas (para best_price)
+  const prices = rawOffers.map((o: any) => {
+    const p = typeof o.price === 'string'
+      ? parseFloat(o.price.replace(/[^\d.,]/g, '').replace(',', '.'))
+      : (typeof o.price === 'number' ? o.price : 0)
+    return isNaN(p) ? 0 : p
+  }).filter(p => p > 0)
+  const bestPrice = prices.length > 0 ? Math.min(...prices) : null
+
+  if (!productId) {
+    // Insere novo produto
+    isNewProduct = true
+    const ins = await DB.prepare(`
+      INSERT INTO products
+        (name, slug, brand, description, image_url, ean, best_price, offer_count,
+         is_active, buscape_product_id, buscape_url, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).bind(
+      productName, slug, productBrand || null, productDesc || null,
+      productImage || null, productEan || null, bestPrice,
+      buscapeProductId, url
+    ).run()
+    productId = ins.meta.last_row_id as number
+  } else {
+    // Atualiza produto existente
+    await DB.prepare(`
+      UPDATE products SET
+        name = ?, brand = ?, image_url = COALESCE(NULLIF(?, ''), image_url),
+        best_price = COALESCE(?, best_price),
+        buscape_product_id = COALESCE(?, buscape_product_id),
+        buscape_url = COALESCE(?, buscape_url),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(
+      productName, productBrand || null, productImage || '',
+      bestPrice, buscapeProductId, url, productId
+    ).run()
+  }
+
+  // ── 6. Mapa de slugs de lojas do Buscapé → slug do banco ────
+  // O Buscapé usa o nome da loja em texto livre — precisamos mapear para o slug
+  const storeNameMap: Record<string, string> = {
+    'casas bahia':    'casasbahia',
+    'casasbahia':     'casasbahia',
+    'magazine luiza': 'magalu',
+    'magazineluiza':  'magalu',
+    'magalu':         'magalu',
+    'americanas':     'americanas',
+    'amazon':         'amazon',
+    'shopee':         'shopee',
+    'ponto':          'ponto',
+    'extra':          'extra',
+    'fast shop':      'fastshop',
+    'fastshop':       'fastshop',
+    'submarino':      'submarino',
+    'aliexpress':     'aliexpress',
+    'kabum':          'kabum',
+    'kabum!':         'kabum',
+    'pichau':         'pichau',
+    'terabyte':       'terabyte',
+    'carrefour':      'carrefour',
+    'samsung':        'samsung',
+    'dell':           'dell',
+    'lenovo':         'lenovo',
+    'leroy merlin':   'leroy',
+    'madeiramadeira': 'madeiramadeira',
+    'tok&stok':       'tok_stok',
+    'netshoes':       'netshoes',
+    'dafiti':         'dafiti',
+    'pontofrio':      'pontofrio',
+    'ponto frio':     'pontofrio',
+    'havan':          'havan',
+    'centauro':       'centauro',
+    'shein':          'shein',
+  }
+
+  // Busca todas as lojas do banco de uma vez (evita N queries)
+  const { results: storesRows } = await DB.prepare(
+    `SELECT id, slug, name, affiliate_network, affiliate_id FROM stores WHERE is_active = 1`
+  ).all<{ id: number; slug: string; name: string; affiliate_network: string; affiliate_id: string | null }>()
+  const storesBySlug = new Map(storesRows.map(s => [s.slug, s]))
+
+  // Busca regras de afiliado do banco de uma vez
+  const { results: rulesRows } = await DB.prepare(
+    `SELECT network, publisher_id, extra_param, link_template FROM affiliate_rules WHERE is_active = 1`
+  ).all<{ network: string; publisher_id: string | null; extra_param: string | null; link_template: string | null }>()
+  const rulesByNetwork = new Map(rulesRows.map(r => [r.network, r]))
+
+  // ── 7. Upsert de cada oferta ─────────────────────────────────
+  let importedCount = 0
+  let updatedCount = 0
+  const resultOffers: any[] = []
+
+  for (const raw of rawOffers) {
+    // Extrai dados da oferta com suporte a formatos variados do JSON-LD
+    const storeName: string = (
+      typeof raw.offeredBy === 'string' ? raw.offeredBy
+      : (raw.offeredBy as any)?.name ?? ''
+    ).trim()
+    const oid: string = (raw.id ?? '').toString().trim()
+
+    // Parse de preço — Buscapé pode retornar string "261.98" ou número
+    let price = 0
+    if (typeof (raw as any).price === 'number') {
+      price = (raw as any).price
+    } else {
+      const ps = String((raw as any).price ?? '').replace(/[^\d.,]/g, '').replace(',', '.')
+      price = parseFloat(ps) || 0
+    }
+
+    if (!storeName || price <= 0) continue
+
+    // Mapeia nome da loja → slug do banco
+    const storeSlug = storeNameMap[storeName.toLowerCase()] ?? storeName.toLowerCase().replace(/\s+/g, '')
+    const store = storesBySlug.get(storeSlug)
+    if (!store) {
+      resultOffers.push({ store: storeName, price, oid, status: 'store_not_found', slug_tried: storeSlug })
+      continue
+    }
+
+    // OID é obrigatório para montar o link de redirect do Buscapé
+    const buscapeRedirectUrl = oid
+      ? `https://www.buscape.com.br/lead?oid=${oid}&channel=11`
+      : (raw.url ?? '')
+
+    // Gera affiliate_url para a rede desta loja
+    // URL base = redirect do Buscapé (rastreia o clique)
+    let affiliateUrl = buscapeRedirectUrl
+    const rule = rulesByNetwork.get(store.affiliate_network)
+    const pubId = store.affiliate_id || rule?.publisher_id || ''
+    if (rule?.link_template && pubId) {
+      affiliateUrl = rule.link_template
+        .replace('{url}',   encodeURIComponent(buscapeRedirectUrl))
+        .replace('{pub}',   pubId)
+        .replace('{extra}', rule.extra_param ?? '')
+    }
+    // Fallback: se não tem template ou publisher_id, usa o redirect direto do Buscapé
+    // (o Buscapé tem seu próprio programa de afiliado que é ativado pelo channel=11)
+
+    // Título = nome do produto + " na " + loja
+    const offerTitle = `${productName} na ${store.name}`
+    const offerImage = (raw.image ?? productImage ?? '').toString()
+
+    // UPSERT: (product_id, store_id, external_id) é UNIQUE
+    // external_id = OID do Buscapé (único por oferta/loja)
+    const externalId = oid || `buscape-${store.slug}-${productId}`
+
+    const existing = await DB.prepare(`
+      SELECT id FROM offers WHERE product_id = ? AND store_id = ? AND external_id = ?
+    `).bind(productId, store.id, externalId).first<{ id: number }>()
+
+    if (existing) {
+      // Atualiza preço e affiliate_url
+      await DB.prepare(`
+        UPDATE offers SET
+          price = ?, affiliate_url = ?, product_url = ?, image_url = COALESCE(NULLIF(?, ''), image_url),
+          buscape_oid = ?, source = 'buscape',
+          last_updated = CURRENT_TIMESTAMP, in_stock = 1, is_active = 1
+        WHERE id = ?
+      `).bind(price, affiliateUrl, buscapeRedirectUrl, offerImage, oid || null, existing.id).run()
+      updatedCount++
+      resultOffers.push({ store: store.name, price, oid, affiliate_url: affiliateUrl, status: 'updated' })
+    } else {
+      // Insere nova oferta
+      await DB.prepare(`
+        INSERT INTO offers
+          (product_id, store_id, external_id, title, price, product_url, affiliate_url,
+           image_url, buscape_oid, source, in_stock, is_active, last_updated, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'buscape', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).bind(
+        productId, store.id, externalId, offerTitle, price,
+        buscapeRedirectUrl, affiliateUrl, offerImage || null, oid || null
+      ).run()
+      importedCount++
+      resultOffers.push({ store: store.name, price, oid, affiliate_url: affiliateUrl, status: 'imported' })
+    }
+  }
+
+  // ── 8. Atualiza best_price e offer_count do produto ──────────
+  await DB.prepare(`
+    UPDATE products SET
+      best_price   = (SELECT MIN(price) FROM offers WHERE product_id = ? AND is_active = 1 AND in_stock = 1),
+      offer_count  = (SELECT COUNT(*) FROM offers WHERE product_id = ? AND is_active = 1),
+      updated_at   = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(productId, productId, productId).run()
+
+  // ── 9. Retorna resultado ─────────────────────────────────────
+  const totalProcessed = importedCount + updatedCount
+  return c.json({
+    ok:           true,
+    product_id:   productId,
+    product_name: productName,
+    product_brand: productBrand || null,
+    is_new:       isNewProduct,
+    buscape_product_id: buscapeProductId,
+    imported:     importedCount,
+    updated:      updatedCount,
+    total:        totalProcessed,
+    best_price:   bestPrice,
+    offers:       resultOffers,
+    tip: totalProcessed > 0
+      ? `${importedCount} oferta(s) importada(s) e ${updatedCount} atualizada(s) com sucesso!`
+      : 'Nenhuma oferta foi processada — verifique se as lojas estão cadastradas.',
+  })
+})
+
+// ── POST /admin/api/affiliate-bot/refresh-buscape ────────────
+// Reprocessa todos os produtos com buscape_url cadastrado (atualização diária)
+// Chama import-buscape para cada um e retorna resumo
+admin.post('/api/affiliate-bot/refresh-buscape', async (c) => {
+  const { DB } = c.env
+  const body = await c.req.json().catch(() => ({})) as any
+  const limit = Math.min(parseInt(body.limit) || 5, 20)
+
+  // Produtos com URL do Buscapé cadastrada — prioriza os mais antigos
+  const { results: products } = await DB.prepare(`
+    SELECT id, name, buscape_url FROM products
+    WHERE is_active = 1 AND buscape_url IS NOT NULL AND buscape_url != ''
+    ORDER BY updated_at ASC
+    LIMIT ?
+  `).bind(limit).all<{ id: number; name: string; buscape_url: string }>()
+
+  if (products.length === 0) {
+    return c.json({ ok: true, processed: 0, results: [], tip: 'Nenhum produto com URL do Buscapé cadastrada.' })
+  }
+
+  const results: any[] = []
+  let totalImported = 0
+  let totalUpdated  = 0
+  let totalErrors   = 0
+
+  for (const prod of products) {
+    try {
+      // Reutiliza o handler interno via fetch interno
+      const selfUrl = new URL(c.req.url)
+      selfUrl.pathname = '/admin/api/affiliate-bot/import-buscape'
+      const token = c.req.header('Authorization') || ''
+
+      const resp = await fetch(selfUrl.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': token },
+        body: JSON.stringify({ url: prod.buscape_url }),
+        signal: AbortSignal.timeout(20000),
+      })
+      const data: any = await resp.json()
+      totalImported += data.imported ?? 0
+      totalUpdated  += data.updated  ?? 0
+      results.push({ product: prod.name, imported: data.imported, updated: data.updated, ok: data.ok })
+    } catch (e: any) {
+      totalErrors++
+      results.push({ product: prod.name, error: e?.message || 'timeout', ok: false })
+    }
+  }
+
+  return c.json({
+    ok:       true,
+    processed: products.length,
+    imported: totalImported,
+    updated:  totalUpdated,
+    errors:   totalErrors,
+    results,
+    has_more: products.length >= limit,
+  })
+})
+
+// ============================================================
 // AFFILIATE RULES — Códigos de afiliado por rede
 // ============================================================
 
@@ -3618,6 +4050,9 @@ function renderAdminSPA(): string {
       </div>
       <div onclick="showSection('affiliate-bot')" class="sidebar-link" data-section="affiliate-bot">
         <span class="text-lg">🤝</span> Bot Afiliados ML
+      </div>
+      <div onclick="showSection('buscape-import')" class="sidebar-link" data-section="buscape-import">
+        <span class="text-lg">🛒</span> Importar Buscapé
       </div>
       <div onclick="showSection('ml-import')" class="sidebar-link" data-section="ml-import">
         <span class="text-lg">🟡</span> Importar do ML

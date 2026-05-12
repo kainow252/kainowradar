@@ -135,6 +135,59 @@ app.get('/api/ml-callback', async (c) => {
 app.route('/api/ml-webhook', ml)
 // NOTA: /admin/api/ml/* está registrado DENTRO do admin.ts para passar pelo middleware de auth
 
+// ── Redirect Afiliado — /go/:offer_id ─────────────────────
+// Quando o usuário clica em "Ir à loja", passa por aqui:
+// 1. Registra click_event para analytics
+// 2. Lê affiliate_url da oferta (gerado na importação)
+// 3. Redireciona com 302 para o destino final
+// URL pública: /go/123  (onde 123 = offer.id no banco)
+app.get('/go/:id', async (c) => {
+  const { DB } = c.env
+  const offerId = parseInt(c.req.param('id') || '0')
+  if (!offerId || isNaN(offerId)) return c.redirect('/', 302)
+
+  // Busca oferta com dados da loja e produto
+  const offer = await DB.prepare(`
+    SELECT
+      o.id, o.affiliate_url, o.product_url, o.product_id, o.store_id,
+      o.buscape_oid, o.source,
+      s.affiliate_network, s.affiliate_id, s.deeplink_base, s.slug AS store_slug,
+      p.name AS product_name
+    FROM offers o
+    JOIN stores s ON s.id = o.store_id
+    JOIN products p ON p.id = o.product_id
+    WHERE o.id = ? AND o.is_active = 1
+  `).bind(offerId).first<any>()
+
+  if (!offer) return c.redirect('/', 302)
+
+  // ── Registra clique para analytics (fire-and-forget) ────
+  const ip = c.req.header('CF-Connecting-IP') || ''
+  const ipHash = ip
+    ? await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ip))
+        .then(b => Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2,'0')).join(''))
+        .catch(() => '')
+    : ''
+  DB.prepare(`
+    INSERT INTO click_events (product_id, offer_id, store_id, ip_hash, user_agent, referrer, clicked_at)
+    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).bind(
+    offer.product_id, offer.id, offer.store_id,
+    ipHash || null,
+    c.req.header('User-Agent')?.slice(0,200) || null,
+    c.req.header('Referer')?.slice(0,500) || null
+  ).run().catch(() => {}) // ignora erro — não bloqueia o redirect
+
+  // ── Determina URL de destino ─────────────────────────────
+  // Prioridade: affiliate_url salva na oferta > product_url > homepage
+  let dest = offer.affiliate_url || offer.product_url || '/'
+
+  // Garante que a URL é válida
+  if (dest && !dest.startsWith('http')) dest = '/' + dest
+
+  return c.redirect(dest, 302)
+})
+
 // ── Page Routes ───────────────────────────────────────────
 app.route('/', pages)
 

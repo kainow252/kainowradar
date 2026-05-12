@@ -103,6 +103,7 @@ async function loadSection(name) {
     'affiliate-bot': ['🤝 Bot Afiliados ML', 'Gera links de afiliado do Mercado Livre automaticamente'],
     'ml-import': ['🟡 Importar do ML', 'Importa produtos reais do Mercado Livre para o banco de dados'],
     'affiliate-codes': ['🔗 Códigos Afiliados', 'Configure seus códigos por rede e gere links para todos os produtos'],
+    'buscape-import': ['🛍️ Importar do Buscapé', 'Importa produtos e preços de múltiplas lojas via Buscapé — gera links afiliados automaticamente'],
   }
   const [title, subtitle] = titles[name] || ['Admin', '']
   document.getElementById('page-title').textContent = title
@@ -124,6 +125,7 @@ async function loadSection(name) {
     'affiliate-bot': renderAffiliateBot,
     'ml-import': renderMLImport,
     'affiliate-codes': renderAffiliateCodes,
+    'buscape-import': renderBuscapeImport,
   }
   if (sections[name]) await sections[name](area)
 }
@@ -4890,6 +4892,299 @@ async function importAllOffers() {
   runAutoSync({ steps: ['import'] })
 }
 
+// ══════════════════════════════════════════════════════════
+// IMPORTAR DO BUSCAPÉ — scraping JSON-LD + links afiliados
+// ══════════════════════════════════════════════════════════
+async function renderBuscapeImport(area) {
+  // Busca produtos já importados do Buscapé
+  const products = await api('GET', '/admin/api/products?source=buscape&limit=50') || {}
+  const buscapeProds = (products.results || []).filter(p => p.buscape_url)
+
+  area.innerHTML = `
+    <div class="section space-y-6">
+
+      <!-- Cabeçalho hero -->
+      <div class="stat-card" style="background:linear-gradient(135deg,#f97316 0%,#ea580c 100%);color:#fff;border:none">
+        <div class="flex items-center gap-4">
+          <div class="text-5xl">🛒</div>
+          <div>
+            <h2 class="text-2xl font-bold">Importar do Buscapé</h2>
+            <p class="text-orange-100 text-sm mt-1">
+              Cole a URL de qualquer produto do Buscapé — o sistema importa automaticamente
+              os preços de <strong>todas as lojas</strong> (Casas Bahia, Magalu, Americanas, Ponto, Extra, Fast Shop…)
+              e gera <strong>links de afiliado</strong> para cada uma.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Como funciona -->
+      <div class="stat-card">
+        <h3 class="font-bold text-slate-800 mb-3">💡 Como funciona</h3>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-3 text-center text-sm">
+          <div class="bg-orange-50 rounded-xl p-3">
+            <div class="text-2xl mb-1">1️⃣</div>
+            <div class="font-semibold text-slate-700">Cole a URL</div>
+            <div class="text-slate-500 text-xs">Qualquer página de produto do buscape.com.br</div>
+          </div>
+          <div class="bg-orange-50 rounded-xl p-3">
+            <div class="text-2xl mb-1">2️⃣</div>
+            <div class="font-semibold text-slate-700">Scrapia JSON-LD</div>
+            <div class="text-slate-500 text-xs">Extrai nome, marca, imagem e todas as ofertas por loja</div>
+          </div>
+          <div class="bg-orange-50 rounded-xl p-3">
+            <div class="text-2xl mb-1">3️⃣</div>
+            <div class="font-semibold text-slate-700">Salva no Banco</div>
+            <div class="text-slate-500 text-xs">Cria produto + ofertas com preço de cada loja</div>
+          </div>
+          <div class="bg-orange-50 rounded-xl p-3">
+            <div class="text-2xl mb-1">4️⃣</div>
+            <div class="font-semibold text-slate-700">Gera Afiliados</div>
+            <div class="text-slate-500 text-xs">Link de afiliado automático por rede (Awin, Lomadee…)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Formulário de importação -->
+      <div class="stat-card">
+        <h3 class="font-bold text-slate-800 mb-4">🔗 Importar novo produto</h3>
+        <div class="flex gap-2">
+          <input type="url" id="buscape-url-input"
+            placeholder="https://www.buscape.com.br/aspirador-de-po/modelo-xpto-123abc"
+            class="input flex-1 font-mono text-sm"
+            onkeydown="if(event.key==='Enter') importBuscape()">
+          <button onclick="importBuscape()" id="btn-import-buscape"
+            class="btn-primary px-6 flex items-center gap-2 whitespace-nowrap"
+            style="background:linear-gradient(135deg,#f97316,#ea580c)">
+            <span id="buscape-btn-icon">🛒</span>
+            <span id="buscape-btn-text">Importar</span>
+          </button>
+        </div>
+        <p class="text-xs text-slate-400 mt-2">
+          Exemplo: <code class="bg-slate-100 px-1.5 py-0.5 rounded">https://www.buscape.com.br/ar-condicionado/lg-dual-inverter-9000-btus-s4-q09ja31a-1234abc</code>
+        </p>
+
+        <!-- Terminal de resultado -->
+        <div id="buscape-log-wrap" class="mt-4 hidden">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">📟 Log de Importação</span>
+            <button onclick="document.getElementById('buscape-log-wrap').classList.add('hidden')"
+              class="text-xs text-slate-400 hover:text-slate-600">✕ Fechar</button>
+          </div>
+          <div id="buscape-log"
+            class="bg-slate-950 text-green-400 rounded-xl p-4 font-mono text-xs leading-relaxed min-h-[120px] max-h-72 overflow-y-auto whitespace-pre-wrap border border-slate-800">
+            Aguardando…
+          </div>
+        </div>
+      </div>
+
+      <!-- Atualização em lote -->
+      <div class="stat-card">
+        <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+          <div>
+            <h3 class="font-bold text-slate-800">🔄 Atualizar preços do Buscapé</h3>
+            <p class="text-sm text-slate-500">Reprocessa os produtos já cadastrados — ideal para rodar diariamente</p>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="refreshBuscape(5)" class="btn-secondary text-sm">↻ Atualizar 5</button>
+            <button onclick="refreshBuscape(20)" class="btn-primary text-sm"
+              style="background:linear-gradient(135deg,#f97316,#ea580c)">↻ Atualizar 20</button>
+          </div>
+        </div>
+        <div id="buscape-refresh-log" class="hidden">
+          <div class="bg-slate-950 text-green-400 rounded-xl p-3 font-mono text-xs leading-relaxed max-h-48 overflow-y-auto whitespace-pre-wrap border border-slate-800"
+               id="buscape-refresh-log-text">Aguardando…</div>
+        </div>
+      </div>
+
+      <!-- Produtos já importados -->
+      <div class="stat-card">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-bold text-slate-800">📦 Produtos importados do Buscapé
+            <span class="ml-2 text-sm font-normal text-slate-500">(${buscapeProds.length} encontrado(s))</span>
+          </h3>
+          <button onclick="renderBuscapeImport(document.getElementById('content-area'))"
+            class="btn-secondary text-sm">↻ Atualizar lista</button>
+        </div>
+        ${buscapeProds.length === 0
+          ? `<div class="text-center py-8 text-slate-400">
+               <div class="text-4xl mb-2">📭</div>
+               <p>Nenhum produto importado do Buscapé ainda.</p>
+               <p class="text-sm mt-1">Cole uma URL acima para começar!</p>
+             </div>`
+          : `<div class="space-y-2" id="buscape-prods-list">
+               ${buscapeProds.map(p => `
+                 <div class="flex items-center gap-3 p-3 bg-slate-50 rounded-xl hover:bg-orange-50 transition-colors">
+                   <img src="${p.image_url || 'https://placehold.co/48x48/f97316/fff?text=B'}"
+                     class="w-12 h-12 object-contain rounded-lg bg-white border border-slate-200 flex-shrink-0"
+                     onerror="this.src='https://placehold.co/48x48/f97316/fff?text=B'">
+                   <div class="flex-1 min-w-0">
+                     <div class="font-semibold text-slate-800 text-sm truncate">${p.name}</div>
+                     <div class="text-xs text-slate-500">
+                       ${p.brand ? `<span class="mr-2">${p.brand}</span>` : ''}
+                       ${p.offer_count ? `<span class="text-orange-600 font-semibold">${p.offer_count} oferta(s)</span>` : ''}
+                       ${p.best_price ? ` · Melhor: <strong>R$ ${Number(p.best_price).toFixed(2).replace('.',',')}</strong>` : ''}
+                     </div>
+                     <div class="text-xs text-slate-400 truncate mt-0.5">${p.buscape_url || ''}</div>
+                   </div>
+                   <div class="flex gap-2 flex-shrink-0">
+                     <button onclick="refreshOneBuscape('${(p.buscape_url||'').replace(/'/g,'')}','${p.name.replace(/'/g,'').slice(0,30)}')"
+                       title="Atualizar preços desta URL" class="btn-secondary text-xs px-2 py-1">↻</button>
+                     <a href="/produto/${p.slug}" target="_blank"
+                       class="btn-secondary text-xs px-2 py-1">👁 Ver</a>
+                   </div>
+                 </div>
+               `).join('')}
+             </div>`
+        }
+      </div>
+
+      <!-- Dica de afiliados por loja -->
+      <div class="stat-card border border-orange-100 bg-orange-50">
+        <h3 class="font-bold text-orange-800 mb-3">💰 Redes de afiliado por loja</h3>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+          ${[
+            ['Casas Bahia','awin','#22c55e'],['Ponto','awin','#22c55e'],['Extra','awin','#22c55e'],
+            ['Americanas','awin','#22c55e'],['Fast Shop','awin','#22c55e'],
+            ['Magazine Luiza','lomadee','#3b82f6'],['Centauro','lomadee','#3b82f6'],
+            ['Amazon','amazon-pa-api','#f59e0b'],['Mercado Livre','meli-api','#eab308'],
+            ['Shopee','shopee-api','#f97316'],
+          ].map(([name, net, color]) =>
+            `<div class="bg-white rounded-lg p-2 flex items-center gap-2">
+               <span class="w-2 h-2 rounded-full flex-shrink-0" style="background:${color}"></span>
+               <span class="font-semibold text-slate-700">${name}</span>
+               <span class="text-slate-400 ml-auto">${net}</span>
+             </div>`
+          ).join('')}
+        </div>
+        <p class="text-xs text-orange-700 mt-3">
+          ⚙️ Configure os publisher IDs em <button onclick="showSection('affiliate-codes')"
+            class="underline font-semibold hover:text-orange-900">Códigos Afiliados</button>
+          para ativar a geração automática dos links.
+        </p>
+      </div>
+
+    </div>
+  `
+}
+
+// ── Importar uma URL do Buscapé ───────────────────────────
+async function importBuscape() {
+  const input = document.getElementById('buscape-url-input')
+  const url   = (input?.value || '').trim()
+  if (!url) { toast('Cole uma URL do Buscapé primeiro', 'warning'); return }
+
+  const btn     = document.getElementById('btn-import-buscape')
+  const btnIcon = document.getElementById('buscape-btn-icon')
+  const btnText = document.getElementById('buscape-btn-text')
+  const logWrap = document.getElementById('buscape-log-wrap')
+  const log     = document.getElementById('buscape-log')
+
+  if (btn) btn.disabled = true
+  if (btnIcon) btnIcon.textContent = '⏳'
+  if (btnText) btnText.textContent = 'Importando…'
+  logWrap?.classList.remove('hidden')
+  if (log) log.textContent = '⏳ Buscando página em buscape.com.br…\n'
+
+  const LF = '\n'
+  const t0  = Date.now()
+
+  const res = await api('POST', '/admin/api/affiliate-bot/import-buscape', { url })
+
+  if (btn) btn.disabled = false
+  if (btnIcon) btnIcon.textContent = '🛒'
+  if (btnText) btnText.textContent = 'Importar'
+
+  if (!res || !res.ok) {
+    if (log) log.textContent += `❌ Erro: ${res?.error || 'Falha desconhecida'}` + LF
+    toast(res?.error || 'Erro na importação', 'error')
+    return
+  }
+
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(1)
+  let lines = []
+  lines.push(`✅ ${res.is_new ? 'Produto CRIADO' : 'Produto ATUALIZADO'} em ${elapsed}s`)
+  lines.push(`   📦 ${res.product_name}${res.product_brand ? ' — ' + res.product_brand : ''}`)
+  lines.push(`   ID banco: #${res.product_id}  |  Buscapé ID: ${res.buscape_product_id || '—'}`)
+  lines.push(`   Preço mínimo: R$ ${res.best_price ? Number(res.best_price).toFixed(2).replace('.',',') : '—'}`)
+  lines.push('')
+  lines.push(`📊 ${res.total} oferta(s) processada(s): ${res.imported} nova(s) · ${res.updated} atualizada(s)`)
+  lines.push('')
+
+  if (res.offers && res.offers.length > 0) {
+    lines.push('Lojas importadas:')
+    res.offers.forEach(o => {
+      const statusIcon = o.status === 'imported' ? '🆕' : o.status === 'updated' ? '🔄' : '⚠️'
+      const price = o.price ? `R$ ${Number(o.price).toFixed(2).replace('.',',')}` : '—'
+      const oid   = o.oid  ? `OID:${o.oid}` : ''
+      lines.push(`  ${statusIcon} ${o.store.padEnd(18)} ${price.padStart(12)}  ${oid}`)
+      if (o.affiliate_url) {
+        lines.push(`     🔗 ${o.affiliate_url.slice(0, 80)}${o.affiliate_url.length > 80 ? '…' : ''}`)
+      }
+      if (o.status === 'store_not_found') {
+        lines.push(`     ⚠️  Loja não encontrada no banco (slug tentado: ${o.slug_tried})`)
+      }
+    })
+  }
+
+  if (res.tip) lines.push('', '💡 ' + res.tip)
+
+  if (log) log.textContent = lines.join(LF)
+  toast(`🛒 ${res.imported} importada(s) · ${res.updated} atualizada(s)`, res.total > 0 ? 'success' : 'warning')
+
+  // Limpa o input e recarrega a lista após 2s
+  if (input) input.value = ''
+  if (res.total > 0) setTimeout(() => renderBuscapeImport(document.getElementById('content-area')), 2000)
+}
+
+// ── Atualizar preços em lote (refresh-buscape) ────────────
+async function refreshBuscape(limit) {
+  const logEl = document.getElementById('buscape-refresh-log')
+  const logText = document.getElementById('buscape-refresh-log-text')
+  logEl?.classList.remove('hidden')
+  if (logText) logText.textContent = `⏳ Atualizando até ${limit} produto(s)…\n`
+
+  const LF = '\n'
+  const t0 = Date.now()
+  const res = await api('POST', '/admin/api/affiliate-bot/refresh-buscape', { limit })
+
+  if (!res || !res.ok) {
+    if (logText) logText.textContent += `❌ ${res?.error || 'Erro desconhecido'}` + LF
+    toast('Erro no refresh do Buscapé', 'error')
+    return
+  }
+
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(1)
+  let lines = []
+  lines.push(`✅ ${res.processed} produto(s) processado(s) em ${elapsed}s`)
+  lines.push(`   ${res.imported} nova(s) · ${res.updated} atualizada(s) · ${res.errors} erro(s)`)
+  if (res.has_more) lines.push('   ⚠️  Ainda há mais produtos — rode novamente para continuar')
+  lines.push('')
+  if (res.results && res.results.length > 0) {
+    res.results.forEach(r => {
+      const icon = r.ok ? (r.imported + r.updated > 0 ? '✅' : '⏭') : '❌'
+      lines.push(`  ${icon} ${r.product}`)
+      if (!r.ok && r.error) lines.push(`     ❌ ${r.error}`)
+    })
+  }
+  if (logText) logText.textContent = lines.join(LF)
+  toast(`↻ Buscapé: ${res.updated} preços atualizados`, res.updated > 0 ? 'success' : 'info')
+  if (res.updated > 0) setTimeout(() => renderBuscapeImport(document.getElementById('content-area')), 1500)
+}
+
+// ── Atualizar um produto individual ──────────────────────
+async function refreshOneBuscape(url, name) {
+  if (!url) return
+  toast(`⏳ Atualizando ${name}…`, 'info')
+  const res = await api('POST', '/admin/api/affiliate-bot/import-buscape', { url })
+  if (res?.ok) {
+    toast(`✅ ${name}: ${res.updated} atualizado(s)`, 'success')
+    setTimeout(() => renderBuscapeImport(document.getElementById('content-area')), 800)
+  } else {
+    toast(`❌ ${res?.error || 'Erro'}`, 'error')
+  }
+}
+
 // ── IMPORTAR DO MERCADO LIVRE ─────────────────────────────
 async function renderMLImport(area) {
   const status = await api('GET', '/admin/api/ml/status')
@@ -5372,6 +5667,280 @@ async function importMLItem() {
     </div>
   `
   document.getElementById('ml-item-id').value = ''
+}
+
+// ============================================================
+// BUSCAPÉ IMPORT — Importar produto + ofertas multi-loja
+// ============================================================
+async function renderBuscapeImport(area) {
+  // Carrega estatísticas de produtos com buscape_url para o painel de refresh
+  let buscapeCount = 0
+  try {
+    const st = await api('GET', '/admin/api/products?filter=buscape&limit=1')
+    buscapeCount = st?.total ?? 0
+  } catch { /* ignora */ }
+
+  area.innerHTML = `
+    <div class="space-y-6 p-6">
+
+      <!-- Cabeçalho -->
+      <div class="stat-card" style="background:linear-gradient(135deg,#f97316,#ea580c);color:white">
+        <div class="flex items-start gap-4">
+          <div class="text-4xl">🛒</div>
+          <div>
+            <h2 class="text-xl font-bold">Importar do Buscapé</h2>
+            <p class="text-orange-100 text-sm mt-1">
+              Cole a URL de um produto do Buscapé para importar preços de <strong>múltiplas lojas</strong>
+              (Casas Bahia, Magalu, Americanas, Ponto, Extra, Fast Shop…) e gerar links afiliados automáticos.
+            </p>
+            <p class="text-orange-100 text-xs mt-2">
+              💡 Cada clique do usuário nas lojas gera comissão via link afiliado da rede de cada loja (Awin, Lomadee, etc).
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Formulário de importação -->
+      <div class="stat-card">
+        <h3 class="font-bold text-slate-800 mb-4">🔗 URL do Produto no Buscapé</h3>
+        <div class="flex gap-3">
+          <input type="url" id="buscape-url" placeholder="https://www.buscape.com.br/nome-produto/slug"
+            class="input flex-1 text-sm font-mono"
+            onkeydown="if(event.key==='Enter') importBuscape()">
+          <button onclick="importBuscape()" id="btn-import-buscape"
+            class="btn-primary flex items-center gap-2 whitespace-nowrap"
+            style="background:linear-gradient(135deg,#f97316,#ea580c)">
+            <span>🚀</span> Importar Produto
+          </button>
+        </div>
+        <p class="text-xs text-slate-400 mt-2">
+          Exemplo: <code class="bg-slate-100 px-1 rounded">https://www.buscape.com.br/barbeador/philips-oneblade-qp2724-10/5600</code>
+        </p>
+
+        <!-- Log de importação -->
+        <div id="buscape-log-wrap" class="mt-4 hidden">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">📟 Log da Importação</span>
+            <button onclick="document.getElementById('buscape-log-wrap').classList.add('hidden')"
+              class="text-xs text-slate-400 hover:text-slate-600">✕ fechar</button>
+          </div>
+          <div class="bg-slate-950 text-green-400 rounded-xl p-4 font-mono text-xs leading-relaxed min-h-[100px] max-h-80 overflow-y-auto whitespace-pre-wrap border border-slate-800"
+               id="buscape-log-text">Aguardando...</div>
+        </div>
+      </div>
+
+      <!-- Resultado das ofertas importadas -->
+      <div id="buscape-result" class="hidden">
+        <!-- Preenchido dinamicamente por importBuscape() -->
+      </div>
+
+      <!-- Atualização em lote (refresh diário) -->
+      <div class="stat-card">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h3 class="font-bold text-slate-800">🔄 Atualização Diária de Preços</h3>
+            <p class="text-sm text-slate-500 mt-1">
+              Reprocessa os produtos já importados do Buscapé com os preços mais recentes de todas as lojas.
+            </p>
+          </div>
+          <button onclick="refreshBuscape()" id="btn-refresh-buscape"
+            class="btn-secondary flex items-center gap-2">
+            <span>🔄</span> Atualizar Agora
+          </button>
+        </div>
+        <div id="buscape-refresh-result" class="hidden text-sm text-slate-600 bg-slate-50 rounded-xl p-3"></div>
+      </div>
+
+      <!-- Como funciona -->
+      <div class="stat-card border border-orange-100 bg-orange-50">
+        <h3 class="font-bold text-slate-800 mb-3">ℹ️ Como funciona o link afiliado</h3>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-slate-700">
+          <div class="flex flex-col gap-1">
+            <span class="text-xl">1️⃣</span>
+            <strong>Importação</strong>
+            <span class="text-xs text-slate-500">Buscapé retorna JSON-LD com ofertas de todas as lojas parceiras com preço e OID de cada oferta.</span>
+          </div>
+          <div class="flex flex-col gap-1">
+            <span class="text-xl">2️⃣</span>
+            <strong>Link Afiliado</strong>
+            <span class="text-xs text-slate-500">Para cada loja, o sistema gera um link com o código afiliado da rede dela (Awin, Lomadee, etc). O redirect passa pelo Buscapé primeiro para rastrear o clique.</span>
+          </div>
+          <div class="flex flex-col gap-1">
+            <span class="text-xl">3️⃣</span>
+            <strong>Comissão</strong>
+            <span class="text-xs text-slate-500">Quando o usuário clica e compra, a comissão é creditada automaticamente na sua conta da rede de afiliados da loja.</span>
+          </div>
+        </div>
+
+        <div class="mt-4 border-t border-orange-200 pt-4">
+          <p class="text-xs font-semibold text-slate-600 mb-2">🏪 Lojas suportadas via Buscapé:</p>
+          <div class="flex flex-wrap gap-2">
+            ${['Casas Bahia','Magazine Luiza','Americanas','Ponto','Extra','Fast Shop','Amazon','Shopee','Submarino','Kabum','Carrefour'].map(s =>
+              `<span class="text-xs bg-white border border-orange-200 px-2 py-0.5 rounded-full text-slate-600">${s}</span>`
+            ).join('')}
+          </div>
+        </div>
+      </div>
+
+    </div>
+  `
+}
+
+// ── Importa um produto do Buscapé ────────────────────────────
+async function importBuscape() {
+  const urlEl   = document.getElementById('buscape-url')
+  const btnEl   = document.getElementById('btn-import-buscape')
+  const logWrap = document.getElementById('buscape-log-wrap')
+  const logText = document.getElementById('buscape-log-text')
+  const result  = document.getElementById('buscape-result')
+
+  const url = (urlEl?.value || '').trim()
+  if (!url) { toast('Cole a URL do produto no Buscapé', 'error'); return }
+  if (!url.includes('buscape.com.br')) { toast('A URL precisa ser do buscape.com.br', 'error'); return }
+
+  // Exibe terminal de log
+  logWrap.classList.remove('hidden')
+  result.classList.add('hidden')
+  logText.textContent = '⏳ Buscando página do produto...\n'
+  btnEl.disabled = true
+  btnEl.innerHTML = '<span class="animate-spin">⏳</span> Importando...'
+
+  const t0 = Date.now()
+
+  function log(msg) {
+    logText.textContent += msg + '\n'
+    logText.scrollTop = logText.scrollHeight
+  }
+
+  try {
+    log(`📡 GET ${url}`)
+    log('📦 Parseando JSON-LD + ofertas...')
+
+    const res = await api('POST', '/admin/api/affiliate-bot/import-buscape', { url })
+
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1)
+
+    if (!res || !res.ok) {
+      log(`❌ Erro: ${res?.error || 'Resposta inválida do servidor'}`)
+      btnEl.disabled = false
+      btnEl.innerHTML = '<span>🚀</span> Importar Produto'
+      return
+    }
+
+    // Log do resultado
+    log(`✅ Produto: ${res.product_name}${res.product_brand ? ' · ' + res.product_brand : ''}`)
+    log(`🆔 ID banco: #${res.product_id} | ${res.is_new ? '🆕 novo' : '♻️ atualizado'}`)
+    if (res.buscape_product_id) log(`🏷️  Buscapé product_id: ${res.buscape_product_id}`)
+    log(`💰 Menor preço: R$ ${res.best_price ? res.best_price.toFixed(2).replace('.',',') : 'N/A'}`)
+    log(`📊 ${res.imported} nova(s) · ${res.updated} atualizada(s) · ${(res.offers||[]).length} total`)
+    log('')
+
+    const notFound = (res.offers||[]).filter(o => o.status === 'store_not_found')
+    if (notFound.length > 0) {
+      log(`⚠️  Lojas não mapeadas: ${notFound.map(o=>o.store).join(', ')}`)
+      log('   → Você pode cadastrá-las na seção "Lojas Parceiras"')
+      log('')
+    }
+
+    log(`⏱️  ${elapsed}s | ${res.tip}`)
+
+    // Renderiza cards das ofertas
+    const offers = (res.offers || []).filter(o => o.status !== 'store_not_found')
+    if (offers.length > 0) {
+      result.classList.remove('hidden')
+      result.innerHTML = `
+        <div class="stat-card">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="font-bold text-slate-800">🏪 Ofertas Importadas — ${res.product_name}</h3>
+            <span class="text-xs text-slate-500">${offers.length} loja(s) · ${elapsed}s</span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            ${offers.map(o => {
+              const statusBadge = o.status === 'imported'
+                ? '<span class="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-semibold">🆕 novo</span>'
+                : '<span class="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-semibold">♻️ atualizado</span>'
+              const price = typeof o.price === 'number' ? 'R$ ' + o.price.toFixed(2).replace('.',',') : 'N/A'
+              return `
+                <div class="border border-slate-200 rounded-xl p-3 hover:border-orange-300 transition-all">
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="font-semibold text-sm text-slate-800">${o.store}</span>
+                    ${statusBadge}
+                  </div>
+                  <p class="text-lg font-bold text-orange-600">${price}</p>
+                  ${o.oid ? `<p class="text-xs text-slate-400 font-mono">OID: ${o.oid}</p>` : ''}
+                  ${o.affiliate_url ? `
+                    <a href="${o.affiliate_url}" target="_blank"
+                       class="mt-2 text-xs text-blue-600 hover:underline flex items-center gap-1 truncate">
+                      🔗 <span class="truncate">${o.affiliate_url.slice(0,50)}…</span>
+                    </a>` : ''}
+                </div>
+              `
+            }).join('')}
+          </div>
+          <div class="mt-4 pt-4 border-t border-slate-100 flex gap-3">
+            <button onclick="showSection('products')"
+              class="btn-secondary text-sm">📦 Ver Produtos</button>
+            <button onclick="document.getElementById('buscape-url').value=''; document.getElementById('buscape-result').classList.add('hidden')"
+              class="btn-secondary text-sm">➕ Importar outro</button>
+          </div>
+        </div>
+      `
+    }
+
+    toast(`${res.imported + res.updated} oferta(s) salvas!`, 'success')
+
+  } catch (err) {
+    log(`❌ Exceção: ${err?.message || err}`)
+    toast('Erro ao importar — verifique o log', 'error')
+  } finally {
+    btnEl.disabled = false
+    btnEl.innerHTML = '<span>🚀</span> Importar Produto'
+  }
+}
+
+// ── Atualiza todos os produtos Buscapé cadastrados ────────────
+async function refreshBuscape() {
+  const btn = document.getElementById('btn-refresh-buscape')
+  const resultEl = document.getElementById('buscape-refresh-result')
+
+  btn.disabled = true
+  btn.innerHTML = '<span class="animate-spin inline-block">⏳</span> Atualizando...'
+  resultEl.classList.add('hidden')
+
+  const res = await api('POST', '/admin/api/affiliate-bot/refresh-buscape', { limit: 5 })
+
+  btn.disabled = false
+  btn.innerHTML = '<span>🔄</span> Atualizar Agora'
+
+  if (!res) { toast('Erro ao atualizar preços', 'error'); return }
+
+  resultEl.classList.remove('hidden')
+
+  if (res.processed === 0) {
+    resultEl.innerHTML = `<p class="text-slate-500">Nenhum produto com URL do Buscapé cadastrada ainda. Importe um produto primeiro.</p>`
+    return
+  }
+
+  resultEl.innerHTML = `
+    <div class="flex items-center gap-4 mb-3 flex-wrap">
+      <span class="font-semibold text-slate-700">✅ ${res.processed} produto(s) processado(s)</span>
+      <span class="text-green-700 bg-green-100 px-2 py-0.5 rounded-full text-xs font-semibold">+${res.imported} novas ofertas</span>
+      <span class="text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full text-xs font-semibold">♻️ ${res.updated} atualizadas</span>
+      ${res.errors > 0 ? `<span class="text-red-700 bg-red-100 px-2 py-0.5 rounded-full text-xs font-semibold">❌ ${res.errors} erro(s)</span>` : ''}
+      ${res.has_more ? `<span class="text-orange-600 text-xs">⚠️ Há mais — rode novamente para continuar</span>` : ''}
+    </div>
+    <div class="space-y-1">
+      ${(res.results || []).map(r => `
+        <div class="flex items-center gap-2 text-xs ${r.ok ? 'text-slate-600' : 'text-red-600'}">
+          <span>${r.ok ? '✓' : '✗'}</span>
+          <span class="font-medium truncate max-w-xs">${r.product}</span>
+          ${r.ok ? `<span class="text-slate-400">+${r.imported || 0} / ♻️${r.updated || 0}</span>` : `<span>${r.error}</span>`}
+        </div>
+      `).join('')}
+    </div>
+  `
+
+  toast(`${res.imported + res.updated} oferta(s) atualizadas!`, 'success')
 }
 
 // ── Boot ──────────────────────────────────────────────────
