@@ -2754,8 +2754,12 @@ admin.route('/api/ml', ml)
 admin.post('/api/affiliate-bot/auto-sync', async (c) => {
   const { DB } = c.env
   const body: any = await c.req.json().catch(() => ({}))
-  const dryRun    = !!body.dry_run
-  const steps     = (body.steps as string[] | undefined) ?? ['import', 'search', 'prices']
+  const dryRun      = !!body.dry_run
+  const steps       = (body.steps as string[] | undefined) ?? ['import', 'search', 'prices']
+  // limit por etapa: padrão 3 para search/prices (evita timeout no Worker)
+  // o front-end chama em loop até found/updated = 0
+  const searchLimit = Math.min(parseInt(body.search_limit) || 3, 5)
+  const pricesLimit = Math.min(parseInt(body.prices_limit) || 3, 5)
 
   const PUBLISHER_ID = 'cfegdhabc31955'
   const MATT_TOOL    = '38524122'
@@ -2983,8 +2987,8 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
           SELECT id, name, brand, best_price FROM products
           WHERE is_active = 1
             AND (ml_item_id IS NULL OR ml_item_id = '')
-          ORDER BY id LIMIT 20
-        `).all<any>()
+          ORDER BY id LIMIT ?
+        `).bind(searchLimit).all<any>()
 
         for (const prod of noLink.results ?? []) {
           try {
@@ -3062,18 +3066,25 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
       } catch (e: any) {
         srch.status = 'error'; srch.error = e?.message || 'exception'
       }
-    }
-  }
+    } // fecha else (!geckoKey)
+  } // fecha if (steps.includes('search'))
 
   // ─────────────────────────────────────────────────────────
-  // ETAPA 3 — Atualização de preço via GeckoAPI PDP (1 crédito/produto)
-  // Produtos com ml_item_id → PDP → cashPrice ou price → atualiza BD
-  // Link afiliado = canonicalUrl da GeckoAPI + parâmetros afiliado
+  // ETAPA 3 — Atualização de preço via GeckoAPI (PDP + fallback PLP)
+  //
+  // Para cada produto com ml_item_id (os mais desatualizados primeiro):
+  //   1. Tenta GeckoAPI PDP → cashPrice / price
+  //   2. Se PDP retornar price=null (catálogo sem oferta selecionada),
+  //      faz fallback GeckoAPI PLP pelo nome do produto → pega preço
+  //      e atualiza também o permalink/ml_item_id se o PLP trouxer
+  //      um resultado melhor.
+  //
+  // Limite: 5 produtos por execução (cada um consome 1-2 créditos Gecko)
   // ─────────────────────────────────────────────────────────
   if (steps.includes('prices')) {
     const prcs: any = {
       status: 'ok', updated: 0, unchanged: 0, errors: 0, skipped: 0,
-      no_gecko_key: !geckoKey,
+      pdp_hits: 0, plp_fallbacks: 0, no_gecko_key: !geckoKey,
     }
     report.prices = prcs
 
@@ -3082,16 +3093,16 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
       prcs.error  = 'GECKO_API_KEY não configurada — defina o secret no Cloudflare Pages'
     } else {
       try {
-        // 10 produtos com ml_item_id mais desatualizados
+        // 5 produtos mais desatualizados (limita créditos e tempo do Worker)
         const withId = await DB.prepare(`
-          SELECT p.id, p.ml_item_id, p.affiliate_url, p.best_price,
+          SELECT p.id, p.name, p.ml_item_id, p.affiliate_url, p.best_price,
                  o.product_url, o.id as offer_id
           FROM products p
           LEFT JOIN offers o ON o.product_id = p.id AND o.store_id = ?
           WHERE p.is_active = 1
             AND p.ml_item_id IS NOT NULL AND p.ml_item_id != ''
           ORDER BY p.affiliate_updated_at ASC NULLS FIRST
-          LIMIT 10
+          LIMIT 5
         `).bind(storeId).all<any>()
 
         for (const prod of withId.results ?? []) {
@@ -3103,46 +3114,82 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
               ? baseUrl
               : `https://www.mercadolivre.com.br/p/${prod.ml_item_id.toLowerCase()}`
 
-            // GeckoAPI PDP: retorna { price, cashPrice, canonicalUrl, availability, ... }
-            const data = await geckoExtract({
+            let newPrice:   number | null = null
+            let newUrl:     string        = productUrl
+            let newMlId:    string        = prod.ml_item_id
+
+            // ── 1. Tentativa PDP ────────────────────────────
+            // GeckoAPI PDP retorna { price, cashPrice, canonicalUrl, name, ... }
+            // Páginas de catálogo sem oferta selecionada retornam price=null
+            const pdpData = await geckoExtract({
               target: 'mercadolivre.com.br',
               type:   'pdp',
               url:    productUrl,
             })
 
-            if (!data) { prcs.skipped++; continue }
+            if (pdpData) {
+              // Preferência: cashPrice (à vista) > price (com parcelamento)
+              const pdpPrice =
+                (pdpData.cashPrice && pdpData.cashPrice > 0) ? pdpData.cashPrice
+                  : (pdpData.price && pdpData.price > 0)    ? pdpData.price
+                  : null
 
-            // Preferência: cashPrice (à vista) > price (exibido)
-            const newPrice: number | null =
-              (data.cashPrice && data.cashPrice > 0) ? data.cashPrice
-                : (data.price && data.price > 0)    ? data.price
-                : null
+              if (pdpPrice && pdpPrice > 0) {
+                newPrice = pdpPrice
+                newUrl   = (pdpData.canonicalUrl || productUrl).split('?')[0].split('#')[0]
+                prcs.pdp_hits++
+              }
+            }
 
+            // ── 2. Fallback PLP (quando PDP não retornou preço) ──
+            // Busca pelo nome no ML e pega o 1º item com preço válido
+            if (!newPrice && prod.name) {
+              const keyword = (prod.name as string).replace(/['"()\[\]]/g, '').trim()
+              const plpData = await geckoExtract({
+                target:  'mercadolivre.com.br',
+                type:    'plp',
+                keyword,
+              })
+
+              const items: any[] = plpData?.items ?? []
+              const best = items.find((it: any) =>
+                it?.url?.startsWith('http') && it?.sku && it?.price > 0
+              )
+
+              if (best) {
+                newPrice = best.price as number
+                newUrl   = (best.url as string).split('?')[0].split('#')[0]
+                newMlId  = (best.sku  as string).toUpperCase()
+                prcs.plp_fallbacks++
+              }
+            }
+
+            // ── Sem preço mesmo após os dois métodos → skip ──
             if (!newPrice || newPrice <= 0) { prcs.skipped++; continue }
 
-            // URL canônica limpa retornada pela GeckoAPI (mais confiável)
-            const cleanUrl = (data.canonicalUrl || productUrl)
-              .split('?')[0].split('#')[0]
-            const newAffUrl = affLink(cleanUrl)
+            const newAffUrl = affLink(newUrl)
 
             if (!dryRun) {
               await DB.prepare(`
                 UPDATE products SET
-                  best_price            = ?,
-                  affiliate_url         = ?,
-                  affiliate_updated_at  = CURRENT_TIMESTAMP,
-                  updated_at            = CURRENT_TIMESTAMP
+                  best_price           = ?,
+                  ml_item_id           = ?,
+                  affiliate_url        = ?,
+                  affiliate_updated_at = CURRENT_TIMESTAMP,
+                  updated_at           = CURRENT_TIMESTAMP
                 WHERE id = ?
-              `).bind(newPrice, newAffUrl, prod.id).run()
+              `).bind(newPrice, newMlId, newAffUrl, prod.id).run()
 
               if (prod.offer_id) {
                 await DB.prepare(`
                   UPDATE offers SET
                     price         = ?,
+                    external_id   = ?,
+                    product_url   = ?,
                     affiliate_url = ?,
                     last_updated  = CURRENT_TIMESTAMP
                   WHERE id = ?
-                `).bind(newPrice, newAffUrl, prod.offer_id).run()
+                `).bind(newPrice, newMlId, newAffUrl, newAffUrl, prod.offer_id).run()
               }
 
               // Histórico de preços
@@ -3167,15 +3214,20 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
   // ─────────────────────────────────────────────────────────
   // Resultado final
   // ─────────────────────────────────────────────────────────
+  // has_more: informa ao front se vale chamar de novo
+  const searchHasMore = (report.search?.found ?? 0) >= searchLimit
+  const pricesHasMore = (report.prices?.updated ?? 0) + (report.prices?.unchanged ?? 0) >= pricesLimit
+
   const totalActions =
     ((report.import?.imported ?? 0) + (report.import?.updated ?? 0)) +
     (report.search?.found ?? 0) +
     (report.prices?.updated ?? 0)
 
   return c.json({
-    ok: true,
-    dry_run: dryRun,
+    ok:           true,
+    dry_run:      dryRun,
     total_actions: totalActions,
+    has_more:     searchHasMore || pricesHasMore,
     report,
     tip: totalActions > 0
       ? `${totalActions} ação(ões) executada(s) com sucesso!`
