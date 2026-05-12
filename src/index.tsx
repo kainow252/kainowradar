@@ -697,11 +697,11 @@ app.get('/', async (c) => {
     : ''
 
   const bannerHTML = `
-    <section class="max-w-7xl mx-auto px-4 py-6" id="editorial-banners">
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <section class="w-full" id="editorial-banners">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-0 md:gap-4 py-0 md:py-6 md:px-4 lg:px-6">
 
         <!-- Banner principal — gerado pela IA editorial -->
-        <div class="md:col-span-2 promo-banner group cursor-pointer relative overflow-hidden rounded-2xl p-6 md:p-8"
+        <div class="md:col-span-2 promo-banner group cursor-pointer relative overflow-hidden rounded-none md:rounded-2xl p-6 md:p-8"
              style="background: linear-gradient(135deg, ${bMain.color_from} 0%, ${bMain.color_to} 100%); min-height:200px;"
              onclick="${mainAction}">
           <div class="promo-banner-orb"></div>
@@ -725,7 +725,7 @@ app.get('/', async (c) => {
 
         <!-- Banners secundários — também gerados pela IA -->
         <div class="flex flex-col gap-4">
-          <div class="promo-banner group cursor-pointer flex-1 relative overflow-hidden rounded-2xl p-5"
+          <div class="promo-banner group cursor-pointer flex-1 relative overflow-hidden rounded-none md:rounded-2xl p-5"
                style="background: linear-gradient(135deg, ${bSec1.color_from} 0%, ${bSec1.color_to} 100%); min-height:90px;"
                onclick="${sec1Action}">
             <div class="relative z-10">
@@ -735,7 +735,7 @@ app.get('/', async (c) => {
             </div>
             <div class="absolute right-3 bottom-2 text-5xl opacity-20 select-none pointer-events-none">${bSec1.emoji || '💡'}</div>
           </div>
-          <div class="promo-banner group cursor-pointer flex-1 relative overflow-hidden rounded-2xl p-5"
+          <div class="promo-banner group cursor-pointer flex-1 relative overflow-hidden rounded-none md:rounded-2xl p-5"
                style="background: linear-gradient(135deg, ${bSec2.color_from} 0%, ${bSec2.color_to} 100%); min-height:90px;"
                onclick="${sec2Action}">
             <div class="relative z-10">
@@ -753,7 +753,8 @@ app.get('/', async (c) => {
 
   // ── SEÇÃO DE BUSCA (aparece ao buscar) ────────────────────
   const searchResultsHTML = `
-    <section id="search-results-section" class="hidden max-w-7xl mx-auto px-4 py-8">
+    <section id="search-results-section" class="hidden w-full py-8">
+      <div class="max-w-7xl mx-auto px-4">
       <div class="flex items-center justify-between mb-5">
         <h2 class="section-title mb-0" id="search-results-title">Resultados da busca</h2>
         <button onclick="closeSearch()" class="text-sm text-gray-400 hover:text-gray-700 flex items-center gap-1">
@@ -770,6 +771,7 @@ app.get('/', async (c) => {
         <div class="text-6xl mb-4">🔍</div>
         <p class="text-gray-700 font-bold text-lg">Nenhum produto encontrado</p>
         <p class="text-sm text-gray-400 mt-1">Tente outros termos ou navegue pelas categorias abaixo</p>
+      </div>
       </div>
     </section>
   `
