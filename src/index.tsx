@@ -291,7 +291,8 @@ app.get('/', async (c) => {
       SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
       FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
       WHERE p.is_active = 1 AND p.best_price IS NOT NULL
-      ORDER BY p.offer_count DESC, p.created_at DESC LIMIT 8
+        AND p.image_url NOT LIKE '%unsplash%'
+      ORDER BY p.created_at DESC, p.offer_count DESC LIMIT 8
     `).all(),
     DB.prepare(`
       SELECT p.*, s.name as best_store_name, o.discount_percent as top_discount
