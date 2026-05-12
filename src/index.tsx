@@ -27,14 +27,12 @@ app.use('/api/*', cors({
 // ── Static Files ──────────────────────────────────────────
 app.use('/static/*', serveStatic({ root: './' }))
 
-// ── Favicon ───────────────────────────────────────────────
-app.get('/favicon.ico', (c) => {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-    <rect width="32" height="32" rx="8" fill="#2563eb"/>
-    <text x="16" y="23" font-size="20" text-anchor="middle" fill="white" font-family="Arial" font-weight="bold">S</text>
-  </svg>`
-  return new Response(svg, { headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' } })
-})
+// ── Favicon & Manifest ────────────────────────────────────
+// Servidos pelo Cloudflare Pages como arquivos estáticos (via _routes.json exclude)
+// Rotas aqui como fallback para o wrangler pages dev local
+app.get('/favicon.ico', serveStatic({ root: './' }))
+app.get('/favicon.svg', serveStatic({ root: './' }))
+app.get('/manifest.json', serveStatic({ root: './' }))
 
 // ── API Routes ────────────────────────────────────────────
 app.route('/api', api)
