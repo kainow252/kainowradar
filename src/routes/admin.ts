@@ -4791,13 +4791,13 @@ admin.post('/api/price-sync/run', async (c) => {
     return c.json({ ok: false, error: 'Sem token ML. Configure ML_APP_ID e ML_SECRET no Cloudflare.' }, 400)
   }
 
-  // Busca produtos com ml_item_id
+  // Busca produtos com ml_item_id — inclui TODOS (ativos e inativos)
+  // para que produtos desativados indevidamente possam ser reativados
   const { results: products } = await DB.prepare(`
-    SELECT id, name, ml_item_id, best_price, image_url, affiliate_url
+    SELECT id, name, ml_item_id, best_price, image_url, affiliate_url, is_active
     FROM products
-    WHERE is_active = 1
-      AND ml_item_id IS NOT NULL AND ml_item_id != ''
-    ORDER BY updated_at ASC
+    WHERE ml_item_id IS NOT NULL AND ml_item_id != ''
+    ORDER BY is_active DESC, updated_at ASC
     LIMIT ?
   `).bind(LIMIT).all<any>()
 
@@ -4833,16 +4833,28 @@ admin.post('/api/price-sync/run', async (c) => {
       const data: any[] = await res.json()
 
       for (const entry of data) {
-        const item    = entry.body
-        const mlId    = item?.id
-        const product = batch.find((p: any) => p.ml_item_id === mlId)
+        // Verifica se a entrada do multi-get foi bem-sucedida (código HTTP 200)
+        const entryCode = entry.code ?? entry.status_code ?? 200
+        const item      = entry.body
+        const mlId      = item?.id
+        const product   = batch.find((p: any) => p.ml_item_id === mlId)
         if (!product) continue
 
-        // Item pausado ou encerrado → desativa produto
-        if (item.status && item.status !== 'active' && item.status !== 'paused') {
+        // Só desativa se a API confirmar EXPLICITAMENTE que o item foi encerrado
+        // (status 'closed') E com HTTP 200. Qualquer outro caso (erro HTTP, status
+        // desconhecido, ausência de status) NÃO desativa para evitar perdas em massa.
+        const CLOSED_STATUSES = ['closed']
+        if (entryCode === 200 && item?.status && CLOSED_STATUSES.includes(item.status)) {
           await DB.prepare(`UPDATE products SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
             .bind(product.id).run()
           inactived++
+          continue
+        }
+
+        // Se a entrada retornou erro HTTP ou item sem preço — conta como erro, não desativa
+        if (entryCode !== 200 || !item?.id) {
+          errors++
+          errorList.push(`${product.ml_item_id}: HTTP ${entryCode} na entrada`)
           continue
         }
 
@@ -4860,7 +4872,7 @@ admin.post('/api/price-sync/run', async (c) => {
           continue
         }
 
-        // Atualiza produto
+        // Atualiza produto — também REATIVA se estava desativado indevidamente
         await DB.prepare(`
           UPDATE products SET
             best_price          = ?,
@@ -4868,7 +4880,8 @@ admin.post('/api/price-sync/run', async (c) => {
             image_url           = COALESCE(?, image_url),
             affiliate_url       = COALESCE(?, affiliate_url),
             affiliate_updated_at = CURRENT_TIMESTAMP,
-            updated_at          = CURRENT_TIMESTAMP
+            updated_at          = CURRENT_TIMESTAMP,
+            is_active           = 1
           WHERE id = ?
         `).bind(price, image, affUrl, product.id).run()
 
@@ -4956,11 +4969,12 @@ admin.get('/api/price-sync/status', async (c) => {
     DB.prepare(`
       SELECT
         COUNT(*) as total,
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active,
         SUM(CASE WHEN ml_item_id IS NOT NULL AND ml_item_id != '' THEN 1 ELSE 0 END) as with_ml_id,
         SUM(CASE WHEN best_price IS NOT NULL AND best_price > 0 THEN 1 ELSE 0 END) as with_price,
         SUM(CASE WHEN best_price IS NULL OR best_price = 0 THEN 1 ELSE 0 END) as no_price,
         SUM(CASE WHEN offer_count > 0 THEN 1 ELSE 0 END) as with_offers
-      FROM products WHERE is_active = 1
+      FROM products
     `).first<any>(),
   ])
 
@@ -4980,10 +4994,11 @@ admin.get('/api/price-sync/status', async (c) => {
     last_sync_status: apiCfg?.last_sync_status ?? null,
     last_sync_count:  apiCfg?.last_sync_count  ?? null,
     products: {
-      total:      counts?.total      ?? 0,
-      with_ml_id: counts?.with_ml_id ?? 0,
-      with_price: counts?.with_price ?? 0,
-      no_price:   counts?.no_price   ?? 0,
+      total:       counts?.total       ?? 0,
+      active:      counts?.active      ?? 0,
+      with_ml_id:  counts?.with_ml_id  ?? 0,
+      with_price:  counts?.with_price  ?? 0,
+      no_price:    counts?.no_price    ?? 0,
       with_offers: counts?.with_offers ?? 0,
     },
     next_auto_sync: minutesAgo !== null && minutesAgo < 360
