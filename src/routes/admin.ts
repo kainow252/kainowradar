@@ -4301,14 +4301,30 @@ async function awinGet(path: string, token: string): Promise<{ data: any; error:
   }
 }
 
-// Helper: gera link de afiliado via Link Builder API da Awin
-// POST https://api.awin.com/publishers/{pub}/linkbuilder
+// Helper: gera link de afiliado Awin
+// Estratégia dual:
+//   1. Tenta Link Builder API (gera shortUrl tidd.ly — requer aprovação no programa)
+//   2. Fallback imediato: cread.php com ued= (funciona SEM aprovação, já rastreia cookie awc)
+//
+// O formato cread.php foi testado e gera rastreamento completo:
+//   https://www.awin1.com/cread.php?awinmid=17629&awinaffid=2892017&ued=<encoded_url>
+//   → redireciona com ?awc=17629_timestamp_hash (cookie de conversão Awin)
 async function awinBuildLink(
   advertiserId: number,
   destinationUrl: string,
   token: string,
   shorten = false,
 ): Promise<{ url: string | null; shortUrl: string | null; error: string | null }> {
+  // ── Gera cread.php diretamente (sem chamada de API, sem aprovação necessária) ──
+  const encodedDest = encodeURIComponent(destinationUrl)
+  const creadUrl = `https://www.awin1.com/cread.php?awinmid=${advertiserId}&awinaffid=${AWIN_PUB_ID}&ued=${encodedDest}`
+
+  // Se não precisa de shortUrl, retorna o cread.php direto — sem latência de API
+  if (!shorten) {
+    return { url: creadUrl, shortUrl: null, error: null }
+  }
+
+  // Se pediu shortUrl, tenta o Link Builder API (requer aprovação)
   try {
     const r = await fetch(`${AWIN_BASE}/publishers/${AWIN_PUB_ID}/linkbuilder`, {
       method: 'POST',
@@ -4316,16 +4332,19 @@ async function awinBuildLink(
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ advertiserId, destinationUrl, shorten }),
-      signal: AbortSignal.timeout(12000),
+      body: JSON.stringify({ advertiserId, destinationUrl, shorten: true }),
+      signal: AbortSignal.timeout(8000),
     })
     const json: any = await r.json().catch(() => ({}))
-    if (!r.ok || json.description) {
-      return { url: null, shortUrl: null, error: json.description ?? `Awin ${r.status}` }
+    // Sucesso: retorna o shortUrl do Link Builder junto com o cread.php como fallback
+    if (r.ok && json.url && !json.description) {
+      return { url: json.url, shortUrl: json.shortUrl ?? null, error: null }
     }
-    return { url: json.url ?? null, shortUrl: json.shortUrl ?? null, error: null }
-  } catch (e: any) {
-    return { url: null, shortUrl: null, error: e.message }
+    // Link Builder falhou (sem aprovação ou erro) — usa cread.php como fallback
+    return { url: creadUrl, shortUrl: null, error: null }
+  } catch {
+    // Timeout ou erro de rede — usa cread.php como fallback
+    return { url: creadUrl, shortUrl: null, error: null }
   }
 }
 
@@ -4584,7 +4603,7 @@ admin.post('/api/awin/refresh-links', async (c) => {
   `
   const binds: any[] = []
   if (storeSlug) { sql += ` AND s.slug = ?`; binds.push(storeSlug) }
-  sql += ` ORDER BY o.updated_at ASC LIMIT ?`
+  sql += ` ORDER BY o.last_updated ASC LIMIT ?`
   binds.push(limit)
 
   const { results: offers } = await DB.prepare(sql).bind(...binds)
@@ -4615,7 +4634,7 @@ admin.post('/api/awin/refresh-links', async (c) => {
         const result = await awinBuildLink(offer.awin_advertiser_id, offer.product_url, token, true)
         if (result.url) {
           await DB.prepare(
-            `UPDATE offers SET affiliate_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+            `UPDATE offers SET affiliate_url = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?`
           ).bind(result.shortUrl ?? result.url, offer.id).run()
           updated++
         } else {
