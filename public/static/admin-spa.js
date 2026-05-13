@@ -617,20 +617,48 @@ function openStoreImport(storeId, storeName) {
 
         <!-- PAINEL: Colar Links -->
         <div id="si-panel-paste">
-          <p class="text-xs text-slate-500 mb-2">Cole um ou mais links (um por linha). O sistema busca <strong>nome, pre&ccedil;o e imagem automaticamente</strong>.</p>
-          <textarea id="si-textarea" rows="6"
-            class="w-full rounded-xl border border-slate-200 bg-slate-50 text-sm font-mono p-3 resize-none focus:outline-none focus:border-indigo-400 focus:bg-white transition-all"
-            placeholder="https://meli.la/1guaPXV&#10;https://meli.la/1vTGDBn&#10;https://meli.la/1piMeCE"
-            oninput="siCountLinks()"></textarea>
-          <div class="flex items-center justify-between mt-1 mb-3">
-            <span id="si-count" class="text-xs text-slate-400">0 links detectados</span>
-            <button onclick="document.getElementById('si-textarea').value='';siCountLinks();document.getElementById('si-live-area').innerHTML=''" class="text-xs text-slate-400 hover:text-red-500">&#10005; Limpar</button>
+
+          <!-- Modo simples vs duplo -->
+          <div class="flex gap-1 mb-3">
+            <button id="si-mode-single" onclick="siSetMode('single')"
+              class="flex-1 text-xs font-semibold py-1.5 rounded-lg bg-indigo-600 text-white transition-all">&#128279; Um link por produto</button>
+            <button id="si-mode-dual" onclick="siSetMode('dual')"
+              class="flex-1 text-xs font-semibold py-1.5 rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all">&#128279;&#128279; Produto + Afiliado ML</button>
           </div>
+
+          <!-- MODO SIMPLES: textarea com múltiplos links -->
+          <div id="si-mode-single-area">
+            <p class="text-xs text-slate-500 mb-2">Cole um ou mais links (um por linha). O sistema busca <strong>nome, pre&ccedil;o e imagem automaticamente</strong>.</p>
+            <textarea id="si-textarea" rows="6"
+              class="w-full rounded-xl border border-slate-200 bg-slate-50 text-sm font-mono p-3 resize-none focus:outline-none focus:border-indigo-400 focus:bg-white transition-all"
+              placeholder="https://meli.la/1guaPXV&#10;https://meli.la/1vTGDBn&#10;https://meli.la/1piMeCE"
+              oninput="siCountLinks()"></textarea>
+            <div class="flex items-center justify-between mt-1">
+              <span id="si-count" class="text-xs text-slate-400">0 links detectados</span>
+              <button onclick="document.getElementById('si-textarea').value='';siCountLinks();document.getElementById('si-live-area').innerHTML=''" class="text-xs text-slate-400 hover:text-red-500">&#10005; Limpar</button>
+            </div>
+          </div>
+
+          <!-- MODO DUPLO: URL produto + URL afiliada lado a lado -->
+          <div id="si-mode-dual-area" class="hidden">
+            <div class="bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-xs text-blue-800 mb-3">
+              &#128161; Cole a <strong>URL do produto</strong> (com <code>#...&amp;wid=MLB...</code>) e a <strong>URL afiliada</strong> (<code>/social/...</code>) — o sistema cruza os dois para pegar imagem e pre&ccedil;o.
+            </div>
+            <div id="si-dual-pairs">
+              <!-- pares gerados por siAddDualPair() -->
+            </div>
+            <button onclick="siAddDualPair()" class="w-full text-xs text-indigo-600 hover:text-indigo-800 border border-dashed border-indigo-300 rounded-xl py-2 mt-1 hover:bg-indigo-50 transition-all">
+              + Adicionar outro par
+            </button>
+          </div>
+
           <!-- Botão principal -->
-          <button id="si-main-btn" onclick="siImportAuto(${storeId})"
-            class="w-full py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 active:scale-95 transition-all flex items-center justify-center gap-2">
-            <span>&#128640;</span> Importar Automaticamente
-          </button>
+          <div class="mt-3 mb-0">
+            <button id="si-main-btn" onclick="siImportAuto(${storeId})"
+              class="w-full py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 active:scale-95 transition-all flex items-center justify-center gap-2">
+              <span>&#128640;</span> Importar Automaticamente
+            </button>
+          </div>
           <!-- Área de progresso e resultado ao vivo -->
           <div id="si-live-area" class="mt-4"></div>
         </div>
@@ -772,7 +800,71 @@ function siBtnReset(btn, storeId, label) {
   btn.onclick = function() { siImportAuto(storeId) }
 }
 
+// ── Modo simples / duplo ──────────────────────────────────────────
+let _siMode = 'single'
+function siSetMode(mode) {
+  _siMode = mode
+  const single = document.getElementById('si-mode-single-area')
+  const dual   = document.getElementById('si-mode-dual-area')
+  const btnS   = document.getElementById('si-mode-single')
+  const btnD   = document.getElementById('si-mode-dual')
+  if (single) single.classList.toggle('hidden', mode !== 'single')
+  if (dual)   dual.classList.toggle('hidden',   mode !== 'dual')
+  if (btnS) { btnS.className = 'flex-1 text-xs font-semibold py-1.5 rounded-lg transition-all ' + (mode==='single' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200') }
+  if (btnD) { btnD.className = 'flex-1 text-xs font-semibold py-1.5 rounded-lg transition-all ' + (mode==='dual'   ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200') }
+  // garante pelo menos 1 par no modo dual
+  if (mode === 'dual') {
+    const pairs = document.getElementById('si-dual-pairs')
+    if (pairs && pairs.children.length === 0) siAddDualPair()
+  }
+}
+
+let _siPairIdx = 0
+function siAddDualPair() {
+  const i = _siPairIdx++
+  const wrap = document.getElementById('si-dual-pairs')
+  if (!wrap) return
+  const div = document.createElement('div')
+  div.id = 'si-pair-' + i
+  div.className = 'bg-white border border-slate-200 rounded-xl p-3 mb-2 relative'
+  div.innerHTML = `
+    <button onclick="document.getElementById('si-pair-${i}').remove()" class="absolute top-2 right-2 text-slate-300 hover:text-red-500 text-lg leading-none">&times;</button>
+    <div class="mb-2">
+      <label class="block text-xs font-semibold text-slate-600 mb-1">&#128279; URL do Produto (sem afiliado)</label>
+      <input type="url" id="si-p1-${i}" class="w-full rounded-lg border border-slate-200 bg-slate-50 text-xs font-mono p-2 focus:outline-none focus:border-indigo-400" placeholder="https://www.mercadolivre.com.br/.../up/MLBU...#...&wid=MLB5385902202&...">
+    </div>
+    <div>
+      <label class="block text-xs font-semibold text-slate-600 mb-1">&#128279; URL Afiliada (link /social/ com imagem e pre&ccedil;o)</label>
+      <input type="url" id="si-p2-${i}" class="w-full rounded-lg border border-slate-200 bg-slate-50 text-xs font-mono p-2 focus:outline-none focus:border-indigo-400" placeholder="https://www.mercadolivre.com.br/social/cfeg...?matt_word=...&forceInApp=true">
+    </div>
+  `
+  wrap.appendChild(div)
+}
+
+function siGetDualPairs() {
+  // Retorna array de { url1, url2 } a partir dos campos do modo dual
+  const pairs = []
+  const wrap = document.getElementById('si-dual-pairs')
+  if (!wrap) return pairs
+  wrap.querySelectorAll('[id^="si-pair-"]').forEach(div => {
+    const idx  = div.id.replace('si-pair-', '')
+    const url1 = (document.getElementById('si-p1-' + idx)?.value || '').trim()
+    const url2 = (document.getElementById('si-p2-' + idx)?.value || '').trim()
+    if (url1 || url2) pairs.push({ url1: url1 || url2, url2: url1 ? url2 : '' })
+  })
+  return pairs
+}
+// ──────────────────────────────────────────────────────────────────
+
 async function siImportAuto(storeId) {
+  // Modo duplo: pega pares { url1, url2 } dos campos
+  if (_siMode === 'dual') {
+    const pairs = siGetDualPairs().filter(p => p.url1)
+    if (!pairs.length) { toast('Preencha pelo menos um par de links', 'warning'); return }
+    return siImportDual(storeId, pairs)
+  }
+
+  // Modo simples: comportamento original
   const val  = document.getElementById('si-textarea')?.value || ''
   const urls = (val.match(/https?:\/\/[^\s,|]+/g) || [])
     .map(u => u.replace(/[.,;)>\]]+$/, '').trim())
@@ -894,48 +986,164 @@ async function siImportAuto(storeId) {
 
 // ── Fetch de metadados — estratégia em camadas ──────────────────
 // Para links Mercado Livre:
-//   1) Backend resolve-url → extrai mlbId (confiável) + og:title/og:image
-//   2) PRIORITÁRIO: API ML direto do browser (CORS aberto) → preço real + imagem HD
-//      O browser da produção (shopping-compare.pages.dev) tem permissão CORS na API ML.
-//      O backend (Cloudflare Worker) recebe 403 da API ML mesmo com Bearer token.
-//   3) Fallback: usa og:title/og:image do backend com proxy de imagem
+//   1) Backend resolve-url → mlbId + og:title + og:image (mas sem preço — IP bloqueado)
+//   2) Browser busca HTML da página ML (sem bloqueio de IP) e envia para extract-ml-price
+//   3) API ML direto do browser como fallback (só funciona para Item IDs)
 // Para outros links: allorigins.win como fallback
-async function siFetchMetaClientSide(originalUrl) {
+// ── siImportDual: importa pares url1+url2 ─────────────────────────
+async function siImportDual(storeId, pairs) {
+  const live = document.getElementById('si-live-area')
+  const btn  = document.getElementById('si-main-btn')
+  const setBtnLoading = (msg) => {
+    if (!btn) return
+    btn.disabled = true
+    btn.className = 'w-full py-3 rounded-xl bg-indigo-400 text-white text-sm font-bold cursor-not-allowed'
+    btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> ' + msg
+  }
+  try {
+    setBtnLoading('Buscando dados...')
+    live.innerHTML = '<div class="text-xs text-slate-500 text-center py-4">&#128269; Buscando dados dos produtos...</div>'
+
+    const metaMap = {}
+    const results = await Promise.all(pairs.map(p => siFetchMetaClientSide(p.url1, p.url2)))
+    const lines = []
+    results.forEach((m, i) => {
+      const u = pairs[i].url1
+      if (!m || !m.name) return
+      let line = u + ' | ' + m.name
+      if (m.price) line += ' | ' + m.price
+      if (m.image) line += ' | ' + m.image
+      lines.push(line)
+      metaMap[u] = m
+    })
+
+    live.innerHTML = lines.length
+      ? '<div class="text-xs text-green-600 font-semibold text-center py-2">&#10003; ' + lines.length + ' produto(s) prontos — salvando...</div>'
+      : '<div class="text-xs text-red-500 font-semibold text-center py-2">&#9888; Nenhum produto com nome encontrado. Verifique os links.</div>'
+
+    if (!lines.length) { siBtnReset(btn, storeId); return }
+
+    setBtnLoading('Salvando no banco...')
+    const data = await api('POST', '/admin/api/stores/' + storeId + '/import-links', { links: lines.join('\n') }, 30000)
+    if (data?.ok) {
+      toast('\u2713 ' + data.imported + ' produto(s) importados!', 'success')
+      live.innerHTML = '<div class="text-xs text-green-600 font-semibold text-center py-2">&#10003; ' + data.imported + ' produto(s) salvos com sucesso!</div>'
+      if (btn) { btn.disabled = false; btn.className = 'w-full py-3 rounded-xl bg-green-600 text-white text-sm font-bold'; btn.innerHTML = '\u2713 ' + data.imported + ' produto(s) salvos! Importar mais'; btn.onclick = () => siImportAuto(storeId) }
+    } else {
+      toast('Erro ao salvar: ' + (data?.error || '?'), 'error')
+      siBtnReset(btn, storeId)
+    }
+  } catch(e) {
+    toast('Erro: ' + e?.message, 'error')
+    siBtnReset(btn, storeId)
+  }
+}
+// ──────────────────────────────────────────────────────────────────
+
+async function siFetchMetaClientSide(originalUrl, affiliateUrl) {
   const isML = /mercadolivre\.com\.br|mercadolibre\.com|meli\.la/i.test(originalUrl)
 
-  // ── CAMADA 1: backend scraping → pega mlbId + og:title + og:image ──
+  // ── CAMADA 1: backend resolve-url → mlbId + nome + imagem ──────
+  // Se temos affiliateUrl (link /social/), passa como url2 pro backend
   let r = null
   try {
-    r = await api('GET', '/admin/api/resolve-url?url=' + encodeURIComponent(originalUrl), null, 14000)
+    let endpoint = '/admin/api/resolve-url?url=' + encodeURIComponent(originalUrl)
+    if (affiliateUrl) endpoint += '&url2=' + encodeURIComponent(affiliateUrl)
+    r = await api('GET', endpoint, null, 18000)
   } catch(e) { r = null }
 
-  if (r && r.ok) {
-    let name  = (r.name  || '').trim()
-    let image = r.image  || null
-    let price = r.price  || null   // backend retorna null para links /social/ (403 ML backend)
+  let name  = (r?.name  || '').trim()
+  let image = r?.image  || null
+  let price = r?.price  || null
+  const mlbId = r?.mlbId || null
 
-    // ── CAMADA 2: API ML via browser — FONTE PRIMÁRIA para preço + imagem ──
-    // Ativa para qualquer link ML que tenha mlbId (independente de já ter preço)
-    // O browser tem CORS aberto; o Worker backend recebe 403 da API ML
-    if (r.mlbId) {
-      try {
-        const ml = await siFetchMlApi(r.mlbId)
-        if (ml) {
-          // API ML tem prioridade sobre og:title/og:image/scraping
-          if (ml.name)  name  = ml.name     // título limpo via API
-          if (ml.image) image = ml.image     // imagem HD, sem hotlink block
-          if (ml.price) price = ml.price     // ← PREÇO REAL (fonte mais confiável)
+  // ── CAMADA 2: browser busca HTML da página ML ──────────────────
+  // IPs do datacenter Cloudflare são banidos pelo ML (302→account-verification).
+  // O browser do usuário NÃO é banido (IP residencial/comercial + cookies ML).
+  // O browser faz fetch do HTML completo e extrai preço/nome/imagem LOCALMENTE
+  // (não envia o HTML para o servidor — é 460KB por produto).
+  if (isML && (!price || !name || !image)) {
+    try {
+      let mlUrl = originalUrl
+      if (mlbId) {
+        const digits = mlbId.replace(/^MLB/i, '')
+        if (digits.length <= 10) {
+          mlUrl = `https://www.mercadolivre.com.br/p/${mlbId}`
+        } else {
+          mlUrl = `https://produto.mercadolivre.com.br/${mlbId.replace(/^MLB/i,'MLB-')}`
         }
-      } catch(e) {
-        console.warn('[siFetchMetaClientSide] siFetchMlApi falhou para', r.mlbId, e?.message)
       }
+      const htmlResp = await fetch(mlUrl, {
+        headers: { 'Accept': 'text/html', 'Accept-Language': 'pt-BR,pt;q=0.9' },
+        signal: AbortSignal.timeout(14000),
+      })
+      if (htmlResp.ok) {
+        const html = await htmlResp.text()
+        if (html && html.length > 5000) {
+          // Extrai preço localmente com regex — o price fica em ~53% do HTML (pos 244KB)
+          const pricePatterns = [
+            /"price"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/,
+            /"amount"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/,
+          ]
+          for (const pat of pricePatterns) {
+            const m = html.match(pat)
+            if (m) {
+              const val = parseFloat(m[1])
+              if (!isNaN(val) && val > 0 && val < 9_000_000) { price = val; break }
+            }
+          }
+          // Extrai nome do og:title se ainda não temos
+          if (!name) {
+            const tm = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+                    || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+            if (tm) {
+              name = tm[1]
+                .replace(/\s*-\s*R\$\s*[\d.,]+\s*$/i, '')
+                .replace(/\s*[|–\-]\s*(Mercado Livr[eo].*|ML.*)$/i, '')
+                .replace(/&amp;/g,'&').trim()
+            }
+          }
+          // Extrai imagem do og:image se ainda não temos
+          if (!image) {
+            const im = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+                    || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
+            if (im) {
+              let img = im[1].replace(/\\u002F/g,'/').replace(/\\/g,'')
+              if (img.startsWith('//')) img = 'https:' + img
+              img = img.replace(/_[A-Z](-\d+)?(\.(webp|jpg|png))(\?.*)?$/, '_O$2')
+              if (img.includes('mlstatic')) image = img
+            }
+          }
+          console.log('[browser-fetch-ML] OK →', mlbId || mlUrl, '| price:', price, '| html:', html.length + 'B')
+        }
+      }
+    } catch(e) {
+      console.warn('[browser-fetch-ML] falhou:', e?.message)
     }
-
-    // Retorna se temos ao menos nome
-    if (name) return { name, price, image }
   }
 
-  // ── CAMADA 3: fallback allorigins.win (links não-ML ou resolve-url falhou) ──
+  // ── CAMADA 3: API ML via browser (fallback para Item IDs) ───────
+  // Só funciona para Item IDs (MLB + ≥11 dígitos); Product IDs retornam 403
+  if (mlbId && !price) {
+    const digits = mlbId.replace(/^MLB/i, '')
+    if (digits.length >= 11) {
+      try {
+        const ml = await siFetchMlApi(mlbId)
+        if (ml) {
+          if (ml.name)  name  = name  || ml.name
+          if (ml.image) image = image || ml.image
+          if (ml.price) price = ml.price
+        }
+      } catch(e) {
+        console.warn('[siFetchMlApi] falhou para', mlbId, e?.message)
+      }
+    }
+  }
+
+  // Retorna se temos ao menos nome
+  if (name) return { name, price, image }
+
+  // ── CAMADA 4: fallback allorigins.win (links não-ML) ────────────
   if (!isML) {
     try { return await siFetchOgMeta(originalUrl) } catch(e) { /* ignora */ }
   }
