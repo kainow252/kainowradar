@@ -5578,7 +5578,7 @@ admin.get('/api/ml-linkbuilder/products', async (c) => {
   if (filter === 'done')    where += " AND p.affiliate_url LIKE '%matt_word%'"
 
   const { results } = await DB.prepare(`
-    SELECT p.id, p.name, p.ml_item_id, p.affiliate_url, p.best_price, p.category, p.thumbnail
+    SELECT p.id, p.name, p.ml_item_id, p.affiliate_url, p.best_price, p.category, p.image_url
     FROM products p ${where}
     ORDER BY p.id ASC LIMIT ? OFFSET ?
   `).bind(perPage, offset).all<any>()
