@@ -5397,38 +5397,72 @@ const LB_PUBLISHER_ID = 'cfegdhabc31955'
 const LB_MATT_TOOL    = '38524122'
 const LB_ML_API       = 'https://api.mercadolibre.com'
 
-// ── Helper: obtém token OAuth ML do KV (com auto-refresh) ──
+// ── Helper: obtém token ML com login automático ─────────────
+// Ordem de prioridade:
+//   1. access_token cacheado no KV (válido por 6h)
+//   2. refresh_token no KV → renova access_token
+//   3. client_credentials (ML_APP_ID + ML_SECRET) → token de app automático
 async function getLBToken(env: any): Promise<string | null> {
-  const CACHE = env.CACHE as KVNamespace | undefined
-  if (!CACHE) return null
+  const CACHE  = env.CACHE as KVNamespace | undefined
+  const appId  = (env.ML_APP_ID as string) || '3098423019766450'
+  const secret = (env.ML_SECRET  as string) || ''
 
   // 1. access_token cacheado (válido 6h)
-  const access = await CACHE.get('ml_access_token').catch(() => null)
-  if (access) return access
+  if (CACHE) {
+    const access = await CACHE.get('ml_access_token').catch(() => null)
+    if (access) return access
+  }
 
-  // 2. refresh_token → renova access_token
-  const refresh = await CACHE.get('ml_refresh_token').catch(() => null)
-  const appId   = (env.ML_APP_ID as string) || '3098423019766450'
-  const secret  = (env.ML_SECRET  as string) || ''
-  if (refresh && secret) {
+  // 2. refresh_token → renova silenciosamente
+  if (CACHE && secret) {
+    const refresh = await CACHE.get('ml_refresh_token').catch(() => null)
+    if (refresh) {
+      try {
+        const res = await fetch(`${LB_ML_API}/oauth/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'refresh_token', client_id: appId,
+            client_secret: secret, refresh_token: refresh,
+          }),
+        })
+        if (res.ok) {
+          const td: any = await res.json()
+          if (td.access_token) {
+            await CACHE.put('ml_access_token',  td.access_token, { expirationTtl: td.expires_in || 21600 }).catch(() => {})
+            if (td.refresh_token) await CACHE.put('ml_refresh_token', td.refresh_token, { expirationTtl: 86400 * 30 }).catch(() => {})
+            return td.access_token
+          }
+        }
+      } catch { /* continua para client_credentials */ }
+    }
+  }
+
+  // 3. client_credentials — login automático com ML_APP_ID + ML_SECRET
+  //    Funciona sem interação do usuário; token válido por 6h
+  if (secret) {
     try {
       const res = await fetch(`${LB_ML_API}/oauth/token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
-          grant_type: 'refresh_token', client_id: appId,
-          client_secret: secret, refresh_token: refresh,
+          grant_type:    'client_credentials',
+          client_id:     appId,
+          client_secret: secret,
         }),
       })
       if (res.ok) {
         const td: any = await res.json()
         if (td.access_token) {
-          await CACHE.put('ml_access_token',  td.access_token, { expirationTtl: td.expires_in || 21600 }).catch(() => {})
-          if (td.refresh_token) await CACHE.put('ml_refresh_token', td.refresh_token, { expirationTtl: 86400 * 30 }).catch(() => {})
+          if (CACHE) {
+            await CACHE.put('ml_access_token', td.access_token, { expirationTtl: td.expires_in || 21600 }).catch(() => {})
+            // client_credentials não retorna refresh_token — salva flag para saber a origem
+            await CACHE.put('ml_token_source', 'client_credentials', { expirationTtl: td.expires_in || 21600 }).catch(() => {})
+          }
           return td.access_token
         }
       }
-    } catch { /* continua */ }
+    } catch { /* sem token */ }
   }
 
   return null
@@ -5447,10 +5481,47 @@ admin.get('/api/ml-linkbuilder/status', async (c) => {
   const { DB } = c.env
   const CACHE = c.env.CACHE as KVNamespace | undefined
 
-  // Status OAuth
+  // Status OAuth (tokens salvos manualmente via PKCE)
   const accessToken  = await CACHE?.get('ml_access_token').catch(() => null)
   const refreshToken = await CACHE?.get('ml_refresh_token').catch(() => null)
   const userId       = await CACHE?.get('ml_user_id').catch(() => null)
+  const tokenSource  = await CACHE?.get('ml_token_source').catch(() => null)
+
+  // Tenta obter token automático (client_credentials) para saber se auto-connect funciona
+  const appId  = (c.env as any).ML_APP_ID || '3098423019766450'
+  const secret = (c.env as any).ML_SECRET  || ''
+  let autoConnected = false
+  let resolvedTokenSource = tokenSource || (accessToken ? 'oauth' : 'none')
+
+  // Se não há token OAuth mas há secret, tenta client_credentials para confirmar auto-connect
+  if (!accessToken && !refreshToken && secret) {
+    try {
+      const res = await fetch('https://api.mercadolibre.com/oauth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type:    'client_credentials',
+          client_id:     appId,
+          client_secret: secret,
+        }),
+        signal: AbortSignal.timeout(5000),
+      })
+      if (res.ok) {
+        const td: any = await res.json()
+        if (td.access_token) {
+          autoConnected = true
+          resolvedTokenSource = 'client_credentials'
+          // Salva no KV para próxima chamada ser direto do cache
+          if (CACHE) {
+            await CACHE.put('ml_access_token', td.access_token, { expirationTtl: td.expires_in || 21600 }).catch(() => {})
+            await CACHE.put('ml_token_source', 'client_credentials', { expirationTtl: td.expires_in || 21600 }).catch(() => {})
+          }
+        }
+      }
+    } catch { /* sem auto-connect */ }
+  } else if (accessToken) {
+    autoConnected = resolvedTokenSource === 'client_credentials'
+  }
 
   // Contadores
   const [total, withAff, withMlId, withMeliLa] = await Promise.all([
@@ -5460,20 +5531,24 @@ admin.get('/api/ml-linkbuilder/status', async (c) => {
     DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND affiliate_url LIKE '%matt_word%'").first<any>(),
   ])
 
+  const pending = (withMlId?.n || 0) - (withMeliLa?.n || 0)
+
   return c.json({
     oauth: {
-      connected:     !!accessToken || !!refreshToken,
-      has_access:    !!accessToken,
-      has_refresh:   !!refreshToken,
-      user_id:       userId,
-      auth_url:      '/api/ml/auth',
+      connected:      !!accessToken || !!refreshToken || autoConnected,
+      has_access:     !!accessToken || autoConnected,
+      has_refresh:    !!refreshToken,
+      user_id:        userId,
+      auth_url:       '/api/ml/auth',
+      token_source:   resolvedTokenSource,
+      auto_connected: autoConnected,
     },
     products: {
-      total:          total?.n    || 0,
-      with_ml_id:     withMlId?.n || 0,
-      with_affiliate: withAff?.n  || 0,
+      total:          total?.n      || 0,
+      with_ml_id:     withMlId?.n   || 0,
+      with_affiliate: withAff?.n    || 0,
       with_tracking:  withMeliLa?.n || 0,
-      pending:        (withMlId?.n || 0) - (withMeliLa?.n || 0),
+      pending,
     },
   })
 })

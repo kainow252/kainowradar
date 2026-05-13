@@ -6430,9 +6430,62 @@ function copyText(text) {
 // ══════════════════════════════════════════════════════════
 
 async function renderMLLinkBuilder(area) {
+  // Mostra loading enquanto verifica conexão
+  area.innerHTML = '<div class="section"><div class="stat-card text-center py-10 text-slate-400 text-sm">🔄 Verificando conexão com o Mercado Livre...</div></div>'
+
   const status = await api('GET', '/admin/api/ml-linkbuilder/status')
-  const oauth  = status?.oauth  || {}
+  const oauth  = status?.oauth    || {}
   const prods  = status?.products || {}
+
+  const isConnected    = !!oauth.connected
+  const isAuto         = !!oauth.auto_connected
+  const tokenSrc       = oauth.token_source || 'none'
+  const pending        = prods.pending || 0
+
+  // Badge de conexão dinâmico
+  let connectionBadge = ''
+  let connectionDetail = ''
+  if (!isConnected) {
+    connectionBadge  = '<span class="inline-flex items-center gap-1.5 bg-red-100 text-red-700 text-xs font-bold px-3 py-1.5 rounded-full">❌ Desconectado</span>'
+    connectionDetail = '<p class="text-xs text-red-500 mt-1 font-semibold">⚠ Sem token — configure ML_SECRET</p>'
+  } else if (isAuto) {
+    connectionBadge  = '<span class="inline-flex items-center gap-1.5 bg-green-100 text-green-700 text-xs font-bold px-3 py-1.5 rounded-full">🤖 Conectado automaticamente</span>'
+    connectionDetail = '<p class="text-xs text-slate-400 mt-1">via <code class="font-mono">client_credentials</code> — sem OAuth necessário</p>'
+  } else if (tokenSrc === 'oauth' || tokenSrc === 'oauth_kv') {
+    connectionBadge  = '<span class="inline-flex items-center gap-1.5 bg-blue-100 text-blue-700 text-xs font-bold px-3 py-1.5 rounded-full">✅ Conectado via OAuth</span>'
+    connectionDetail = '<p class="text-xs text-slate-400 mt-1">User ID: ' + (oauth.user_id || '—') + '</p>'
+  } else {
+    connectionBadge  = '<span class="inline-flex items-center gap-1.5 bg-green-100 text-green-700 text-xs font-bold px-3 py-1.5 rounded-full">✅ ML Conectado</span>'
+    connectionDetail = '<p class="text-xs text-slate-400 mt-1">Token ativo</p>'
+  }
+
+  // Banner de status da conexão (abaixo do header)
+  let connectionBanner = ''
+  if (!isConnected) {
+    connectionBanner = `
+      <div class="mt-4 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-800">
+        <p class="font-bold mb-1">❌ Sem conexão com o ML</p>
+        <p class="text-xs">Verifique se <code class="font-mono bg-red-100 px-1 rounded">ML_SECRET</code> está configurado no Cloudflare. O login automático usa <code class="font-mono bg-red-100 px-1 rounded">client_credentials</code> — sem OAuth manual.</p>
+        <a href="/api/ml/auth" target="_blank" class="inline-flex items-center gap-2 mt-2 bg-yellow-400 hover:bg-yellow-500 text-slate-900 font-bold px-4 py-2 rounded-lg text-xs transition-colors">
+          🔑 Tentar Login OAuth manual
+        </a>
+      </div>`
+  } else if (isAuto) {
+    connectionBanner = `
+      <div class="mt-3 bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-800 flex items-center justify-between flex-wrap gap-2">
+        <span>🤖 <strong>Login automático ativo</strong> — token gerado via <code class="font-mono bg-green-100 px-1 rounded text-xs">client_credentials</code>. Nenhuma ação necessária.</span>
+        <a href="/api/ml/auth" target="_blank" class="text-xs text-green-700 underline hover:text-green-900 whitespace-nowrap">Vincular conta OAuth →</a>
+      </div>`
+  } else {
+    connectionBanner = `
+      <div class="mt-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-800 flex items-center justify-between flex-wrap gap-2">
+        <span>✅ Token OAuth ativo — pronto para gerar links.</span>
+        <a href="/api/ml/auth" target="_blank" class="text-xs text-blue-700 underline hover:text-blue-900">Renovar / trocar conta →</a>
+      </div>`
+  }
+
+  // Auto-start: se conectado e há pendentes, inicia automaticamente
+  const shouldAutoStart = isConnected && pending > 0 && !LbState.running
 
   area.innerHTML = `
   <div class="section space-y-5">
@@ -6446,63 +6499,42 @@ async function renderMLLinkBuilder(area) {
           <p class="text-sm text-slate-500">Gera links de afiliado rastreáveis (<code class="bg-slate-100 px-1.5 py-0.5 rounded font-mono text-xs">?matt_word=cfegdhabc31955</code>) para todos os produtos com <code class="bg-slate-100 px-1 rounded font-mono text-xs">ml_item_id</code>.</p>
         </div>
         <div class="text-right flex-shrink-0">
-          ${oauth.connected
-            ? `<span class="badge-green text-sm px-3 py-1.5">✅ ML Conectado</span>
-               <p class="text-xs text-slate-400 mt-1">User ID: ${oauth.user_id || '—'}</p>`
-            : `<a href="/api/ml/auth" target="_blank"
-                  class="inline-flex items-center gap-2 bg-yellow-400 hover:bg-yellow-500 text-slate-900 font-bold px-4 py-2.5 rounded-xl transition-colors shadow text-sm">
-                  🔑 Login no ML
-               </a>
-               <p class="text-xs text-red-500 mt-1.5 font-semibold">⚠ Login necessário</p>`
-          }
+          ` + connectionBadge + `
+          ` + connectionDetail + `
         </div>
       </div>
-
-      ${!oauth.connected ? `
-      <div class="mt-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
-        <p class="font-bold mb-1">🔐 Como conectar:</p>
-        <ol class="list-decimal ml-4 space-y-1 text-sm">
-          <li>Clique em <strong>"Login no ML"</strong> acima — abre a tela de autorização OAuth</li>
-          <li>Faça login com sua conta Mercado Livre de afiliado</li>
-          <li>Autorize o app <strong>KainowRadar</strong></li>
-          <li>Aguarde o redirecionamento de volta para o admin</li>
-          <li>Volte a esta seção — o status ficará verde ✅</li>
-        </ol>
-      </div>` : `
-      <div class="mt-3 bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-800 flex items-center justify-between flex-wrap gap-2">
-        <span>✅ Conta ML vinculada. Token OAuth ativo — pronto para gerar links.</span>
-        <a href="/api/ml/auth" target="_blank" class="text-xs text-green-700 underline hover:text-green-900">Renovar / trocar conta →</a>
-      </div>`}
+      ` + connectionBanner + `
     </div>
 
     <!-- ── Contadores ── -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
       <div class="stat-card py-3 text-center">
-        <div class="text-2xl font-bold text-slate-800" id="lb-total">${prods.total || 0}</div>
+        <div class="text-2xl font-bold text-slate-800" id="lb-total">` + (prods.total || 0) + `</div>
         <div class="text-xs text-slate-500 mt-0.5">Produtos ativos</div>
       </div>
       <div class="stat-card py-3 text-center">
-        <div class="text-2xl font-bold text-blue-700" id="lb-with-mlid">${prods.with_ml_id || 0}</div>
+        <div class="text-2xl font-bold text-blue-700" id="lb-with-mlid">` + (prods.with_ml_id || 0) + `</div>
         <div class="text-xs text-slate-500 mt-0.5">Com ml_item_id</div>
       </div>
       <div class="stat-card py-3 text-center">
-        <div class="text-2xl font-bold text-green-700" id="lb-done">${prods.with_tracking || 0}</div>
+        <div class="text-2xl font-bold text-green-700" id="lb-done">` + (prods.with_tracking || 0) + `</div>
         <div class="text-xs text-slate-500 mt-0.5">Com link afiliado ✅</div>
       </div>
       <div class="stat-card py-3 text-center">
-        <div class="text-2xl font-bold text-orange-600" id="lb-pending">${prods.pending || 0}</div>
+        <div class="text-2xl font-bold text-orange-600" id="lb-pending">` + pending + `</div>
         <div class="text-xs text-slate-500 mt-0.5">Pendentes ⏳</div>
       </div>
     </div>
 
     <!-- ── Bot em Lote ── -->
-    <div class="stat-card ${!oauth.connected ? 'opacity-60 pointer-events-none' : ''}">
+    <div class="stat-card` + (!isConnected ? ' opacity-60 pointer-events-none' : '') + `">
       <div class="flex items-center gap-3 mb-4">
         <span class="text-2xl">🤖</span>
-        <div>
+        <div class="flex-1">
           <h3 class="font-bold text-slate-800">Gerar Links em Lote (Server-side)</h3>
-          <p class="text-xs text-slate-500">O Worker busca o permalink de cada produto via API ML e gera o link de afiliado rastreável automaticamente.</p>
+          <p class="text-xs text-slate-500">O Worker busca o permalink de cada produto via API ML e salva o link de afiliado no banco automaticamente.</p>
         </div>
+        ` + (shouldAutoStart ? '<span class="text-xs bg-yellow-100 text-yellow-800 font-bold px-2 py-1 rounded-lg animate-pulse">▶ Iniciando automaticamente...</span>' : '') + `
       </div>
 
       <div class="flex items-center gap-3 flex-wrap mb-4">
@@ -6574,7 +6606,15 @@ async function renderMLLinkBuilder(area) {
 
   </div>`
 
+  // Carrega tabela de produtos
   mlLbLoadProducts(1)
+
+  // Auto-start: se conectado e há pendentes, inicia o bot automaticamente
+  if (shouldAutoStart) {
+    setTimeout(() => {
+      if (!LbState.running) mlLbRunBatch()
+    }, 1200)
+  }
 }
 
 // ─── Estado global ─────────────────────────────────────────
