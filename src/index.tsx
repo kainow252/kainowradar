@@ -829,28 +829,100 @@ app.get('/', async (c) => {
     </section>
   ` : ''
 
-  // ── CATEGORIAS EM BLOCOS (estilo Buscapé com nossa cara) ──
-  // No mobile este bloco fica oculto — as categorias aparecem no menu hambúrguer
+  // ── CATEGORIAS — lista colapsável (começa fechada, abre/recolhe ao clicar) ──
   const catBlocksHTML = categories.length > 0 ? `
-    <section class="hidden md:block bg-white border-y border-gray-100 py-8">
+    <section class="bg-white border-y border-gray-100">
       <div class="w-full px-4 sm:px-6">
-        <div class="flex items-center justify-between mb-5">
+
+        <!-- Cabeçalho clicável -->
+        <button onclick="toggleCatSection()" id="cat-section-toggle"
+          class="w-full flex items-center justify-between py-4 group select-none">
           <div class="flex items-center gap-3">
-            <div class="w-1 h-7 bg-gradient-to-b from-blue-500 to-blue-700 rounded-full"></div>
-            <h2 class="text-xl font-black text-gray-900">Explorar por Categoria</h2>
+            <div class="w-1 h-6 bg-gradient-to-b from-blue-500 to-blue-700 rounded-full"></div>
+            <h2 class="text-base font-black text-gray-900 group-hover:text-blue-700 transition-colors">
+              Explorar por Categoria
+            </h2>
+            <span class="text-xs text-gray-400 font-medium">${categories.length} categorias</span>
+          </div>
+          <div class="flex items-center gap-2 text-gray-400 group-hover:text-blue-600 transition-colors">
+            <span id="cat-section-label" class="text-xs font-semibold">Ver todas</span>
+            <svg id="cat-section-chevron"
+              class="w-4 h-4 transition-transform duration-300"
+              fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
+            </svg>
+          </div>
+        </button>
+
+        <!-- Lista de categorias — fechada por padrão -->
+        <div id="cat-section-body"
+          style="display:none;overflow:hidden"
+          class="pb-3">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-0.5">
+            ${categories.map((cat: any) => `
+              <a href="/categoria/${cat.slug}"
+                class="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-blue-50 active:bg-blue-100 transition-colors group">
+                <span class="text-xl w-8 text-center flex-shrink-0">${cat.icon || '🛒'}</span>
+                <span class="flex-1 text-sm font-semibold text-gray-700 group-hover:text-blue-700 transition-colors">${cat.name}</span>
+                ${cat.product_count > 0
+                  ? '<span class="text-xs text-gray-400 font-medium flex-shrink-0">' + cat.product_count + ' produtos</span>'
+                  : ''}
+                <svg class="w-3.5 h-3.5 text-gray-300 group-hover:text-blue-400 flex-shrink-0 transition-colors"
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
+                </svg>
+              </a>
+            `).join('')}
           </div>
         </div>
-        <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-4 lg:grid-cols-8 gap-3">
-          ${categories.map((cat: any) => `
-            <a href="/categoria/${cat.slug}" class="cat-block">
-              <div class="cat-block-icon">${cat.icon || '🛒'}</div>
-              <span class="cat-block-name">${cat.name}</span>
-              ${cat.product_count > 0 ? `<span class="cat-block-count">${cat.product_count} produtos</span>` : ''}
-            </a>
-          `).join('')}
-        </div>
+
       </div>
     </section>
+
+    <script>
+      function toggleCatSection() {
+        var body    = document.getElementById('cat-section-body')
+        var chevron = document.getElementById('cat-section-chevron')
+        var label   = document.getElementById('cat-section-label')
+        var open    = body.style.display !== 'none'
+        if (open) {
+          // Fecha com animação
+          body.style.maxHeight = body.scrollHeight + 'px'
+          body.style.overflow  = 'hidden'
+          requestAnimationFrame(function() {
+            body.style.transition  = 'max-height 0.28s ease, opacity 0.2s ease'
+            body.style.maxHeight   = '0px'
+            body.style.opacity     = '0'
+          })
+          setTimeout(function() {
+            body.style.display   = 'none'
+            body.style.maxHeight = ''
+            body.style.opacity   = ''
+            body.style.transition= ''
+          }, 290)
+          chevron.style.transform = ''
+          label.textContent       = 'Ver todas'
+        } else {
+          // Abre com animação
+          body.style.display   = 'block'
+          body.style.maxHeight = '0px'
+          body.style.opacity   = '0'
+          body.style.overflow  = 'hidden'
+          requestAnimationFrame(function() {
+            body.style.transition = 'max-height 0.32s ease, opacity 0.22s ease'
+            body.style.maxHeight  = body.scrollHeight + 'px'
+            body.style.opacity    = '1'
+          })
+          setTimeout(function() {
+            body.style.overflow  = 'visible'
+            body.style.maxHeight = ''
+            body.style.transition= ''
+          }, 330)
+          chevron.style.transform = 'rotate(180deg)'
+          label.textContent       = 'Recolher'
+        }
+      }
+    </script>
   ` : ''
 
   // ── EM DESTAQUE ───────────────────────────────────────────
