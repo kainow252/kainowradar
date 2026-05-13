@@ -46,15 +46,21 @@ async function doLogout() {
 }
 
 // ── API helper ───────────────────────────────────────────
-async function api(method, path, body) {
+async function api(method, path, body, timeoutMs = 15000) {
   const opts = {
     method,
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + App.token }
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + App.token },
+    signal: AbortSignal.timeout(timeoutMs)
   }
   if (body) opts.body = JSON.stringify(body)
-  const res = await fetch(path, opts)
-  if (res.status === 401) { doLogout(); return null }
-  return res.json()
+  try {
+    const res = await fetch(path, opts)
+    if (res.status === 401) { doLogout(); return null }
+    return await res.json()
+  } catch(e) {
+    console.warn('api() error:', method, path, e?.message)
+    return null
+  }
 }
 
 // ── Toast ────────────────────────────────────────────────
@@ -686,6 +692,14 @@ function siCountLinks() {
 // 2) Extrai MLB ID da URL final
 // 3) Chama api.mercadolibre.com/items/{id} (CORS aberto, sem auth)
 // 4) Salva tudo no banco via API admin
+function siBtnReset(btn, storeId, label) {
+  if (!btn) return
+  btn.disabled = false
+  btn.className = 'w-full py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 active:scale-95 transition-all'
+  btn.innerHTML = label || '&#128640; Importar Automaticamente'
+  btn.onclick = function() { siImportAuto(storeId) }
+}
+
 async function siImportAuto(storeId) {
   const val  = document.getElementById('si-textarea')?.value || ''
   const urls = (val.match(/https?:\/\/[^\s,|]+/g) || [])
@@ -697,121 +711,145 @@ async function siImportAuto(storeId) {
 
   const live = document.getElementById('si-live-area')
   const btn  = document.getElementById('si-main-btn')
-  if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> Buscando dados...' }
 
-  live.innerHTML = siLiveCards(urls) +
-    '<div id="si-prog-wrap" class="mb-3">' +
-      '<div class="flex justify-between text-xs text-slate-500 mb-1">' +
-        '<span id="si-prog-txt">Buscando informa\u00e7\u00f5es dos produtos...</span>' +
-        '<span id="si-prog-n" class="font-bold text-indigo-600">0/' + urls.length + '</span>' +
-      '</div>' +
-      '<div class="h-2 bg-slate-100 rounded-full overflow-hidden">' +
-        '<div id="si-prog-bar" class="h-full bg-indigo-500 rounded-full transition-all duration-300" style="width:0%"></div>' +
-      '</div>' +
-    '</div>' +
-    '<div id="si-result-area"></div>' +
-    '<button id="si-save-btn" disabled class="w-full py-3 rounded-xl bg-slate-200 text-slate-400 text-sm font-bold cursor-not-allowed mt-2">Aguarde...</button>'
-
-  const metaMap = {}
-  const BATCH = 4
-  let done = 0
-
-  for (let s = 0; s < urls.length; s += BATCH) {
-    const batch = urls.slice(s, s + BATCH)
-    const results = await Promise.all(batch.map(u => siFetchMetaClientSide(u)))
-    batch.forEach((u, bi) => {
-      metaMap[u] = results[bi]
-      done++
-      siUpdateCard(s + bi, u, results[bi])
-      const pct = Math.round((done / urls.length) * 100)
-      const bar = document.getElementById('si-prog-bar')
-      const nEl = document.getElementById('si-prog-n')
-      const tEl = document.getElementById('si-prog-txt')
-      if (bar) bar.style.width = pct + '%'
-      if (nEl) nEl.textContent = done + '/' + urls.length
-      if (tEl) tEl.textContent = pct < 100 ? 'Buscando informa\u00e7\u00f5es...' : '\u2713 Dados carregados!'
-    })
+  const setBtnLoading = (msg) => {
+    if (!btn) return
+    btn.disabled = true
+    btn.className = 'w-full py-3 rounded-xl bg-indigo-400 text-white text-sm font-bold cursor-not-allowed mt-0'
+    btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> ' + msg
   }
 
-  const progWrap = document.getElementById('si-prog-wrap')
-  if (progWrap) progWrap.innerHTML = '<p class="text-xs text-green-600 font-semibold text-center py-1">\u2713 Informa\u00e7\u00f5es carregadas \u2014 salvando no banco...</p>'
+  try {
+    setBtnLoading('Buscando dados...')
 
-  const lines = urls.map(function(u) {
-    const m = metaMap[u]
-    let line = u
-    if (m && m.name)  line += ' | ' + m.name
-    if (m && m.price) line += ' | ' + m.price
-    if (m && m.image) line += ' | ' + m.image
-    return line
-  })
+    live.innerHTML = siLiveCards(urls) +
+      '<div id="si-prog-wrap" class="mb-3">' +
+        '<div class="flex justify-between text-xs text-slate-500 mb-1">' +
+          '<span id="si-prog-txt">Buscando informa\u00e7\u00f5es dos produtos...</span>' +
+          '<span id="si-prog-n" class="font-bold text-indigo-600">0/' + urls.length + '</span>' +
+        '</div>' +
+        '<div class="h-2 bg-slate-100 rounded-full overflow-hidden">' +
+          '<div id="si-prog-bar" class="h-full bg-indigo-500 rounded-full transition-all duration-300" style="width:0%"></div>' +
+        '</div>' +
+      '</div>' +
+      '<div id="si-result-area"></div>'
 
-  if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> Salvando no banco...' }
+    const metaMap = {}
+    const BATCH = 3  // reduzido para evitar timeout no Worker
+    let done = 0
 
-  const data = await api('POST', '/admin/api/stores/' + storeId + '/import-links', { links: lines.join('\n') })
+    for (let s = 0; s < urls.length; s += BATCH) {
+      const batch = urls.slice(s, s + BATCH)
+      const results = await Promise.all(batch.map(u => siFetchMetaClientSide(u)))
+      batch.forEach((u, bi) => {
+        metaMap[u] = results[bi]
+        done++
+        siUpdateCard(s + bi, u, results[bi])
+        const pct = Math.round((done / urls.length) * 100)
+        const bar = document.getElementById('si-prog-bar')
+        const nEl = document.getElementById('si-prog-n')
+        const tEl = document.getElementById('si-prog-txt')
+        if (bar) bar.style.width = pct + '%'
+        if (nEl) nEl.textContent = done + '/' + urls.length
+        if (tEl) tEl.textContent = pct < 100 ? 'Buscando...' : '\u2713 Pronto!'
+      })
+    }
 
-  const resEl = document.getElementById('si-result-area')
-  if (resEl && data) siRenderResult(data, resEl)
+    // Filtra apenas URLs que têm nome (o backend exige nome)
+    const lines = urls.map(function(u) {
+      const m = metaMap[u]
+      if (!m || !m.name) return null   // sem nome = pula
+      let line = u + ' | ' + m.name
+      if (m.price) line += ' | ' + m.price
+      if (m.image) line += ' | ' + m.image
+      return line
+    }).filter(Boolean)
 
-  if (data && data.ok) {
-    toast('\u2713 ' + data.imported + ' produto(s) importados em ' + data.store_name + '!', 'success')
-    if (btn) {
-      btn.disabled = false
-      btn.className = 'w-full py-3 rounded-xl bg-green-600 text-white text-sm font-bold mt-2'
-      btn.innerHTML = '\u2713 ' + data.imported + ' produto(s) salvos! Importar mais'
-      btn.onclick = function() {
-        document.getElementById('si-textarea').value = ''
-        siCountLinks()
-        document.getElementById('si-live-area').innerHTML = ''
-        btn.innerHTML = '&#128640; Importar Automaticamente'
+    const semNome = urls.length - lines.length
+    if (!lines.length) {
+      const progWrap = document.getElementById('si-prog-wrap')
+      if (progWrap) progWrap.innerHTML = '<p class="text-xs text-red-500 font-semibold text-center py-1">\u26a0 Nenhum produto com nome encontrado. Verifique os links.</p>'
+      siBtnReset(btn, storeId, '\u26a0 Tentar novamente')
+      return
+    }
+
+    const progWrap = document.getElementById('si-prog-wrap')
+    if (progWrap) {
+      const aviso = semNome > 0 ? ` (${semNome} sem nome, ignorados)` : ''
+      progWrap.innerHTML = '<p class="text-xs text-green-600 font-semibold text-center py-1">\u2713 ' + lines.length + ' produto(s) prontos' + aviso + ' \u2014 salvando...</p>'
+    }
+
+    setBtnLoading('Salvando no banco...')
+
+    const data = await api('POST', '/admin/api/stores/' + storeId + '/import-links', { links: lines.join('\n') }, 30000)
+
+    const resEl = document.getElementById('si-result-area')
+    if (resEl && data) siRenderResult(data, resEl)
+
+    if (data && data.ok) {
+      toast('\u2713 ' + data.imported + ' produto(s) importados em ' + data.store_name + '!', 'success')
+      if (btn) {
         btn.disabled = false
-        btn.className = 'w-full py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 active:scale-95 transition-all'
+        btn.className = 'w-full py-3 rounded-xl bg-green-600 text-white text-sm font-bold mt-0'
+        btn.innerHTML = '\u2713 ' + data.imported + ' produto(s) salvos! Importar mais'
+        btn.onclick = function() {
+          document.getElementById('si-textarea').value = ''
+          siCountLinks()
+          document.getElementById('si-live-area').innerHTML = ''
+          siBtnReset(btn, storeId)
+        }
+      }
+    } else {
+      toast((data && data.error) || 'Erro ao salvar', 'error')
+      if (btn) {
+        btn.disabled = false
+        btn.className = 'w-full py-3 rounded-xl bg-red-600 text-white text-sm font-bold mt-0'
+        btn.innerHTML = '\u26a0 Erro \u2014 Tentar novamente'
         btn.onclick = function() { siImportAuto(storeId) }
       }
     }
-  } else {
-    toast((data && data.error) || 'Erro ao salvar', 'error')
-    if (btn) {
-      btn.disabled = false
-      btn.className = 'w-full py-3 rounded-xl bg-red-600 text-white text-sm font-bold mt-2'
-      btn.innerHTML = '&#9888; Erro \u2014 Tentar novamente'
-      btn.onclick = function() { siImportAuto(storeId) }
-    }
+
+  } catch(err) {
+    console.error('siImportAuto error:', err)
+    toast('Erro inesperado: ' + (err?.message || String(err)), 'error')
+    siBtnReset(btn, storeId, '\u26a0 Erro \u2014 Tentar novamente')
   }
 }
 
 // ── Fetch de metadados — estratégia em camadas ──────────────────
 // 1) Backend resolve-url: segue redirect (UA mobile), extrai og:title + og:image + mlbId
-// 2) Se tem mlbId → API ML do browser (CORS aberto para shopping-compare.pages.dev) → preço real
+// 2) Se tem mlbId → API ML do browser (CORS aberto) → preço real
 // 3) Fallback: allorigins.win para links não-ML
 async function siFetchMetaClientSide(originalUrl) {
+  // Camada 1: backend faz scraping do HTML (nome + imagem)
+  // Timeout de 12s — se demorar mais, parte pro fallback
+  let r = null
   try {
-    // Camada 1: backend faz o scraping do HTML (nome + imagem garantidos)
-    const r = await api('GET', '/admin/api/resolve-url?url=' + encodeURIComponent(originalUrl))
+    r = await api('GET', '/admin/api/resolve-url?url=' + encodeURIComponent(originalUrl), null, 12000)
+  } catch(e) { r = null }
 
-    if (r && r.ok) {
-      let name  = r.name  || ''
-      let image = r.image || null
-      let price = r.price || null
+  if (r && r.ok) {
+    let name  = (r.name  || '').trim()
+    let image = r.image || null
+    let price = r.price || null
 
-      // Camada 2: se tem mlbId, busca preço (e complementa nome/imagem se faltou)
-      // A API ML tem CORS aberto para nosso domínio → funciona do browser
-      if (r.mlbId && (!price || !name)) {
+    // Camada 2: complementa preço (e nome se faltou) via API ML do browser
+    if (r.mlbId && (!price || !name)) {
+      try {
         const ml = await siFetchMlApi(r.mlbId)
         if (ml) {
           if (!name  && ml.name)  name  = ml.name
           if (!image && ml.image) image = ml.image
           if (!price && ml.price) price = ml.price
         }
-      }
-
-      if (name) return { name, price, image }
+      } catch(e) {}
     }
 
-    // Camada 3: fallback via allorigins.win (links não-ML ou erro no backend)
-    return await siFetchOgMeta(originalUrl)
-  } catch(e) {
-    return null
+    if (name) return { name, price, image }
   }
+
+  // Camada 3: fallback allorigins.win
+  try { return await siFetchOgMeta(originalUrl) } catch(e) { return null }
 }
 
 // Chama API pública do Mercado Livre — CORS aberto para browsers
