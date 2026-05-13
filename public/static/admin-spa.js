@@ -6356,12 +6356,12 @@ async function awinLoadProgrammes() {
               </td>
               <td class="py-2">
                 ${p.relationship !== 'joined' ? `
-                  <a href="https://ui.awin.com/affiliate/programmes?advertiser=${p.id}" target="_blank"
-                    class="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded transition-colors">
+                  <a href='https://ui.awin.com/affiliate/programmes?advertiser=${p.id}' target='_blank'
+                    class='text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded transition-colors'>
                     Solicitar →
                   </a>` : `
-                  <button onclick="awinTestLinkById(${p.id})"
-                    class="text-xs bg-green-50 hover:bg-green-100 text-green-700 px-2 py-1 rounded transition-colors">
+                  <button onclick='awinTestLinkById(` + p.id + `)'
+                    class='text-xs bg-green-50 hover:bg-green-100 text-green-700 px-2 py-1 rounded transition-colors'>
                     🔗 Gerar Link
                   </button>`
                 }
@@ -6616,27 +6616,29 @@ async function mlLbLoadProducts(page) {
         </tr>
       </thead>
       <tbody>
-        ${data.results.map(p => `
-          <tr class="hover:bg-slate-50" id="lb-row-${p.id}">
-            <td class="table-td text-slate-400 font-mono text-xs">${p.id}</td>
-            <td class="table-td">
-              <div class="font-medium text-slate-800 text-xs leading-snug max-w-xs truncate">${p.name}</div>
-              <div class="text-xs text-slate-400">${p.category || '—'}</div>
+        ${data.results.map(p => {
+          const affCell = p.affiliate_url
+            ? '<a href="' + p.affiliate_url + '" target="_blank" class="text-green-600 hover:underline break-all">' + p.affiliate_url.substring(0, 70) + (p.affiliate_url.length > 70 ? '…' : '') + '</a>'
+            : '<span class="text-slate-300">—</span>'
+          return `
+          <tr class='hover:bg-slate-50' id='lb-row-${p.id}'>
+            <td class='table-td text-slate-400 font-mono text-xs'>${p.id}</td>
+            <td class='table-td'>
+              <div class='font-medium text-slate-800 text-xs leading-snug max-w-xs truncate'>${p.name}</div>
+              <div class='text-xs text-slate-400'>${p.category || '—'}</div>
             </td>
-            <td class="table-td">
-              <a href="${p.ml_url}" target="_blank" class="font-mono text-xs text-blue-600 hover:underline">${p.ml_item_id}</a>
+            <td class='table-td'>
+              <a href='${p.ml_url}' target='_blank' class='font-mono text-xs text-blue-600 hover:underline'>${p.ml_item_id}</a>
             </td>
-            <td class="table-td font-mono text-xs" id="lb-aff-${p.id}">
-              ${p.affiliate_url
-                ? `<a href="${p.affiliate_url}" target="_blank" class="text-green-600 hover:underline break-all">${p.affiliate_url.substring(0, 70)}${p.affiliate_url.length > 70 ? '…' : ''}</a>`
-                : '<span class="text-slate-300">—</span>'}
+            <td class='table-td font-mono text-xs' id='lb-aff-${p.id}'>
+              ${affCell}
             </td>
-            <td class="table-td">
-              <button onclick="mlLbGenSingle(${p.id}, '${p.ml_item_id}')" id="lb-btn-${p.id}"
-                      class="btn-success text-xs">Gerar</button>
+            <td class='table-td'>
+              <button onclick='mlLbGenSingle(` + p.id + `, "` + p.ml_item_id + `")' id='lb-btn-${p.id}'
+                      class='btn-success text-xs'>Gerar</button>
             </td>
-          </tr>
-        `).join('')}
+          </tr>`
+        }).join('')}
       </tbody>
     </table>
     </div>`
