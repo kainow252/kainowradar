@@ -1859,6 +1859,119 @@ admin.get('/api/stores/ml/import-history', async (c) => {
   return c.json({ results })
 })
 
+// ── GET /admin/api/fetch-product-meta ────────────────────────────
+// Faz scraping de uma URL de produto e retorna nome, preço, imagem
+// Suporta: meli.la (redirect), mercadolivre.com.br, amazon.com.br, etc.
+// Usado pelo frontend para auto-preencher campos antes de salvar
+admin.get('/api/fetch-product-meta', async (c) => {
+  const url = c.req.query('url') || ''
+  if (!url.startsWith('http')) return c.json({ error: 'URL inválida' }, 400)
+
+  try {
+    // Segue redirect com timeout de 8s
+    const res = await fetch(url, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate',
+        'Cache-Control': 'no-cache',
+      },
+      signal: AbortSignal.timeout(8000),
+    })
+
+    const finalUrl = res.url
+    const html = await res.text()
+
+    // ── Extratores por regex no HTML ─────────────────────────────
+    function getMeta(prop: string): string {
+      const m = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)["']`, 'i'))
+              || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${prop}["']`, 'i'))
+      return m ? m[1].trim() : ''
+    }
+    function getJsonLd(key: string): string {
+      const m = html.match(new RegExp(`"${key}"\\s*:\\s*"([^"]+)"`, 'i'))
+      return m ? m[1].trim() : ''
+    }
+    function decodeHtml(s: string): string {
+      return s.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(n)).replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&nbsp;/g,' ')
+    }
+
+    // ── Nome ─────────────────────────────────────────────────────
+    let name = getMeta('og:title') || getMeta('twitter:title') || getJsonLd('name') || ''
+    if (!name) {
+      const t = html.match(/<title[^>]*>([^<]+)<\/title>/i)
+      name = t ? t[1] : ''
+    }
+    // Remove sufixos de loja comuns
+    name = decodeHtml(name)
+      .replace(/\s*[|\-–—]\s*(Mercado Livre|Amazon\.com\.br|Americanas|Magazine Luiza|Shopee|AliExpress|Kabum|KaBuM!|Casas Bahia|Ponto|Extra|Submarino)[^$]*/gi, '')
+      .replace(/\s*-\s*Frete grátis.*/gi, '')
+      .trim()
+      .substring(0, 200)
+
+    // ── Imagem ───────────────────────────────────────────────────
+    let image = getMeta('og:image') || getMeta('twitter:image') || getJsonLd('image') || ''
+    // Preferir imagem HTTPS
+    if (image && image.startsWith('//')) image = 'https:' + image
+
+    // ── Preço ────────────────────────────────────────────────────
+    let price = 0
+
+    // 1) JSON-LD schema.org
+    const ldMatch = html.match(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || []
+    for (const block of ldMatch) {
+      const json = block.replace(/<script[^>]*>|<\/script>/gi, '').trim()
+      try {
+        const obj = JSON.parse(json)
+        const p = obj?.offers?.price || obj?.price || obj?.offers?.[0]?.price
+        if (p && parseFloat(String(p)) > 0) { price = parseFloat(String(p)); break }
+      } catch {}
+    }
+
+    // 2) meta itemprop price
+    if (!price) {
+      const pm = html.match(/<meta[^>]+itemprop=["']price["'][^>]+content=["']([^"']+)["']/i)
+              || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+itemprop=["']price["']/i)
+      if (pm) price = parseFloat(pm[1].replace(/[^0-9.,]/g,'').replace(',','.')) || 0
+    }
+
+    // 3) Padrões específicos Mercado Livre
+    if (!price) {
+      const mlPrices = [
+        // "price":299.90 ou "amount":299.90
+        html.match(/"price"\s*:\s*([\d]+(?:[.,][\d]{1,2})?)/),
+        html.match(/"amount"\s*:\s*([\d]+(?:[.,][\d]{1,2})?)/),
+        // data-price="299.90"
+        html.match(/data-price=["']([\d]+(?:[.,][\d]{1,2})?)["']/),
+        // class="andes-money-amount__fraction">299<
+        html.match(/andes-money-amount__fraction[^>]*>([\d.]+)<\/span>/),
+      ]
+      for (const m of mlPrices) {
+        if (m) { price = parseFloat(String(m[1]).replace(',','.')) || 0; if (price > 0) break }
+      }
+    }
+
+    // 4) Amazon
+    if (!price) {
+      const amz = html.match(/priceAmount[^>]*>\s*R\$\s*([\d.,]+)/)
+               || html.match(/a-price-whole[^>]*>([\d.]+)</)
+      if (amz) price = parseFloat(String(amz[1]).replace('.','').replace(',','.')) || 0
+    }
+
+    return c.json({
+      ok: true,
+      url: finalUrl,
+      name,
+      price: price > 0 ? price : null,
+      image: image || null,
+    })
+  } catch (err: any) {
+    return c.json({ ok: false, error: err?.message || 'Falha ao buscar URL' })
+  }
+})
+
 // ── POST /admin/api/stores/:storeId/import-links ─────────────────
 // Importa produtos/links em massa para qualquer loja
 // Aceita bloco de texto ou CSV com URLs (uma por linha)
