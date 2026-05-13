@@ -1859,10 +1859,91 @@ admin.get('/api/stores/ml/import-history', async (c) => {
   return c.json({ results })
 })
 
+// ── GET /admin/api/proxy-img ─────────────────────────────────────
+// Proxy de imagem para contornar hotlink protection do mlstatic.com
+// Busca a imagem no servidor com Referer correto e re-serve ao browser
+admin.get('/api/proxy-img', async (c) => {
+  const url = c.req.query('url') || ''
+  if (!url.startsWith('http')) return c.json({ error: 'URL inválida' }, 400)
+
+  // Só permite domínios de imagem conhecidos (segurança)
+  const allowed = ['mlstatic.com', 'mla-s2-p.mlstatic.com', 'http2.mlstatic.com',
+                   'mla-s1-p.mlstatic.com', 'a-static.mlcdn.com.br', 'http2.mlstatic.com']
+  const isAllowed = allowed.some(d => url.includes(d))
+  if (!isAllowed) return c.json({ error: 'Domínio não permitido' }, 400)
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'Referer':    'https://www.mercadolivre.com.br/',
+        'Origin':     'https://www.mercadolivre.com.br',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept':     'image/webp,image/avif,image/*,*/*;q=0.8',
+      },
+      signal: AbortSignal.timeout(8000),
+    })
+
+    if (!res.ok) return c.json({ error: `Imagem retornou ${res.status}` }, 502)
+
+    const contentType = res.headers.get('Content-Type') || 'image/webp'
+    const body = await res.arrayBuffer()
+
+    return new Response(body, {
+      headers: {
+        'Content-Type':                contentType,
+        'Cache-Control':               'public, max-age=86400, stale-while-revalidate=604800',
+        'Access-Control-Allow-Origin': '*',
+        'X-Proxy-Source':              'shopping-compare',
+      },
+    })
+  } catch (err: any) {
+    return c.json({ error: err?.message || 'Erro ao buscar imagem' }, 502)
+  }
+})
+
+// ── Helper: obtém Bearer token do ML via client_credentials ──────
+async function getMlBearerToken(env: AdminBindings): Promise<string | null> {
+  const CACHE = (env as any).CACHE as KVNamespace | undefined
+  const appId  = env.ML_APP_ID
+  const secret = env.ML_SECRET
+  if (!appId || !secret) return null
+
+  // Tenta cache KV primeiro (token válido por ~6h)
+  if (CACHE) {
+    try {
+      const cached = await CACHE.get('ml_app_token')
+      if (cached) return cached
+    } catch { /* ignora */ }
+  }
+
+  // Solicita novo token via client_credentials
+  try {
+    const res = await fetch('https://api.mercadolibre.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `grant_type=client_credentials&client_id=${encodeURIComponent(appId)}&client_secret=${encodeURIComponent(secret)}`,
+      signal: AbortSignal.timeout(6000),
+    })
+    if (!res.ok) return null
+    const data = await res.json() as any
+    const token: string = data?.access_token
+    if (!token) return null
+
+    // Guarda no KV por 5h50min (tokens duram 6h)
+    if (CACHE) {
+      await CACHE.put('ml_app_token', token, { expirationTtl: 21000 }).catch(() => {})
+    }
+    return token
+  } catch {
+    return null
+  }
+}
+
 // ── GET /admin/api/resolve-url ───────────────────────────────────
 // Resolve qualquer link (meli.la, mercadolivre.com.br, etc.)
 // Segue redirect completo com UA mobile, extrai og:title, og:image,
 // MLB ID e preço do HTML da página final — retorna tudo de uma vez.
+// Se encontrar mlbId → tenta API ML autenticada para preço real + imagem HD.
 admin.get('/api/resolve-url', async (c) => {
   const url = c.req.query('url') || ''
   if (!url.startsWith('http')) return c.json({ error: 'URL inválida' }, 400)
@@ -1926,6 +2007,54 @@ admin.get('/api/resolve-url', async (c) => {
       const raw = priceMeta[1].replace(/\./g, '').replace(',', '.')
       const parsed = parseFloat(raw)
       if (!isNaN(parsed) && parsed > 0) price = parsed
+    }
+
+    // ── Camada 2: API ML autenticada — preço real + imagem HD ────
+    // Ativa quando: encontrou mlbId E (preço ainda null OU imagem do og:image)
+    if (mlbId) {
+      try {
+        const token = await getMlBearerToken(c.env)
+        if (token) {
+          const mlRes = await fetch(
+            `https://api.mercadolibre.com/items/${mlbId}?attributes=id,title,price,pictures,thumbnail`,
+            {
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Accept': 'application/json',
+              },
+              signal: AbortSignal.timeout(5000),
+            }
+          )
+          if (mlRes.ok) {
+            const mlData = await mlRes.json() as any
+
+            // Preço real da API (sempre mais confiável que HTML)
+            if (mlData.price && mlData.price > 0) {
+              price = mlData.price
+            }
+
+            // Imagem HD da API — URL sem hotlink block (pictures[0].url é CDN direto)
+            if (mlData.pictures && mlData.pictures.length > 0) {
+              const picUrl: string = mlData.pictures[0].url || mlData.pictures[0].secure_url || ''
+              if (picUrl) {
+                // URLs da API ML não têm hotlink block — pode usar direto no <img>
+                image = picUrl.replace('http://', 'https://')
+              }
+            } else if (mlData.thumbnail) {
+              // Fallback: thumbnail com sufixo melhorado
+              image = (mlData.thumbnail as string)
+                .replace('http://', 'https://')
+                .replace(/-I\.jpg$/, '-O.jpg')
+                .replace(/-I\.webp$/, '-O.webp')
+            }
+
+            // Nome do produto via API (mais limpo que og:title)
+            if (!name && mlData.title) {
+              name = mlData.title
+            }
+          }
+        }
+      } catch { /* silencia erros da API ML — usa o que já tem */ }
     }
 
     return c.json({ ok: true, finalUrl, mlbId, name, image, price })
@@ -7204,7 +7333,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260513f"><\/script>
+<script src="/static/admin-spa.js?v=20260513h"><\/script>
 </body>
 </html>`
 }

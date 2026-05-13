@@ -687,11 +687,83 @@ function siCountLinks() {
 }
 
 // ── IMPORTAÇÃO AUTOMÁTICA COMPLETA ───────────────────────────────
-// Fetch 100% client-side no browser:
-// 1) meli.la → browser segue redirect → URL ML com MLB ID
-// 2) Extrai MLB ID da URL final
-// 3) Chama api.mercadolibre.com/items/{id} (CORS aberto, sem auth)
-// 4) Salva tudo no banco via API admin
+
+// Gera skeleton cards para cada URL (estado inicial — cinza/carregando)
+function siLiveCards(urls) {
+  return '<div id="si-cards-wrap" class="flex flex-col gap-2 mb-3">' +
+    urls.map(function(u, i) {
+      const short = u.length > 50 ? u.slice(0, 50) + '…' : u
+      return '<div id="si-card-' + i + '" class="flex items-center gap-3 p-2.5 rounded-xl border border-slate-200 bg-slate-50">' +
+        '<div class="w-10 h-10 rounded-lg bg-slate-200 animate-pulse flex-shrink-0"></div>' +
+        '<div class="flex-1 min-w-0">' +
+          '<div class="h-3 bg-slate-200 rounded animate-pulse mb-1.5 w-3/4"></div>' +
+          '<div class="text-[10px] text-slate-400 truncate">' + short + '</div>' +
+        '</div>' +
+        '<div class="text-xs text-slate-400 animate-pulse">⏳</div>' +
+      '</div>'
+    }).join('') +
+  '</div>'
+}
+
+// Converte URL de imagem ML para proxy interno (evita hotlink block)
+function siProxyImg(imgUrl) {
+  if (!imgUrl) return ''
+  // URLs da API ML (pictures[0].url) já funcionam sem proxy
+  // URLs do og:image (http2.mlstatic.com) precisam de proxy
+  if (imgUrl.includes('mlstatic.com')) {
+    return '/admin/api/proxy-img?url=' + encodeURIComponent(imgUrl)
+  }
+  return imgUrl
+}
+
+// Atualiza um card com os metadados recebidos (verde = ok, vermelho = erro)
+function siUpdateCard(idx, url, meta) {
+  const el = document.getElementById('si-card-' + idx)
+  if (!el) return
+  if (meta && meta.name) {
+    const imgSrc = meta.image ? siProxyImg(meta.image) : ''
+    const img = imgSrc
+      ? '<img src="' + imgSrc + '" class="w-10 h-10 rounded-lg object-cover flex-shrink-0" onerror="this.style.display=\'none\'">'
+      : '<div class="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0 text-lg">🛍️</div>'
+    const priceHtml = meta.price
+      ? '<span class="text-[11px] font-bold text-green-700">R$ ' + Number(meta.price).toLocaleString('pt-BR', {minimumFractionDigits:2}) + '</span>'
+      : '<span class="text-[11px] text-slate-400">sem preço</span>'
+    el.className = 'flex items-center gap-3 p-2.5 rounded-xl border border-green-200 bg-green-50'
+    el.innerHTML = img +
+      '<div class="flex-1 min-w-0">' +
+        '<div class="text-xs font-semibold text-slate-800 truncate leading-tight">' + meta.name + '</div>' +
+        priceHtml +
+      '</div>' +
+      '<span class="text-green-500 text-base">✓</span>'
+  } else {
+    el.className = 'flex items-center gap-3 p-2.5 rounded-xl border border-red-200 bg-red-50'
+    el.innerHTML = '<div class="w-10 h-10 rounded-lg bg-red-100 flex items-center justify-center flex-shrink-0 text-lg">❌</div>' +
+      '<div class="flex-1 min-w-0">' +
+        '<div class="text-xs font-semibold text-red-600">Não foi possível obter dados</div>' +
+        '<div class="text-[10px] text-slate-400 truncate">' + (url.length > 50 ? url.slice(0,50)+'…' : url) + '</div>' +
+      '</div>' +
+      '<span class="text-red-400 text-base">✗</span>'
+  }
+}
+
+// Renderiza resumo final do import (quantos ok, erros, etc.)
+function siRenderResult(data, el) {
+  if (!data) return
+  const rows = (data.results || []).map(function(r) {
+    const icon = r.status === 'importado' ? '✅' : r.status === 'atualizado' ? '🔄' : r.status === 'já existe' ? '⏭️' : '❌'
+    const info = r.error ? ' — ' + r.error : (r.name ? ' — ' + r.name.slice(0,40) : '')
+    return '<li class="text-xs text-slate-600">' + icon + ' ' + r.status + info + '</li>'
+  }).join('')
+  el.innerHTML = '<div class="mt-2 p-3 rounded-xl bg-slate-50 border border-slate-200">' +
+    '<div class="flex gap-4 text-xs font-bold mb-2">' +
+      '<span class="text-green-700">✅ ' + (data.imported||0) + ' importados</span>' +
+      (data.skipped ? '<span class="text-slate-500">⏭️ ' + data.skipped + ' já existiam</span>' : '') +
+      (data.errors  ? '<span class="text-red-600">❌ ' + data.errors  + ' erros</span>'      : '') +
+    '</div>' +
+    (rows ? '<ul class="space-y-0.5 max-h-32 overflow-y-auto">' + rows + '</ul>' : '') +
+  '</div>'
+}
+
 function siBtnReset(btn, storeId, label) {
   if (!btn) return
   btn.disabled = false
@@ -811,7 +883,11 @@ async function siImportAuto(storeId) {
 
   } catch(err) {
     console.error('siImportAuto error:', err)
-    toast('Erro inesperado: ' + (err?.message || String(err)), 'error')
+    const errMsg = err?.message || err?.name || String(err) || 'desconhecido'
+    // Mostra o erro visível no modal para debug
+    const live2 = document.getElementById('si-live-area')
+    if (live2) live2.innerHTML += '<div class="mt-2 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-mono break-all">\u26a0 ERRO: ' + errMsg + '</div>'
+    toast('Erro: ' + errMsg, 'error')
     siBtnReset(btn, storeId, '\u26a0 Erro \u2014 Tentar novamente')
   }
 }
@@ -853,6 +929,7 @@ async function siFetchMetaClientSide(originalUrl) {
 }
 
 // Chama API pública do Mercado Livre — CORS aberto para browsers
+// Retorna imagem via proxy para evitar hotlink block no <img>
 async function siFetchMlApi(mlbId) {
   try {
     const r = await fetch(
@@ -863,9 +940,12 @@ async function siFetchMlApi(mlbId) {
     const d = await r.json()
     if (!d || !d.title) return null
     const pics = d.pictures || []
-    const img = (pics[0] && pics[0].url)
+    // pictures[0].url da API ML é CDN direto (sem hotlink block) — usa sem proxy
+    const rawImg = (pics[0] && pics[0].url)
       ? pics[0].url.replace('http://', 'https://')
-      : (d.thumbnail || '').replace('-I.jpg', '-O.jpg').replace('http://', 'https://')
+      : (d.thumbnail || '').replace('-I.jpg', '-O.jpg').replace('-I.webp', '-O.webp').replace('http://', 'https://')
+    // Aplica proxy só se ainda for mlstatic.com (og:image fallback)
+    const img = rawImg ? siProxyImg(rawImg) : null
     return { name: d.title || '', price: d.price || null, image: img || null }
   } catch { return null }
 }
