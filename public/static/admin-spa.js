@@ -779,30 +779,35 @@ async function siImportAuto(storeId) {
   }
 }
 
-// ── Fetch de metadados via backend resolve-url ──────────────────
-// Uma única chamada: backend segue redirect completo (UA mobile),
-// extrai og:title + og:image + preço do HTML final e devolve tudo.
-// Funciona para meli.la, mercadolivre.com.br, amazon.com.br e outros.
+// ── Fetch de metadados — estratégia em camadas ──────────────────
+// 1) Backend resolve-url: segue redirect (UA mobile), extrai og:title + og:image + mlbId
+// 2) Se tem mlbId → API ML do browser (CORS aberto para shopping-compare.pages.dev) → preço real
+// 3) Fallback: allorigins.win para links não-ML
 async function siFetchMetaClientSide(originalUrl) {
   try {
-    // Estratégia 1: backend resolve-url (segue redirect + scraping HTML)
+    // Camada 1: backend faz o scraping do HTML (nome + imagem garantidos)
     const r = await api('GET', '/admin/api/resolve-url?url=' + encodeURIComponent(originalUrl))
-    if (r && r.ok && r.name) {
-      return {
-        name:  r.name  || '',
-        price: r.price || null,
-        image: r.image || null,
+
+    if (r && r.ok) {
+      let name  = r.name  || ''
+      let image = r.image || null
+      let price = r.price || null
+
+      // Camada 2: se tem mlbId, busca preço (e complementa nome/imagem se faltou)
+      // A API ML tem CORS aberto para nosso domínio → funciona do browser
+      if (r.mlbId && (!price || !name)) {
+        const ml = await siFetchMlApi(r.mlbId)
+        if (ml) {
+          if (!name  && ml.name)  name  = ml.name
+          if (!image && ml.image) image = ml.image
+          if (!price && ml.price) price = ml.price
+        }
       }
+
+      if (name) return { name, price, image }
     }
 
-    // Estratégia 2: se o backend retornou mlbId mas sem nome,
-    // tenta a API pública do ML diretamente do browser (CORS aberto)
-    if (r && r.mlbId) {
-      const mlData = await siFetchMlApi(r.mlbId)
-      if (mlData) return mlData
-    }
-
-    // Estratégia 3: fallback via allorigins.win (para links sem MLB)
+    // Camada 3: fallback via allorigins.win (links não-ML ou erro no backend)
     return await siFetchOgMeta(originalUrl)
   } catch(e) {
     return null
