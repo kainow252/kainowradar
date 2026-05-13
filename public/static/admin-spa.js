@@ -94,14 +94,14 @@ async function loadSection(name) {
     offers: ['Ofertas', 'Gerenciar ofertas por loja'],
     stores: ['Lojas Parceiras', 'Ativar/desativar lojas e ver métricas'],
     'api-configs': ['APIs & Feeds', 'Configurar integrações e chaves de API'],
-    queue: ['Fila de Preços', 'Jobs pendentes de atualização cirúrgica'],
+    // queue: oculto do menu
     editorial: ['🤖 IA Editorial', 'Motor de destaques automáticos — analisa D1 e gera banners'],
     footer:    ['🦶 Rodapé do Site', 'Editar textos, lojas parceiras e links de informações'],
     analytics: ['Analytics', 'Cliques, conversões e performance'],
     users: ['Usuários', 'Gerenciar clientes e membros'],
     social: ['📣 Social Media', 'Gerencie contas e publique nas redes sociais'],
-    'affiliate-bot': ['🤝 Bot Afiliados ML', 'Gera links de afiliado do Mercado Livre automaticamente'],
-    'ml-import': ['🟡 Importar do ML', 'Importa produtos reais do Mercado Livre para o banco de dados'],
+    // 'affiliate-bot': oculto do menu
+    // 'ml-import': oculto do menu
     'ml-categories': ['🗂️ Categorias ML', 'Sincroniza árvore de categorias do Mercado Livre com o D1'],
     'ml-search': ['🔍 Busca ML API', 'Busca e importa produtos por categoria ou termo via API do ML'],
     'ml-crawl': ['🕷️ Crawl em Massa', 'Varre uma categoria completa do ML com paginação automática (limit=50, loop de páginas)'],
@@ -125,12 +125,12 @@ async function loadSection(name) {
     'api-configs': renderApiConfigs,
     editorial: renderEditorial,
     footer: renderFooterAdmin,
-    queue: renderQueue,
+    // queue: oculto do menu
     analytics: renderAnalytics,
     users: renderUsers,
     social: renderSocial,
-    'affiliate-bot': renderAffiliateBot,
-    'ml-import': renderMLImport,
+    // 'affiliate-bot': oculto do menu
+    // 'ml-import': oculto do menu
     'ml-categories': renderMLCategories,
     'ml-search': renderMLSearch,
     'ml-crawl': renderMLCrawl,
@@ -546,12 +546,8 @@ function _buildStoreCard(s) {
   const checked = s.is_active ? 'checked' : ''
   const urlHint = s.checkout_pattern || s.deeplink_base || '—'
 
-  // Botão "Importar Links Afiliados" só aparece no card do Mercado Livre
-  // event.stopPropagation() garante que não propague para o card pai
-  const isMeli = s.affiliate_network === 'meli-api' || (s.name || '').toLowerCase().includes('mercado livre')
-  const importBtn = isMeli
-    ? '<button onclick="event.stopPropagation();openMlAffiliateImport()" class="w-full text-xs font-semibold py-2 px-3 rounded-xl border border-yellow-300 bg-yellow-50 text-yellow-800 hover:bg-yellow-100 transition-all mt-2">📥 Importar Links Afiliados</button>'
-    : ''
+  // Botao Importar Links aparece em TODOS os cards de loja
+  const importBtn = '<button onclick="event.stopPropagation();openStoreImport(' + s.id + ',\'' + (s.name||'').replace(/'/g,'&#39;') + '\')" class="w-full text-xs font-semibold py-2 px-3 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-all mt-2">&#128229; Importar Links</button>'
 
   return (
     '<div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden hover:shadow-md transition-shadow" id="store-card-' + s.id + '">'
@@ -585,7 +581,308 @@ function _buildStoreCard(s) {
   )
 }
 
-// ── IMPORTAR LINKS AFILIADOS ML ────────────────────────────────
+// ── IMPORTAR LINKS — universal por loja ─────────────────────────
+function openStoreImport(storeId, storeName) {
+  const modal = document.getElementById('modal-container')
+  modal.innerHTML = `
+    <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+      <div class="modal" style="max-width:680px;width:96vw;max-height:90vh;overflow-y:auto">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center text-xl">&#128229;</div>
+            <div>
+              <h3 class="font-bold text-slate-800 text-lg leading-tight">Importar Links</h3>
+              <p class="text-xs text-slate-500">Loja: <strong>${storeName}</strong></p>
+            </div>
+          </div>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
+        </div>
+
+        <!-- Tabs -->
+        <div class="flex gap-1 bg-slate-100 rounded-xl p-1 mb-4">
+          <button id="si-tab-paste" onclick="siTab('paste')" class="flex-1 text-xs font-semibold py-2 rounded-lg bg-white shadow-sm text-slate-800 transition-all">&#128203; Colar Links</button>
+          <button id="si-tab-csv"   onclick="siTab('csv')"   class="flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700 transition-all">&#128196; CSV</button>
+          <button id="si-tab-history" onclick="siTab('history',${storeId})" class="flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700 transition-all">&#128339; Hist&oacute;rico</button>
+        </div>
+
+        <!-- PAINEL: Colar Links -->
+        <div id="si-panel-paste">
+          <p class="text-xs text-slate-500 mb-2">Cole um link por linha. Aperte <strong>Analisar</strong> para preencher nome, pre&ccedil;o e imagem antes de salvar.</p>
+          <textarea id="si-textarea" rows="5"
+            class="w-full rounded-xl border border-slate-200 bg-slate-50 text-sm font-mono p-3 resize-none focus:outline-none focus:border-indigo-400 focus:bg-white transition-all"
+            placeholder="https://meli.la/1guaPXV&#10;https://meli.la/1vTGDBn&#10;https://meli.la/1piMeCE"
+            oninput="siCountLinks()"></textarea>
+          <div class="flex items-center justify-between mt-1 mb-3">
+            <span id="si-count" class="text-xs text-slate-400">0 links detectados</span>
+            <button onclick="document.getElementById('si-textarea').value='';siCountLinks();document.getElementById('si-form-area').innerHTML=''" class="text-xs text-slate-400 hover:text-red-500">&#10005; Limpar</button>
+          </div>
+          <button onclick="siParseLinks(${storeId})" class="w-full py-2 rounded-xl bg-slate-700 text-white text-sm font-bold hover:bg-slate-900 transition-all mb-4">&#128269; Analisar Links</button>
+          <div id="si-form-area"></div>
+        </div>
+
+        <!-- PAINEL: CSV -->
+        <div id="si-panel-csv" class="hidden">
+          <div class="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-800 mb-3">
+            <p class="font-bold mb-1">&#128196; Formato CSV:</p>
+            <div class="font-mono space-y-0.5">
+              <div class="text-amber-600">url,name,price,image_url</div>
+              <div>https://meli.la/1guaPXV,T&ecirc;nis Adidas,299.90,https://img...</div>
+            </div>
+          </div>
+          <div class="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 transition-all" onclick="document.getElementById('si-csv-input').click()">
+            <div class="text-3xl mb-2">&#128194;</div>
+            <p class="text-sm font-semibold text-slate-700">Clique para selecionar CSV ou TXT</p>
+            <p class="text-xs text-slate-400 mt-1" id="si-csv-name">Nenhum arquivo selecionado</p>
+          </div>
+          <input type="file" id="si-csv-input" accept=".csv,.txt" class="hidden" onchange="siReadCsv(this,${storeId})">
+          <div id="si-csv-form-area" class="mt-3"></div>
+        </div>
+
+        <!-- PAINEL: Historico -->
+        <div id="si-panel-history" class="hidden">
+          <div id="si-history-content"><div class="text-center py-10 text-slate-400 text-sm">&#128260; Carregando...</div></div>
+        </div>
+      </div>
+    </div>
+  `
+  siCountLinks()
+}
+
+function siTab(tab, storeId) {
+  ['paste','csv','history'].forEach(t => {
+    const btn   = document.getElementById('si-tab-' + t)
+    const panel = document.getElementById('si-panel-' + t)
+    if (!btn || !panel) return
+    const active = t === tab
+    btn.classList.toggle('bg-white',       active)
+    btn.classList.toggle('shadow-sm',      active)
+    btn.classList.toggle('text-slate-800', active)
+    btn.classList.toggle('text-slate-500', !active)
+    panel.classList.toggle('hidden', !active)
+  })
+  if (tab === 'history' && storeId) siLoadHistory(storeId)
+}
+
+function siCountLinks() {
+  const val   = document.getElementById('si-textarea')?.value || ''
+  const count = (val.match(/https?:\/\/[^\s]+/g) || []).length
+  const el    = document.getElementById('si-count')
+  if (el) el.textContent = count + (count === 1 ? ' link detectado' : ' links detectados')
+}
+
+// Analisa os links e monta formulario visual (nome, preco, imagem) por item
+function siParseLinks(storeId) {
+  const val  = document.getElementById('si-textarea')?.value || ''
+  const urls = (val.match(/https?:\/\/[^\s,|]+/g) || []).map(u => u.replace(/[.,;)>\]]+$/, '').trim()).filter(Boolean)
+  if (!urls.length) { toast('Cole pelo menos um link antes de analisar', 'warning'); return }
+  siRenderForm(urls, storeId, 'si-form-area')
+}
+
+function siRenderForm(urls, storeId, containerId) {
+  const area = document.getElementById(containerId)
+  if (!area) return
+  area.innerHTML = `
+    <div class="space-y-3 mb-4">
+      ${urls.map((url, i) => `
+        <div class="border border-slate-200 rounded-xl p-3 bg-slate-50">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-xs font-mono text-indigo-600 truncate flex-1">${url}</span>
+          </div>
+          <div class="grid grid-cols-1 gap-2">
+            <input type="text" id="si-name-${i}" placeholder="Nome do produto (obrigatorio)" required
+              class="input text-sm" oninput="siUpdatePreview(${i})">
+            <div class="grid grid-cols-2 gap-2">
+              <input type="number" id="si-price-${i}" placeholder="Preco R$" step="0.01" min="0"
+                class="input text-sm">
+              <input type="url" id="si-img-${i}" placeholder="URL da imagem (opcional)"
+                class="input text-sm" oninput="siUpdatePreview(${i})">
+            </div>
+            <div id="si-preview-${i}" class="hidden flex items-center gap-2 mt-1">
+              <img id="si-preview-img-${i}" src="" class="w-10 h-10 rounded-lg object-cover border border-slate-200">
+              <span id="si-preview-name-${i}" class="text-xs text-slate-600 font-medium"></span>
+            </div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    <div id="si-import-progress" class="hidden mb-3">
+      <div class="h-2 bg-slate-100 rounded-full overflow-hidden">
+        <div id="si-import-bar" class="h-full bg-indigo-500 rounded-full transition-all" style="width:0%"></div>
+      </div>
+      <div id="si-import-txt" class="text-xs text-slate-500 mt-1 text-center">Importando...</div>
+    </div>
+    <div id="si-import-result" class="hidden mb-3"></div>
+    <button onclick="siSubmitForm(${JSON.stringify(urls).replace(/'/g,"&#39;")},${storeId})"
+      class="w-full py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 transition-all">
+      &#9889; Salvar ${urls.length} Produto${urls.length > 1 ? 's' : ''} no Banco
+    </button>
+  `
+}
+
+function siUpdatePreview(i) {
+  const name = document.getElementById('si-name-' + i)?.value.trim() || ''
+  const img  = document.getElementById('si-img-'  + i)?.value.trim() || ''
+  const prev = document.getElementById('si-preview-' + i)
+  if (!prev) return
+  if (name || img) {
+    prev.classList.remove('hidden')
+    const pImg  = document.getElementById('si-preview-img-'  + i)
+    const pName = document.getElementById('si-preview-name-' + i)
+    if (pImg)  { pImg.src = img || ''; pImg.style.display = img ? '' : 'none' }
+    if (pName) pName.textContent = name
+  } else {
+    prev.classList.add('hidden')
+  }
+}
+
+async function siSubmitForm(urls, storeId) {
+  // Monta bloco de texto com nome|preco|imagem para cada link
+  const lines = urls.map((url, i) => {
+    const name  = document.getElementById('si-name-'  + i)?.value.trim() || ''
+    const price = document.getElementById('si-price-' + i)?.value.trim() || ''
+    const img   = document.getElementById('si-img-'   + i)?.value.trim() || ''
+    if (!name) {
+      toast('Preencha o nome do produto ' + (i + 1), 'warning')
+      document.getElementById('si-name-' + i)?.focus()
+      return null
+    }
+    let line = url
+    if (name)  line += ' | ' + name
+    if (price) line += ' | ' + price
+    if (img)   line += ' | ' + img
+    return line
+  })
+  if (lines.some(l => l === null)) return
+
+  const prog = document.getElementById('si-import-progress')
+  const bar  = document.getElementById('si-import-bar')
+  const txt  = document.getElementById('si-import-txt')
+  if (prog) prog.classList.remove('hidden')
+
+  let pct = 0
+  const tick = setInterval(() => {
+    pct = Math.min(pct + 15, 85)
+    if (bar) bar.style.width = pct + '%'
+  }, 200)
+
+  const data = await api('POST', '/admin/api/stores/' + storeId + '/import-links', { links: lines.join('\n') })
+
+  clearInterval(tick)
+  if (bar) bar.style.width = '100%'
+  if (txt) txt.textContent = data?.ok ? 'Concluido!' : 'Erro'
+  setTimeout(() => { if (prog) prog.classList.add('hidden') }, 1200)
+
+  const resEl = document.getElementById('si-import-result')
+  if (resEl && data) { resEl.classList.remove('hidden'); siRenderResult(data, resEl) }
+
+  if (data?.ok) toast('&#10003; ' + data.imported + ' produto(s) salvos em ' + data.store_name + '!', 'success')
+  else toast(data?.error || 'Erro ao importar', 'error')
+}
+
+function siReadCsv(input, storeId) {
+  const file = input.files?.[0]
+  if (!file) return
+  document.getElementById('si-csv-name').textContent = file.name + ' (' + (file.size/1024).toFixed(1) + ' KB)'
+  const reader = new FileReader()
+  reader.onload = e => {
+    const text  = e.target.result
+    const lines = text.trim().split('\n').filter(Boolean)
+    // Pula cabecalho se for url,name,...
+    const data  = /^url[,;]/i.test(lines[0]) ? lines.slice(1) : lines
+    // Extrai urls
+    const urls  = data.map(l => {
+      const sep = l.includes(';') ? ';' : ','
+      return l.split(sep)[0].replace(/^["']|["']$/g,'').trim()
+    }).filter(u => u.startsWith('http'))
+    if (!urls.length) { toast('Nenhuma URL encontrada no arquivo', 'warning'); return }
+    // Preenche textarea e vai para aba paste com formulario
+    const ta = document.getElementById('si-textarea')
+    if (ta) ta.value = urls.join('\n')
+    siTab('paste')
+    siCountLinks()
+    siParseLinks(storeId)
+    // Pre-preenche nome/preco/imagem do CSV
+    setTimeout(() => {
+      data.forEach((l, i) => {
+        const sep   = l.includes(';') ? ';' : ','
+        const parts = l.split(sep).map(p => p.replace(/^["']|["']$/g,'').trim())
+        if (parts[1] && document.getElementById('si-name-'  + i)) document.getElementById('si-name-'  + i).value = parts[1]
+        if (parts[2] && document.getElementById('si-price-' + i)) document.getElementById('si-price-' + i).value = parts[2].replace(/[^0-9.]/g,'')
+        if (parts[3] && document.getElementById('si-img-'   + i)) document.getElementById('si-img-'   + i).value = parts[3]
+        siUpdatePreview(i)
+      })
+    }, 100)
+  }
+  reader.readAsText(file)
+}
+
+function siRenderResult(data, container) {
+  if (!data) return
+  const ok   = data.imported || 0
+  const skip = data.skipped  || 0
+  const err  = data.errors   || 0
+  container.innerHTML = `
+    <div class="grid grid-cols-3 gap-2 mb-3">
+      <div class="bg-green-50 rounded-xl p-3 text-center">
+        <div class="text-2xl font-black text-green-700">${ok}</div>
+        <div class="text-xs text-green-600 mt-0.5">Importados</div>
+      </div>
+      <div class="bg-blue-50 rounded-xl p-3 text-center">
+        <div class="text-2xl font-black text-blue-700">${skip}</div>
+        <div class="text-xs text-blue-600 mt-0.5">Atualizados</div>
+      </div>
+      <div class="bg-red-50 rounded-xl p-3 text-center">
+        <div class="text-2xl font-black text-red-700">${err}</div>
+        <div class="text-xs text-red-600 mt-0.5">Erros</div>
+      </div>
+    </div>
+    ${(data.results || []).map(r => `
+      <div class="flex items-center gap-2 py-1.5 border-b border-slate-50 text-xs">
+        <span class="${r.status==='importado'?'text-green-600':r.status==='atualizado'?'text-blue-500':'text-red-500'}">
+          ${r.status==='importado'?'&#10003;':r.status==='atualizado'?'&#8635;':'&#10007;'}
+        </span>
+        <div class="flex-1 min-w-0">
+          <div class="font-medium text-slate-700 truncate">${r.name || r.url}</div>
+          <div class="text-slate-400 truncate text-xs">${r.status}</div>
+        </div>
+      </div>
+    `).join('')}
+  `
+}
+
+async function siLoadHistory(storeId) {
+  const el = document.getElementById('si-history-content')
+  if (!el) return
+  const data = await api('GET', '/admin/api/stores/' + storeId + '/import-links/history')
+  const rows = data?.results || []
+  if (!rows.length) {
+    el.innerHTML = '<div class="text-center py-10 text-slate-400 text-sm">&#128237; Nenhum link importado ainda nesta loja</div>'
+    return
+  }
+  el.innerHTML = `
+    <div class="text-xs text-slate-500 mb-2">${rows.length} produto(s) importado(s) manualmente</div>
+    <div class="space-y-2 max-h-96 overflow-y-auto">
+      ${rows.map(r => `
+        <div class="flex items-center gap-3 py-2 border-b border-slate-50 text-xs">
+          ${r.image_url
+            ? '<img src="'+r.image_url+'" class="w-12 h-12 rounded-xl object-cover flex-shrink-0 border border-slate-100">'
+            : '<div class="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center flex-shrink-0 text-xl">&#128722;</div>'}
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold text-slate-700 truncate">${r.title || '&mdash;'}</div>
+            <a href="${r.affiliate_url}" target="_blank" class="text-indigo-500 hover:underline truncate block">${r.affiliate_url}</a>
+            <div class="text-slate-400">${fDate(r.created_at)}</div>
+          </div>
+          <div class="text-right flex-shrink-0">
+            ${r.price > 0 ? '<div class="font-bold text-green-700 text-sm">'+fBRL(r.price)+'</div>' : '<div class="text-slate-400">sem preco</div>'}
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `
+}
+
+
+// ── IMPORTAR LINKS AFILIADOS ML (legado) ────────────────────────
 function openMlAffiliateImport() {
   const modal = document.getElementById('modal-container')
   modal.innerHTML = `

@@ -1859,6 +1859,232 @@ admin.get('/api/stores/ml/import-history', async (c) => {
   return c.json({ results })
 })
 
+// ── POST /admin/api/stores/:storeId/import-links ─────────────────
+// Importa produtos/links em massa para qualquer loja
+// Aceita bloco de texto ou CSV com URLs (uma por linha)
+// Cria produto + oferta no banco → aparece pro usuário final imediatamente
+//
+// Formato suportado no bloco de texto:
+//   URL apenas:            https://meli.la/1guaPXV
+//   URL | Nome:            https://meli.la/1guaPXV | Tênis Adidas
+//   URL | Nome | Preço:    https://meli.la/1guaPXV | Tênis Adidas | 299.90
+//   URL | Nome | Preço | Img: https://... | Nome | 299.90 | https://img...
+// Formato CSV: url,name,price,image_url (primeira linha pode ser cabeçalho)
+admin.post('/api/stores/:storeId/import-links', async (c) => {
+  const { DB } = c.env
+  const storeId = parseInt(c.req.param('storeId'))
+  if (!storeId) return c.json({ error: 'storeId inválido' }, 400)
+
+  // Busca a loja no banco
+  const store = await DB.prepare(`SELECT id, name, affiliate_network FROM stores WHERE id = ?`).bind(storeId).first<any>()
+  if (!store) return c.json({ error: 'Loja não encontrada' }, 404)
+
+  const body = await c.req.json().catch(() => ({}))
+  const raw: string = body.links || ''
+  if (!raw.trim()) return c.json({ error: 'Nenhum link enviado' }, 400)
+
+  // ── Parser de linhas ─────────────────────────────────────────
+  // Cada linha pode ser:
+  //   - só URL
+  //   - URL | Nome
+  //   - URL | Nome | Preço
+  //   - URL | Nome | Preço | ImageURL
+  //   - CSV: url,name,price,image_url
+  const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+
+  // Detecta se é CSV (primeira linha tem vírgula e parece cabeçalho)
+  const firstLine = lines[0] || ''
+  const isCSV = /^url[,;]/i.test(firstLine) || (firstLine.includes(',') && !firstLine.startsWith('http'))
+
+  // Pula cabeçalho CSV se existir
+  const dataLines = isCSV && /^url[,;]/i.test(firstLine) ? lines.slice(1) : lines
+
+  interface ParsedItem {
+    url: string
+    name: string
+    price: number | null
+    image_url: string | null
+  }
+
+  function parseLine(line: string): ParsedItem | null {
+    // Tenta separar por | (bloco de texto)
+    if (line.includes('|')) {
+      const parts = line.split('|').map(p => p.trim())
+      const url = parts[0]
+      if (!url.startsWith('http')) return null
+      return {
+        url,
+        name: parts[1] || '',
+        price: parts[2] ? parseFloat(parts[2].replace(/[^0-9.,]/g, '').replace(',', '.')) || null : null,
+        image_url: parts[3] && parts[3].startsWith('http') ? parts[3] : null,
+      }
+    }
+    // Tenta separar por , (CSV)
+    if (line.includes(',')) {
+      const parts = line.split(',').map(p => p.trim().replace(/^["']|["']$/g, ''))
+      const url = parts[0]
+      if (!url.startsWith('http')) return null
+      return {
+        url,
+        name: parts[1] || '',
+        price: parts[2] ? parseFloat(parts[2].replace(/[^0-9.,]/g, '').replace(',', '.')) || null : null,
+        image_url: parts[3] && parts[3].startsWith('http') ? parts[3] : null,
+      }
+    }
+    // Só URL
+    if (line.startsWith('http')) {
+      return { url: line, name: '', price: null, image_url: null }
+    }
+    return null
+  }
+
+  if (dataLines.length === 0) return c.json({ error: 'Nenhuma linha válida encontrada' }, 400)
+  if (dataLines.length > 500) return c.json({ error: 'Máximo 500 links por importação' }, 400)
+
+  // ── Processa cada linha ──────────────────────────────────────
+  function slugify(text: string): string {
+    return text
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .substring(0, 120)
+  }
+
+  const results: any[] = []
+  let imported = 0
+  let skipped  = 0
+  let errors   = 0
+
+  for (const line of dataLines) {
+    const item = parseLine(line)
+    if (!item) { skipped++; continue }
+
+    const affiliateUrl = item.url
+    const name = (item.name || '').trim()
+    // Rejeita itens sem nome — o frontend DEVE fornecer o nome antes de salvar
+    if (!name) {
+      results.push({ url: affiliateUrl, name: '', status: 'erro', error: 'Nome obrigatório' })
+      errors++
+      continue
+    }
+
+    const price   = item.price ?? 0
+    const imgUrl  = item.image_url || null
+    const slug    = slugify(name) + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6)
+    const extId   = 'import-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6)
+
+    try {
+      // 1) Cria o produto se não existir (ou cria novo se sem nome único)
+      let productId: number | null = null
+
+      // Tenta achar oferta existente pelo affiliate_url exato → UPSERT
+      const existingOffer = await DB.prepare(
+        `SELECT id, product_id, title FROM offers WHERE affiliate_url = ? AND store_id = ? LIMIT 1`
+      ).bind(affiliateUrl, storeId).first<any>()
+
+      if (existingOffer) {
+        // Atualiza título e preço se vieram preenchidos
+        const hasNewName  = name && name !== existingOffer.title && !affiliateUrl.includes(name)
+        const hasNewPrice = price > 0
+        if (hasNewName || hasNewPrice) {
+          await DB.prepare(`
+            UPDATE offers SET
+              title       = CASE WHEN ? != '' THEN ? ELSE title END,
+              price       = CASE WHEN ? > 0   THEN ? ELSE price END,
+              image_url   = CASE WHEN ? != '' THEN ? ELSE image_url END,
+              last_updated = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).bind(name, name, price, price, imgUrl||'', imgUrl||'', existingOffer.id).run()
+
+          // Atualiza também o produto
+          await DB.prepare(`
+            UPDATE products SET
+              name       = CASE WHEN ? != '' THEN ? ELSE name END,
+              best_price = CASE WHEN ? > 0 AND (best_price IS NULL OR ? < best_price) THEN ? ELSE best_price END,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).bind(name, name, price, price, price, existingOffer.product_id).run()
+
+          results.push({ url: affiliateUrl, status: 'atualizado', product_id: existingOffer.product_id, name })
+          imported++
+        } else {
+          results.push({ url: affiliateUrl, status: 'já existe', product_id: existingOffer.product_id, name: existingOffer.title })
+          skipped++
+        }
+        continue
+      }
+
+      // Cria produto novo
+      const prodResult = await DB.prepare(`
+        INSERT INTO products (name, slug, source, is_active, created_at, updated_at, best_price, best_store_id)
+        VALUES (?, ?, 'manual', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?)
+      `).bind(name, slug, price > 0 ? price : null, storeId).run()
+
+      productId = prodResult.meta.last_row_id as number
+
+      if (imgUrl) {
+        await DB.prepare(`UPDATE products SET image_url = ? WHERE id = ?`).bind(imgUrl, productId).run()
+      }
+
+      // 2) Cria a oferta vinculada ao produto + loja
+      await DB.prepare(`
+        INSERT INTO offers
+          (product_id, store_id, external_id, title, price, affiliate_url, image_url,
+           is_active, in_stock, free_shipping, source, created_at, last_updated)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, 0, 'manual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).bind(
+        productId, storeId, extId,
+        name, price > 0 ? price : 0,
+        affiliateUrl, imgUrl
+      ).run()
+
+      // 3) Atualiza contadores do produto
+      await DB.prepare(`
+        UPDATE products
+        SET offer_count = offer_count + 1,
+            best_price = CASE WHEN best_price IS NULL OR ? < best_price THEN ? ELSE best_price END,
+            best_store_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(price > 0 ? price : 0, price > 0 ? price : 0, storeId, productId).run()
+
+      results.push({ url: affiliateUrl, status: 'importado', product_id: productId, name })
+      imported++
+
+    } catch (e: any) {
+      results.push({ url: affiliateUrl, status: 'erro', error: e?.message || String(e) })
+      errors++
+    }
+  }
+
+  return c.json({
+    ok: true,
+    store_id: storeId,
+    store_name: store.name,
+    total: dataLines.length,
+    imported,
+    skipped,
+    errors,
+    results,
+  })
+})
+
+// ── GET /admin/api/stores/:storeId/import-links/history ──────────
+admin.get('/api/stores/:storeId/import-links/history', async (c) => {
+  const { DB } = c.env
+  const storeId = parseInt(c.req.param('storeId'))
+  const rows = await DB.prepare(`
+    SELECT o.id, o.title, o.affiliate_url, o.price, o.image_url, o.created_at, p.slug
+    FROM offers o
+    LEFT JOIN products p ON p.id = o.product_id
+    WHERE o.store_id = ? AND o.source = 'manual'
+    ORDER BY o.created_at DESC
+    LIMIT 100
+  `).bind(storeId).all<any>()
+  return c.json({ results: rows.results })
+})
+
 // ── POST /admin/api/cron/run — Executa scraper ML manualmente ──
 admin.post('/api/cron/run', async (c) => {
   const { DB, CACHE } = c.env
@@ -6729,13 +6955,7 @@ function renderAdminSPA(): string {
         <span class="text-lg">💰</span> Ofertas
       </div>
       <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Integrações</div>
-      <!-- ml-import, ml-categories, ml-search ocultos do menu -->
-      <div onclick="showSection('ml-crawl')" class="sidebar-link" data-section="ml-crawl">
-        <span class="text-lg">🕷️</span> Crawl em Massa
-      </div>
-      <div onclick="showSection('ml-linkbuilder')" class="sidebar-link" data-section="ml-linkbuilder">
-        <span class="text-lg">🔗</span> ML LinkBuilder
-      </div>
+      <!-- ml-import, ml-categories, ml-search, ml-crawl, ml-linkbuilder ocultos do menu -->
       <div onclick="showSection('api-keys')" class="sidebar-link" data-section="api-keys">
         <span class="text-lg">🔑</span> API Keys
       </div>
@@ -6797,7 +7017,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js"><\/script>
+<script src="/static/admin-spa.js?v=20260513"><\/script>
 </body>
 </html>`
 }
