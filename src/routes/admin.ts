@@ -4893,53 +4893,70 @@ admin.post('/api/price-sync/run', async (c) => {
         let affUrl: string | null = product.affiliate_url
         let itemIdForOffer = mlItemId
 
-        // Tenta /products/{mlItemId}/items — funciona se ml_item_id é um catalog product id
-        try {
-          const prodItemsRes = await fetch(
-            `${PRICE_SYNC_ML_API}/products/${mlItemId}/items?limit=5`,
-            { headers, signal: AbortSignal.timeout(8000) }
-          )
-          if (prodItemsRes.ok) {
-            const prodItemsData: any = await prodItemsRes.json()
-            const items = (prodItemsData.results || []).filter((it: any) => it.price && it.price > 0)
-            if (items.length) {
-              // Menor preço
-              const best = items.reduce((a: any, b: any) => (a.price <= b.price ? a : b))
-              price = best.price
-              itemIdForOffer = best.item_id || mlItemId
-              // Monta link afiliado com o item_id real
-              affUrl = `https://produto.mercadolivre.com.br/${itemIdForOffer.replace('MLB', 'MLB-')}?matt_word=${PRICE_SYNC_PUB_ID}&matt_tool=${PRICE_SYNC_MATT_TOOL}&forceInApp=true`
-            }
-          }
-        } catch { /* ignora, tenta próximo fluxo */ }
+        // Detecta tipo do ID:
+        // Catalog product ID: MLB + ≤8 dígitos (ex: MLB24045332)
+        // Item ID longo:      MLB + ≥10 dígitos (ex: MLB4410983832)
+        const numDigits = mlItemId.replace('MLB', '').length
+        const isCatalogId = numDigits <= 8
 
-        // Se não obteve preço ainda, tenta /items/{mlItemId} (pode funcionar para itens específicos)
-        if (price === null) {
+        // --- Fluxo 1: catalog product ID curto → /products/{id}/items (preço direto) ---
+        if (isCatalogId) {
           try {
-            const itemRes = await fetch(
-              `${PRICE_SYNC_ML_API}/items/${mlItemId}?attributes=id,price,thumbnail,permalink,status,available_quantity`,
+            const prodItemsRes = await fetch(
+              `${PRICE_SYNC_ML_API}/products/${mlItemId}/items?limit=3`,
               { headers, signal: AbortSignal.timeout(8000) }
             )
-            if (itemRes.ok) {
-              const item: any = await itemRes.json()
-              if (item?.status === 'closed') {
-                // Item encerrado — desativa
-                return { action: 'inactivate', product }
-              }
-              if (item?.price) {
-                price = item.price
-                image = item.thumbnail || image
-                const plink = item.permalink
-                affUrl = plink
-                  ? `${plink}?matt_word=${PRICE_SYNC_PUB_ID}&matt_tool=${PRICE_SYNC_MATT_TOOL}&forceInApp=true`
-                  : affUrl
+            if (prodItemsRes.ok) {
+              const prodItemsData: any = await prodItemsRes.json()
+              const items = (prodItemsData.results || []).filter((it: any) => it.price && it.price > 0)
+              if (items.length) {
+                const best = items.reduce((a: any, b: any) => (a.price <= b.price ? a : b))
+                price = best.price
+                itemIdForOffer = best.item_id || mlItemId
+                affUrl = `https://produto.mercadolivre.com.br/${itemIdForOffer.replace('MLB', 'MLB-')}?matt_word=${PRICE_SYNC_PUB_ID}&matt_tool=${PRICE_SYNC_MATT_TOOL}&forceInApp=true`
               }
             }
-          } catch { /* ignora */ }
+          } catch { /* fallback abaixo */ }
+        }
+
+        // --- Fluxo 2: item ID longo → busca catalog product pelo nome → /products/{id}/items ---
+        // Funciona de IPs externos: /products/search?product_identifier= não é bloqueado
+        if (price === null) {
+          try {
+            const searchName = encodeURIComponent(product.name.substring(0, 60))
+            const searchRes = await fetch(
+              `${PRICE_SYNC_ML_API}/products/search?site_id=MLB&product_identifier=${searchName}&limit=3`,
+              { headers, signal: AbortSignal.timeout(8000) }
+            )
+            if (searchRes.ok) {
+              const searchData: any = await searchRes.json()
+              const catalogId = searchData.results?.[0]?.id
+              if (catalogId) {
+                // Atualiza ml_item_id no banco para o catalog product ID (para futuros syncs)
+                await DB.prepare(`UPDATE products SET ml_item_id = ? WHERE id = ?`)
+                  .bind(catalogId, product.id).run().catch(() => {})
+
+                const prodItemsRes = await fetch(
+                  `${PRICE_SYNC_ML_API}/products/${catalogId}/items?limit=3`,
+                  { headers, signal: AbortSignal.timeout(8000) }
+                )
+                if (prodItemsRes.ok) {
+                  const prodItemsData: any = await prodItemsRes.json()
+                  const items = (prodItemsData.results || []).filter((it: any) => it.price && it.price > 0)
+                  if (items.length) {
+                    const best = items.reduce((a: any, b: any) => (a.price <= b.price ? a : b))
+                    price = best.price
+                    itemIdForOffer = best.item_id || catalogId
+                    affUrl = `https://produto.mercadolivre.com.br/${itemIdForOffer.replace('MLB', 'MLB-')}?matt_word=${PRICE_SYNC_PUB_ID}&matt_tool=${PRICE_SYNC_MATT_TOOL}&forceInApp=true`
+                  }
+                }
+              }
+            }
+          } catch { /* sem preço */ }
         }
 
         if (price === null) {
-          return { action: 'error', product, reason: 'sem preço nos endpoints disponíveis' }
+          return { action: 'error', product, reason: 'sem preço (catalog ID não encontrado)' }
         }
 
         return { action: 'update', product, price, image, affUrl, itemIdForOffer }
