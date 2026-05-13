@@ -104,6 +104,7 @@ async function loadSection(name) {
     'ml-import': ['🟡 Importar do ML', 'Importa produtos reais do Mercado Livre para o banco de dados'],
     'ml-categories': ['🗂️ Categorias ML', 'Sincroniza árvore de categorias do Mercado Livre com o D1'],
     'ml-search': ['🔍 Busca ML API', 'Busca e importa produtos por categoria ou termo via API do ML'],
+    'ml-crawl': ['🕷️ Crawl em Massa', 'Varre uma categoria completa do ML com paginação automática (limit=50, loop de páginas)'],
     'affiliate-codes': ['🔗 Códigos Afiliados', 'Configure seus códigos por rede e gere links para todos os produtos'],
     'buscape-import': ['🛍️ Importar do Buscapé', 'Importa produtos e preços de múltiplas lojas via Buscapé — gera links afiliados automaticamente'],
     'lomadee-import': ['🟠 Importar Lomadee', 'Busca produtos e gera links afiliados automáticos via API da Lomadee (136 lojas parceiras)'],
@@ -131,6 +132,7 @@ async function loadSection(name) {
     'ml-import': renderMLImport,
     'ml-categories': renderMLCategories,
     'ml-search': renderMLSearch,
+    'ml-crawl': renderMLCrawl,
     'affiliate-codes': renderAffiliateCodes,
     'buscape-import': renderBuscapeImport,
     'lomadee-import': renderLomadeeImport,
@@ -7339,4 +7341,439 @@ async function mlSearchImportAll() {
   } else {
     toast(`❌ Erro: ${res?.error || 'falha'}`, 'error')
   }
+}
+
+// ════════════════════════════════════════════════════════════
+// SEÇÃO: Crawl em Massa (paginação automática por categoria)
+// ════════════════════════════════════════════════════════════
+
+const CrawlState = {
+  running: false,
+  log: [],
+  lastResult: null,
+}
+
+function renderMLCrawl(area) {
+  area.innerHTML = `
+    <div class="space-y-6">
+
+      <!-- Configurações do Crawl -->
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+        <h3 class="font-bold text-slate-800 mb-4 flex items-center gap-2">
+          <span class="text-xl">⚙️</span> Configurações do Crawl
+        </h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+
+          <!-- Categoria ML -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5">Categoria ML (ID)</label>
+            <select id="crawl-cat-id" class="input">
+              <option value="">⏳ Carregando categorias...</option>
+            </select>
+          </div>
+
+          <!-- Slug -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5">Slug (para D1)</label>
+            <input id="crawl-slug" type="text" class="input" placeholder="ex: smartphones" value="">
+          </div>
+
+          <!-- Máximo de itens -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5">Máximo de Itens (1–1000)</label>
+            <input id="crawl-max" type="number" min="1" max="1000" value="200" class="input">
+          </div>
+
+          <!-- Ordenação -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5">Ordenação</label>
+            <select id="crawl-sort" class="input">
+              <option value="relevance">⭐ Relevância (padrão)</option>
+              <option value="sales_high">🔥 Mais Vendidos</option>
+              <option value="price_asc">💲 Menor Preço</option>
+              <option value="price_desc">💎 Maior Preço</option>
+            </select>
+          </div>
+
+          <!-- Modo -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5">Modo</label>
+            <select id="crawl-mode" class="input">
+              <option value="save">💾 Salvar no D1</option>
+              <option value="dry_run">👁️ Dry Run (só contar)</option>
+            </select>
+          </div>
+
+        </div>
+
+        <!-- Info rápida sobre paginação -->
+        <div class="mt-4 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700">
+          <strong>Como funciona:</strong> O crawler faz chamadas de 50 itens em loop (offset=0, 50, 100…) até atingir o máximo configurado ou o total disponível na categoria. 
+          A ML API limita a <strong>1.000 itens por busca</strong>. Itens já existentes são atualizados; novos são criados com offer placeholder.
+        </div>
+      </div>
+
+      <!-- Botões de ação -->
+      <div class="flex flex-wrap gap-3">
+        <button id="crawl-run-btn" onclick="mlCrawlRun()"
+          class="btn-primary flex items-center gap-2">
+          <span>🕷️</span> Iniciar Crawl
+        </button>
+        <button onclick="mlCrawlPreview()"
+          class="btn-secondary flex items-center gap-2">
+          <span>👁️</span> Preview (dry run)
+        </button>
+        <button onclick="mlCrawlClear()"
+          class="text-xs text-slate-400 hover:text-slate-600 px-3 py-2 rounded-lg transition-colors">
+          🗑️ Limpar log
+        </button>
+      </div>
+
+      <!-- Barra de progresso -->
+      <div id="crawl-progress-wrap" class="hidden">
+        <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-semibold text-slate-700">Processando...</span>
+            <span id="crawl-progress-pct" class="text-sm font-bold text-blue-600">0%</span>
+          </div>
+          <div class="w-full bg-slate-100 rounded-full h-2.5">
+            <div id="crawl-progress-bar" class="bg-blue-500 h-2.5 rounded-full transition-all duration-500" style="width:0%"></div>
+          </div>
+          <p id="crawl-progress-msg" class="text-xs text-slate-500 mt-2">Aguardando...</p>
+        </div>
+      </div>
+
+      <!-- Resultado -->
+      <div id="crawl-result" class="hidden">
+        <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
+          <h3 class="font-bold text-slate-800 flex items-center gap-2">
+            <span>📊</span> Resultado do Crawl
+          </h3>
+          <div id="crawl-result-content"></div>
+        </div>
+      </div>
+
+      <!-- Log de execução -->
+      <div id="crawl-log-wrap" class="hidden">
+        <div class="bg-slate-900 rounded-2xl p-4">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Log de execução</span>
+            <button onclick="mlCrawlClear()" class="text-xs text-slate-500 hover:text-slate-300">limpar</button>
+          </div>
+          <div id="crawl-log" class="font-mono text-xs text-green-400 space-y-0.5 max-h-64 overflow-y-auto"></div>
+        </div>
+      </div>
+
+      <!-- Histórico de categorias crawleadas -->
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+        <h3 class="font-bold text-slate-800 mb-4 flex items-center gap-2">
+          <span class="text-xl">📋</span> Categorias Disponíveis
+          <button onclick="mlCrawlLoadCats()" class="btn-secondary ml-auto text-xs">↻ Recarregar</button>
+        </h3>
+        <div id="crawl-cats-table">
+          <p class="text-sm text-slate-400">Carregando...</p>
+        </div>
+      </div>
+
+    </div>
+  `
+
+  // Carrega categorias no select e na tabela
+  mlCrawlLoadCats()
+}
+
+async function mlCrawlLoadCats() {
+  try {
+    const data = await api('GET', '/admin/api/ml/sync-categories')
+    const cats = data?.categories || []
+
+    // Popula select
+    const sel = document.getElementById('crawl-cat-id')
+    if (sel) {
+      if (!cats.length) {
+        sel.innerHTML = '<option value="">— Nenhuma categoria no D1 — rode Sync primeiro —</option>'
+      } else {
+        sel.innerHTML = '<option value="">— Selecione uma categoria —</option>' +
+          cats.filter(c => c.ml_category_id).map(c =>
+            `<option value="${c.ml_category_id}" data-slug="${c.slug}">${c.icon || '🛍️'} ${c.name} (${c.ml_category_id})</option>`
+          ).join('')
+      }
+
+      // Auto-preenche slug ao mudar categoria
+      sel.onchange = () => {
+        const opt = sel.selectedOptions[0]
+        const slugEl = document.getElementById('crawl-slug')
+        if (slugEl && opt?.dataset?.slug) slugEl.value = opt.dataset.slug
+      }
+    }
+
+    // Tabela de categorias
+    const tableEl = document.getElementById('crawl-cats-table')
+    if (tableEl) {
+      if (!cats.length) {
+        tableEl.innerHTML = `
+          <div class="text-center py-8 text-slate-400">
+            <p class="text-2xl mb-2">🗂️</p>
+            <p class="text-sm">Nenhuma categoria no D1.</p>
+            <button onclick="showSection('ml-categories')" class="mt-2 btn-primary text-xs">
+              Ir para Sync de Categorias →
+            </button>
+          </div>`
+        return
+      }
+
+      tableEl.innerHTML = `
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr>
+                <th class="table-th rounded-tl-lg">Ícone</th>
+                <th class="table-th">Nome</th>
+                <th class="table-th">ID ML</th>
+                <th class="table-th">Slug</th>
+                <th class="table-th text-right">Produtos</th>
+                <th class="table-th rounded-tr-lg text-right">Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${cats.map(c => `
+                <tr class="hover:bg-slate-50 transition-colors">
+                  <td class="table-td text-xl">${c.icon || '🛍️'}</td>
+                  <td class="table-td font-medium text-slate-800">${c.name}</td>
+                  <td class="table-td font-mono text-xs text-slate-500">${c.ml_category_id || '—'}</td>
+                  <td class="table-td font-mono text-xs text-slate-500">${c.slug}</td>
+                  <td class="table-td text-right">
+                    <span class="badge-blue">${c.product_count || 0}</span>
+                  </td>
+                  <td class="table-td text-right">
+                    ${c.ml_category_id ? `
+                      <button onclick="mlCrawlQuick('${c.ml_category_id}','${c.slug}')"
+                        class="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold px-3 py-1 rounded-lg transition-colors">
+                        🕷️ Crawl
+                      </button>` : '<span class="text-slate-300 text-xs">sem ID</span>'}
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+        <p class="text-xs text-slate-400 mt-3">${data.total} categorias — ${data.with_ml_id} com ID ML — ${data.with_products} com produtos</p>
+      `
+    }
+  } catch (e) {
+    const tableEl = document.getElementById('crawl-cats-table')
+    if (tableEl) tableEl.innerHTML = `<p class="text-sm text-red-500">Erro ao carregar: ${e.message}</p>`
+  }
+}
+
+function mlCrawlQuick(catId, slug) {
+  const sel = document.getElementById('crawl-cat-id')
+  const slugEl = document.getElementById('crawl-slug')
+  if (sel) sel.value = catId
+  if (slugEl) slugEl.value = slug
+  // Scroll para o topo da seção
+  document.querySelector('#content-area')?.scrollTo({ top: 0, behavior: 'smooth' })
+  toast(`✅ Categoria ${catId} selecionada — ajuste os parâmetros e clique em Iniciar Crawl`, 'info')
+}
+
+async function mlCrawlPreview() {
+  const catId = document.getElementById('crawl-cat-id')?.value
+  const slug  = document.getElementById('crawl-slug')?.value || 'outros'
+  if (!catId) { toast('Selecione uma categoria ML', 'error'); return }
+
+  _mlCrawlAddLog(`👁️ Dry run iniciado para ${catId}...`)
+  mlCrawlShowProgress(true, 0, 'Contando itens disponíveis...')
+
+  const res = await api('POST', '/admin/api/ml/crawl-category', {
+    category_id: catId,
+    slug,
+    max_items: 50,
+    sort: document.getElementById('crawl-sort')?.value || 'relevance',
+    dry_run: true,
+  })
+
+  mlCrawlShowProgress(false)
+
+  if (res?.ok) {
+    _mlCrawlAddLog(`✅ Preview: ${res.total_available} itens disponíveis na categoria (${res.fetched} na 1ª página)`)
+    toast(`👁️ ${res.message}`, 'success')
+    _mlCrawlShowResult(res)
+  } else {
+    _mlCrawlAddLog(`❌ Erro: ${res?.error || 'falha'}`)
+    toast(`❌ ${res?.error || 'Erro no dry run'}`, 'error')
+  }
+}
+
+async function mlCrawlRun() {
+  const catId   = document.getElementById('crawl-cat-id')?.value
+  const slug    = (document.getElementById('crawl-slug')?.value || 'outros').trim()
+  const maxItems = parseInt(document.getElementById('crawl-max')?.value || '200')
+  const sort    = document.getElementById('crawl-sort')?.value || 'relevance'
+  const mode    = document.getElementById('crawl-mode')?.value || 'save'
+  const dryRun  = mode === 'dry_run'
+
+  if (!catId) { toast('Selecione uma categoria ML', 'error'); return }
+  if (!slug)  { toast('Informe o slug da categoria', 'error'); return }
+  if (CrawlState.running) { toast('Crawl já em andamento...', 'error'); return }
+
+  CrawlState.running = true
+  CrawlState.log = []
+
+  const btn = document.getElementById('crawl-run-btn')
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="animate-spin">🔄</span> Crawleando...' }
+
+  const expectedPages = Math.ceil(maxItems / 50)
+  _mlCrawlAddLog(`🕷️ Iniciando crawl: ${catId} → slug="${slug}" | max=${maxItems} | sort=${sort} | ${dryRun ? 'DRY RUN' : 'SALVANDO'}`)
+  _mlCrawlAddLog(`📄 Estimativa: ~${expectedPages} página(s) × 50 itens`)
+  mlCrawlShowProgress(true, 5, `Iniciando crawl de ${catId}...`)
+
+  // Simula progresso enquanto aguarda (o endpoint é síncrono)
+  let fakeProgress = 5
+  const progressInterval = setInterval(() => {
+    fakeProgress = Math.min(90, fakeProgress + (90 / expectedPages / 3))
+    const pct = Math.round(fakeProgress)
+    mlCrawlShowProgress(true, pct, `Processando páginas... (~${pct}%)`)
+  }, 800)
+
+  try {
+    const startTs = Date.now()
+
+    const res = await api('POST', '/admin/api/ml/crawl-category', {
+      category_id: catId,
+      slug,
+      max_items:   maxItems,
+      sort,
+      dry_run:     dryRun,
+    })
+
+    clearInterval(progressInterval)
+    mlCrawlShowProgress(true, 100, 'Concluído!')
+    setTimeout(() => mlCrawlShowProgress(false), 1200)
+
+    const elapsed = ((Date.now() - startTs) / 1000).toFixed(1)
+
+    if (res?.ok || res?.fetched > 0) {
+      _mlCrawlAddLog(`✅ Concluído em ${elapsed}s`)
+      _mlCrawlAddLog(`   📦 Total disponível na categoria: ${res.total_available}`)
+      _mlCrawlAddLog(`   📄 Páginas processadas: ${res.pages}`)
+      _mlCrawlAddLog(`   📥 Itens buscados: ${res.fetched}`)
+      if (!dryRun) {
+        _mlCrawlAddLog(`   🆕 Criados: ${res.created}`)
+        _mlCrawlAddLog(`   🔄 Atualizados: ${res.updated}`)
+        _mlCrawlAddLog(`   ⏭️ Ignorados: ${res.skipped}`)
+      }
+      if (res.errors?.length) {
+        res.errors.forEach(e => _mlCrawlAddLog(`   ⚠️ ${e}`))
+      }
+      toast(`✅ ${res.message}`, 'success')
+      _mlCrawlShowResult(res)
+    } else {
+      _mlCrawlAddLog(`❌ Erro: ${res?.error || 'resposta inválida'}`)
+      if (res?.errors?.length) res.errors.forEach(e => _mlCrawlAddLog(`   ⚠️ ${e}`))
+      toast(`❌ ${res?.error || 'Erro no crawl'}`, 'error')
+    }
+
+    // Atualiza tabela de categorias
+    mlCrawlLoadCats()
+
+  } catch (e) {
+    clearInterval(progressInterval)
+    mlCrawlShowProgress(false)
+    _mlCrawlAddLog(`❌ Exceção: ${e.message}`)
+    toast(`❌ Erro: ${e.message}`, 'error')
+  } finally {
+    CrawlState.running = false
+    if (btn) { btn.disabled = false; btn.innerHTML = '<span>🕷️</span> Iniciar Crawl' }
+  }
+}
+
+function _mlCrawlAddLog(msg) {
+  CrawlState.log.push(msg)
+  const logEl = document.getElementById('crawl-log')
+  const wrap  = document.getElementById('crawl-log-wrap')
+  if (wrap) wrap.classList.remove('hidden')
+  if (logEl) {
+    const ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    logEl.innerHTML += `<div><span class="text-slate-500">[${ts}]</span> ${msg}</div>`
+    logEl.scrollTop = logEl.scrollHeight
+  }
+}
+
+function mlCrawlShowProgress(show, pct = 0, msg = '') {
+  const wrap = document.getElementById('crawl-progress-wrap')
+  const bar  = document.getElementById('crawl-progress-bar')
+  const pctEl = document.getElementById('crawl-progress-pct')
+  const msgEl = document.getElementById('crawl-progress-msg')
+  if (!wrap) return
+  if (!show) { wrap.classList.add('hidden'); return }
+  wrap.classList.remove('hidden')
+  if (bar)   bar.style.width   = `${pct}%`
+  if (pctEl) pctEl.textContent = `${pct}%`
+  if (msgEl) msgEl.textContent = msg
+}
+
+function _mlCrawlShowResult(res) {
+  const el = document.getElementById('crawl-result')
+  const content = document.getElementById('crawl-result-content')
+  if (!el || !content) return
+  el.classList.remove('hidden')
+
+  const isOk = res.ok || res.fetched > 0
+  const bgColor = isOk ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
+  const textColor = isOk ? 'text-green-800' : 'text-red-800'
+
+  content.innerHTML = `
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+      <div class="bg-slate-50 rounded-xl p-4 text-center">
+        <div class="text-2xl font-black text-slate-800">${res.total_available?.toLocaleString('pt-BR') || '—'}</div>
+        <div class="text-xs text-slate-500 mt-1">Disponíveis na categoria</div>
+      </div>
+      <div class="bg-blue-50 rounded-xl p-4 text-center">
+        <div class="text-2xl font-black text-blue-700">${res.fetched?.toLocaleString('pt-BR') || 0}</div>
+        <div class="text-xs text-slate-500 mt-1">Itens buscados</div>
+      </div>
+      <div class="bg-green-50 rounded-xl p-4 text-center">
+        <div class="text-2xl font-black text-green-700">${res.created?.toLocaleString('pt-BR') || 0}</div>
+        <div class="text-xs text-slate-500 mt-1">Criados no D1</div>
+      </div>
+      <div class="bg-yellow-50 rounded-xl p-4 text-center">
+        <div class="text-2xl font-black text-yellow-700">${res.updated?.toLocaleString('pt-BR') || 0}</div>
+        <div class="text-xs text-slate-500 mt-1">Atualizados</div>
+      </div>
+    </div>
+
+    <div class="${bgColor} border rounded-xl px-4 py-3 text-sm ${textColor} font-medium">
+      ${isOk ? '✅' : '❌'} ${res.message || 'Sem mensagem'}
+      ${res.duration_ms ? `<span class="ml-2 text-xs opacity-60">(${(res.duration_ms/1000).toFixed(1)}s — ${res.pages} página(s))</span>` : ''}
+    </div>
+
+    ${res.dry_run ? `
+      <div class="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-800 mt-3">
+        ⚠️ <strong>Dry Run ativo</strong> — nenhum item foi salvo no banco. 
+        Altere o modo para "Salvar no D1" e rode novamente para importar.
+      </div>` : ''}
+
+    ${res.errors?.length ? `
+      <div class="bg-red-50 border border-red-100 rounded-xl px-4 py-3 text-xs text-red-700 mt-3 space-y-1">
+        <strong>⚠️ Avisos (${res.errors.length}):</strong>
+        ${res.errors.map(e => `<div>• ${e}</div>`).join('')}
+      </div>` : ''}
+
+    ${res.errors?.some(e => e.includes('403')) ? `
+      <div class="bg-orange-50 border border-orange-200 rounded-xl px-4 py-3 text-sm text-orange-800 mt-3">
+        <strong>🔒 App em modo test:</strong> O endpoint <code>/sites/MLB/search</code> está bloqueado. 
+        Para desbloquear, solicite aprovação da categoria no 
+        <a href="https://developers.mercadolivre.com.br" target="_blank" class="underline">Painel ML Developers</a>.
+      </div>` : ''}
+  `
+}
+
+function mlCrawlClear() {
+  CrawlState.log = []
+  const logEl = document.getElementById('crawl-log')
+  const wrap  = document.getElementById('crawl-log-wrap')
+  const res   = document.getElementById('crawl-result')
+  if (logEl) logEl.innerHTML = ''
+  if (wrap)  wrap.classList.add('hidden')
+  if (res)   res.classList.add('hidden')
 }

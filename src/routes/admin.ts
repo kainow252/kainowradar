@@ -5932,6 +5932,248 @@ admin.post('/api/ml/import-by-category', async (c) => {
   }
 })
 
+// ══════════════════════════════════════════════════════════
+// CRAWLER EM MASSA — paginação automática por categoria
+// POST /admin/api/ml/crawl-category
+// Body: {
+//   category_id: "MLB1051",   — ID da categoria ML (obrigatório)
+//   slug: "smartphones",      — slug para salvar no D1 (obrigatório)
+//   max_items: 200,           — limite total (padrão 200, máx 1000)
+//   sort: "relevance",        — relevance | price_asc | price_desc | sold_quantity
+//   dry_run: false            — se true, só conta sem salvar
+// }
+// Retorna: { ok, total_available, fetched, created, updated, skipped, pages, duration_ms }
+// ══════════════════════════════════════════════════════════
+admin.post('/api/ml/crawl-category', async (c) => {
+  const { DB, CACHE } = c.env
+  const ML_API_URL    = 'https://api.mercadolibre.com'
+  const PUB_ID        = 'cfegdhabc31955'
+  const M_TOOL        = '38524122'
+  const LIMIT         = 50  // máximo permitido pela API ML
+
+  const body = await c.req.json().catch(() => ({}) as any)
+  const categoryId: string   = (body.category_id || '').trim()
+  const categorySlug: string = (body.slug || 'outros').trim()
+  const maxItems: number     = Math.min(1000, Math.max(1, parseInt(body.max_items || '200')))
+  const sortParam: string    = body.sort || 'relevance'
+  const dryRun: boolean      = body.dry_run === true
+
+  if (!categoryId) {
+    return c.json({ error: 'category_id obrigatório (ex: MLB1051)' }, 400)
+  }
+
+  // Mapeia parâmetro sort → string aceita pela ML API
+  const sortMap: Record<string, string> = {
+    relevance:   'relevance',
+    price_asc:   'price_asc',
+    price_desc:  'price_desc',
+    sales_high:  'sold_quantity',
+    sold_quantity: 'sold_quantity',
+  }
+  const mlSort = sortMap[sortParam] || 'relevance'
+
+  const token = await getLBToken(c.env)
+  if (!token) {
+    return c.json({
+      error: 'Token ML não disponível — acesse /api/ml/auth para autenticar',
+    }, 503)
+  }
+
+  const startTime = Date.now()
+  let totalAvailable = 0
+  let fetched  = 0
+  let created  = 0
+  let updated  = 0
+  let skipped  = 0
+  let pages    = 0
+  const errors: string[] = []
+
+  // Helper inline: slugify
+  function _slug(text: string): string {
+    return text.toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s-]/g, '').trim()
+      .replace(/\s+/g, '-').substring(0, 80)
+  }
+
+  // ── Loop de paginação ─────────────────────────────────
+  for (let offset = 0; offset < maxItems; offset += LIMIT) {
+    const pageLimit = Math.min(LIMIT, maxItems - offset)
+
+    const params = new URLSearchParams({
+      category: categoryId,
+      limit:    String(pageLimit),
+      offset:   String(offset),
+      sort:     mlSort,
+    })
+
+    let res: Response
+    try {
+      res = await fetch(`${ML_API_URL}/sites/MLB/search?${params}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept':        'application/json',
+          'User-Agent':    'KainowRadar/1.0',
+        },
+      })
+    } catch (e: any) {
+      errors.push(`offset ${offset}: fetch error — ${e.message}`)
+      break
+    }
+
+    if (!res.ok) {
+      const errBody: any = await res.json().catch(() => ({}))
+      const msg = errBody.message || errBody.error || `HTTP ${res.status}`
+      // 403 = app em modo test → para o loop mas retorna o que já foi coletado
+      if (res.status === 403) {
+        errors.push(`403 — app em modo test: ${msg}`)
+        break
+      }
+      errors.push(`offset ${offset}: ${msg}`)
+      break
+    }
+
+    const data: any = await res.json()
+    const items: any[] = data.results || []
+    pages++
+
+    // Captura total disponível na primeira página
+    if (offset === 0) {
+      totalAvailable = data.paging?.total || items.length
+    }
+
+    // Sem resultados → fim da paginação
+    if (!items.length) break
+
+    fetched += items.length
+
+    // ── Salva no D1 ─────────────────────────────────────
+    if (!dryRun) {
+      for (const item of items) {
+        if (!item.id || !item.title) { skipped++; continue }
+
+        const mlId      = item.id as string
+        const name      = (item.title as string).trim()
+        const price     = (item.price as number) || 0
+        const image     = ((item.thumbnail as string) || '').replace('-I.jpg', '-O.jpg')
+        const permalink = (item.permalink as string) || `https://www.mercadolivre.com.br/p/${mlId}`
+        const affUrl    = `${permalink.split('?')[0]}?matt_word=${PUB_ID}&matt_tool=${M_TOOL}&forceInApp=true`
+        const discountPct = item.original_price
+          ? Math.round((1 - price / item.original_price) * 100)
+          : 0
+
+        try {
+          const existing = await DB.prepare(
+            'SELECT id FROM products WHERE ml_item_id = ?'
+          ).bind(mlId).first<{ id: number }>()
+
+          if (existing) {
+            await DB.prepare(`
+              UPDATE products
+              SET best_price = ?, affiliate_url = ?,
+                  image_url = COALESCE(NULLIF(?, ''), image_url),
+                  affiliate_updated_at = CURRENT_TIMESTAMP,
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE ml_item_id = ?
+            `).bind(price, affUrl, image, mlId).run()
+            updated++
+          } else {
+            const rawSlug   = _slug(name)
+            const conflict  = await DB.prepare(
+              'SELECT id FROM products WHERE slug = ?'
+            ).bind(rawSlug).first()
+            const finalSlug = conflict ? `${rawSlug}-${mlId.toLowerCase()}` : rawSlug
+
+            const ins = await DB.prepare(`
+              INSERT INTO products
+                (name, slug, ml_item_id, affiliate_url, affiliate_updated_at,
+                 image_url, best_price, offer_count, is_active, source,
+                 category, description, created_at, updated_at)
+              VALUES
+                (?,?,?,?,CURRENT_TIMESTAMP,?,?,1,1,'mercadolivre',?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+            `).bind(
+              name, finalSlug, mlId, affUrl,
+              image || null, price,
+              categorySlug,
+              `${name}. Encontrado no Mercado Livre.`,
+            ).run()
+
+            const newId = ins.meta?.last_row_id as number
+
+            // Offer placeholder
+            await DB.prepare(`
+              INSERT INTO offers
+                (product_id, store_id, external_id, title, price,
+                 original_price, discount_percent, affiliate_url,
+                 is_active, in_stock, source, last_updated)
+              VALUES (?,3,?,?,?,?,?,?,1,1,'mercadolivre',CURRENT_TIMESTAMP)
+            `).bind(
+              newId, mlId, name, price,
+              item.original_price || null,
+              discountPct || null,
+              affUrl,
+            ).run()
+
+            await DB.prepare(
+              'UPDATE products SET offer_count = 1, best_store_id = 3 WHERE id = ?'
+            ).bind(newId).run()
+
+            created++
+          }
+        } catch (e: any) {
+          skipped++
+          if (errors.length < 5) errors.push(`${mlId}: ${e.message}`)
+        }
+      }
+    }
+
+    // ML API: máximo real é offset + limit ≤ 1000
+    if (offset + LIMIT >= Math.min(totalAvailable, 1000)) break
+
+    // Pausa gentil entre páginas (evita rate-limit)
+    if (offset + LIMIT < maxItems) {
+      await new Promise(r => setTimeout(r, 300))
+    }
+  }
+
+  // Atualiza product_count na categoria (se não for dry_run)
+  if (!dryRun && created > 0) {
+    await DB.prepare(`
+      UPDATE categories
+      SET product_count = (
+            SELECT COUNT(*) FROM products WHERE category = ? AND is_active = 1
+          ),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE slug = ?
+    `).bind(categorySlug, categorySlug).run().catch(() => {})
+
+    // Invalida cache KV de categorias
+    if (CACHE) {
+      await CACHE.delete('ml_categories_tree').catch(() => {})
+    }
+  }
+
+  return c.json({
+    ok:              !errors.length || fetched > 0,
+    dry_run:         dryRun,
+    category_id:     categoryId,
+    category_slug:   categorySlug,
+    sort:            mlSort,
+    max_items:       maxItems,
+    total_available: totalAvailable,
+    fetched,
+    pages,
+    created:         dryRun ? 0 : created,
+    updated:         dryRun ? 0 : updated,
+    skipped:         dryRun ? 0 : skipped,
+    duration_ms:     Date.now() - startTime,
+    errors:          errors.length ? errors : undefined,
+    message:         dryRun
+      ? `Dry run: ${fetched} itens encontrados em ${pages} páginas (${totalAvailable} disponíveis na categoria)`
+      : `${created} criados, ${updated} atualizados, ${skipped} ignorados em ${pages} páginas`,
+  })
+})
+
 // ── Cache Management ──────────────────────────────────────
 // DELETE /admin/api/ml/cache — Limpa cache de busca/categorias no KV
 admin.delete('/api/ml/cache', async (c) => {
@@ -6115,6 +6357,9 @@ function renderAdminSPA(): string {
       </div>
       <div onclick="showSection('ml-search')" class="sidebar-link" data-section="ml-search">
         <span class="text-lg">🔍</span> Busca ML API
+      </div>
+      <div onclick="showSection('ml-crawl')" class="sidebar-link" data-section="ml-crawl">
+        <span class="text-lg">🕷️</span> Crawl em Massa
       </div>
       <div onclick="showSection('ml-linkbuilder')" class="sidebar-link" data-section="ml-linkbuilder">
         <span class="text-lg">🔗</span> ML LinkBuilder
