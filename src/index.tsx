@@ -579,16 +579,24 @@ app.get('/', async (c) => {
         </div>
       </div>
 
-      <!-- Marquee — única linha, esquerda para direita -->
-      <div id="stores-marquee-section" class="stores-marquee-wrapper relative mb-4">
-        <div class="stores-marquee-fade-left"></div>
-        <div class="stores-marquee-fade-right"></div>
-        <div class="stores-marquee" style="animation-duration:${Math.max(30, stores.length * 1.8)}s">
-          <div class="stores-marquee-track flex gap-4 px-4 py-2">
-            ${storeCards(stores)}
-            ${storeCards(stores)}
+      <!-- Lojas: marquee se tiver 5+, grid estático se tiver poucas -->
+      <div id="stores-marquee-section" class="relative mb-4">
+        ${stores.length >= 5 ? `
+        <div class="stores-marquee-wrapper">
+          <div class="stores-marquee-fade-left"></div>
+          <div class="stores-marquee-fade-right"></div>
+          <div class="stores-marquee" style="animation-duration:${Math.max(30, stores.length * 1.8)}s">
+            <div class="stores-marquee-track flex gap-4 px-4 py-2">
+              ${storeCards(stores)}
+              ${storeCards(stores)}
+            </div>
           </div>
         </div>
+        ` : `
+        <div class="flex flex-wrap gap-4 px-4 py-2">
+          ${storeCards(stores)}
+        </div>
+        `}
       </div>
 
       <!-- Grid de resultados de busca (oculto por padrão) -->

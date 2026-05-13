@@ -545,6 +545,13 @@ function _buildStoreCard(s) {
     : ''
   const checked = s.is_active ? 'checked' : ''
   const urlHint = s.checkout_pattern || s.deeplink_base || '—'
+
+  // Botão "Importar Links Afiliados" só aparece no card do Mercado Livre
+  const isMeli = s.affiliate_network === 'meli-api' || (s.name || '').toLowerCase().includes('mercado livre')
+  const importBtn = isMeli
+    ? '<button onclick="openMlAffiliateImport()" class="w-full text-xs font-semibold py-2 px-3 rounded-xl border border-yellow-300 bg-yellow-50 text-yellow-800 hover:bg-yellow-100 transition-all mt-2">📥 Importar Links Afiliados</button>'
+    : ''
+
   return (
     '<div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden hover:shadow-md transition-shadow" id="store-card-' + s.id + '">'
     + '<div class="px-4 py-3 flex items-center justify-between" style="background:' + nc.bg + ';border-bottom:2px solid ' + nc.border + '20">'
@@ -571,9 +578,356 @@ function _buildStoreCard(s) {
     +   '<div class="flex items-center gap-2 mb-2">' + statusBadge + offersBadge + '</div>'
     +   '<div class="text-xs text-slate-400 truncate mb-3" title="' + urlHint + '">🔗 ' + urlHint + '</div>'
     +   '<button onclick="openStoreModal(' + s.id + ')" class="w-full text-xs font-semibold py-2 px-3 rounded-xl border bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100 transition-all">✏️ Editar loja</button>'
+    +   importBtn
     + '</div>'
     + '</div>'
   )
+}
+
+// ── IMPORTAR LINKS AFILIADOS ML ────────────────────────────────
+function openMlAffiliateImport() {
+  const modal = document.getElementById('modal-container')
+  modal.innerHTML = `
+    <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+      <div class="modal" style="max-width:640px;width:95vw">
+
+        <!-- Header -->
+        <div class="flex items-center gap-3 mb-1">
+          <div class="w-10 h-10 rounded-xl bg-yellow-100 flex items-center justify-center text-xl">📥</div>
+          <div>
+            <h3 class="font-bold text-slate-800 text-lg leading-tight">Importar Links Afiliados ML</h3>
+            <p class="text-xs text-slate-500">Cole seus links meli.la/... ou links longos do Mercado Livre</p>
+          </div>
+        </div>
+
+        <!-- Tabs: Colar / CSV / Histórico -->
+        <div class="flex gap-1 bg-slate-100 rounded-xl p-1 mb-4 mt-4">
+          <button id="tab-paste" onclick="mlImportTab('paste')"
+            class="flex-1 text-xs font-semibold py-2 rounded-lg bg-white shadow-sm text-slate-700 transition-all">
+            📋 Colar Links
+          </button>
+          <button id="tab-csv" onclick="mlImportTab('csv')"
+            class="flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700 transition-all">
+            📄 Arquivo CSV
+          </button>
+          <button id="tab-history" onclick="mlImportTab('history')"
+            class="flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700 transition-all">
+            🕓 Histórico
+          </button>
+        </div>
+
+        <!-- Painel: Colar -->
+        <div id="panel-paste">
+          <div class="mb-3">
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">
+              Cole seus links abaixo — um por linha, separados por vírgula ou espaço
+            </label>
+            <textarea id="ml-links-textarea"
+              class="w-full rounded-xl border border-slate-200 bg-slate-50 text-sm font-mono p-3 resize-none focus:outline-none focus:border-yellow-400 focus:bg-white transition-all"
+              rows="8"
+              placeholder="https://meli.la/2fsawYr&#10;https://meli.la/19tECKW&#10;https://www.mercadolivre.com.br/produto/MLB123456789..."></textarea>
+            <div class="flex items-center justify-between mt-1.5">
+              <span id="ml-link-count" class="text-xs text-slate-400">0 links detectados</span>
+              <button onclick="document.getElementById('ml-links-textarea').value=''; updateMlLinkCount()"
+                class="text-xs text-slate-400 hover:text-red-500 transition-colors">✕ Limpar</button>
+            </div>
+          </div>
+
+          <!-- Barra de progresso (oculta por padrão) -->
+          <div id="ml-import-progress" class="hidden mb-3">
+            <div class="flex items-center justify-between text-xs text-slate-600 mb-1">
+              <span id="ml-progress-label">Processando...</span>
+              <span id="ml-progress-pct">0%</span>
+            </div>
+            <div class="w-full bg-slate-100 rounded-full h-2">
+              <div id="ml-progress-bar" class="bg-yellow-400 h-2 rounded-full transition-all" style="width:0%"></div>
+            </div>
+          </div>
+
+          <!-- Resultado -->
+          <div id="ml-import-result" class="hidden"></div>
+
+          <div class="flex gap-3 pt-3 border-t border-slate-100">
+            <button id="ml-import-btn" onclick="runMlAffiliateImport('paste')"
+              class="flex-1 text-sm font-bold py-2.5 px-4 rounded-xl bg-yellow-400 hover:bg-yellow-500 text-yellow-900 transition-all flex items-center justify-center gap-2">
+              ⚡ Importar Agora
+            </button>
+            <button onclick="closeModal()" class="btn-secondary px-5">Cancelar</button>
+          </div>
+        </div>
+
+        <!-- Painel: CSV -->
+        <div id="panel-csv" class="hidden">
+          <div class="border-2 border-dashed border-slate-200 rounded-xl p-6 text-center mb-4 hover:border-yellow-300 transition-colors" id="csv-drop-zone">
+            <div class="text-3xl mb-2">📄</div>
+            <p class="text-sm font-semibold text-slate-700 mb-1">Arraste um arquivo CSV ou TXT</p>
+            <p class="text-xs text-slate-400 mb-3">ou clique para selecionar</p>
+            <input type="file" id="csv-file-input" accept=".csv,.txt" class="hidden" onchange="readCsvFile(this)">
+            <button onclick="document.getElementById('csv-file-input').click()"
+              class="text-xs font-semibold px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all">
+              📂 Selecionar arquivo
+            </button>
+          </div>
+          <div class="bg-slate-50 rounded-xl p-3 mb-4">
+            <p class="text-xs font-semibold text-slate-600 mb-1">Formato aceito:</p>
+            <code class="text-xs text-slate-500 block">https://meli.la/2fsawYr<br>https://meli.la/19tECKW<br><span class="text-slate-400"># ou separado por vírgula, ponto-e-vírgula ou tab</span></code>
+          </div>
+          <div id="csv-preview" class="hidden mb-3"></div>
+          <div id="ml-import-result-csv" class="hidden"></div>
+          <div class="flex gap-3 pt-3 border-t border-slate-100">
+            <button id="ml-import-btn-csv" onclick="runMlAffiliateImport('csv')"
+              class="flex-1 text-sm font-bold py-2.5 px-4 rounded-xl bg-yellow-400 hover:bg-yellow-500 text-yellow-900 transition-all flex items-center justify-center gap-2">
+              ⚡ Importar Arquivo
+            </button>
+            <button onclick="closeModal()" class="btn-secondary px-5">Cancelar</button>
+          </div>
+        </div>
+
+        <!-- Painel: Histórico -->
+        <div id="panel-history" class="hidden">
+          <div id="ml-history-content">
+            <div class="text-center py-8 text-slate-400 text-sm">Carregando histórico...</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  `
+
+  // Listeners
+  const ta = document.getElementById('ml-links-textarea')
+  if (ta) ta.addEventListener('input', updateMlLinkCount)
+
+  // Drag & drop CSV
+  const dz = document.getElementById('csv-drop-zone')
+  if (dz) {
+    dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('border-yellow-400','bg-yellow-50') })
+    dz.addEventListener('dragleave', () => dz.classList.remove('border-yellow-400','bg-yellow-50'))
+    dz.addEventListener('drop', e => {
+      e.preventDefault()
+      dz.classList.remove('border-yellow-400','bg-yellow-50')
+      const file = e.dataTransfer?.files?.[0]
+      if (file) readCsvFile({ files: [file] })
+    })
+  }
+}
+
+function mlImportTab(tab) {
+  // Atualiza tabs
+  ;['paste','csv','history'].forEach(t => {
+    const btn = document.getElementById('tab-' + t)
+    const panel = document.getElementById('panel-' + t)
+    if (!btn || !panel) return
+    if (t === tab) {
+      btn.className = 'flex-1 text-xs font-semibold py-2 rounded-lg bg-white shadow-sm text-slate-700 transition-all'
+      panel.classList.remove('hidden')
+    } else {
+      btn.className = 'flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700 transition-all'
+      panel.classList.add('hidden')
+    }
+  })
+  // Carrega histórico ao abrir a aba
+  if (tab === 'history') loadMlImportHistory()
+}
+
+function updateMlLinkCount() {
+  const ta = document.getElementById('ml-links-textarea')
+  const el = document.getElementById('ml-link-count')
+  if (!ta || !el) return
+  const matches = ta.value.match(/https?:\/\/[^\s,;"'<>\n\r]+/g) || []
+  const unique = new Set(matches.map(u => u.replace(/[.,;]+$/, '').trim()))
+  const n = unique.size
+  el.textContent = n === 0 ? '0 links detectados'
+    : n === 1 ? '1 link detectado'
+    : `${n} links detectados`
+  el.className = 'text-xs ' + (n > 0 ? 'text-green-600 font-semibold' : 'text-slate-400')
+}
+
+// Lê CSV/TXT e joga no textarea de colar
+function readCsvFile(input) {
+  const file = input.files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = e => {
+    const text = e.target?.result || ''
+    const urls = (text.match(/https?:\/\/[^\s,;"'<>\n\r]+/g) || [])
+      .map(u => u.replace(/[.,;]+$/, '').trim())
+      .filter(Boolean)
+    const unique = [...new Set(urls)]
+
+    // Mostra preview
+    const preview = document.getElementById('csv-preview')
+    if (preview) {
+      preview.classList.remove('hidden')
+      preview.innerHTML = `
+        <div class="bg-green-50 border border-green-200 rounded-xl p-3">
+          <p class="text-xs font-semibold text-green-700">✅ ${unique.length} links encontrados em "${file.name}"</p>
+          <p class="text-xs text-green-600 mt-0.5">Pronto para importar!</p>
+        </div>`
+    }
+
+    // Guarda no dataset para uso no import
+    const btn = document.getElementById('ml-import-btn-csv')
+    if (btn) btn.dataset.links = unique.join('\n')
+  }
+  reader.readAsText(file)
+}
+
+async function runMlAffiliateImport(source) {
+  const iscsv = source === 'csv'
+  const btnId = iscsv ? 'ml-import-btn-csv' : 'ml-import-btn'
+  const resultId = iscsv ? 'ml-import-result-csv' : 'ml-import-result'
+  const btn = document.getElementById(btnId)
+  const resultEl = document.getElementById(resultId)
+
+  // Pega os links
+  let raw = ''
+  if (iscsv) {
+    raw = btn?.dataset?.links || ''
+  } else {
+    raw = document.getElementById('ml-links-textarea')?.value || ''
+  }
+
+  if (!raw.trim()) {
+    toast('Cole ou carregue pelo menos um link!', 'error')
+    return
+  }
+
+  // Desabilita botão e mostra progresso
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Processando...' }
+  if (!iscsv) {
+    const prog = document.getElementById('ml-import-progress')
+    if (prog) prog.classList.remove('hidden')
+    const bar = document.getElementById('ml-progress-bar')
+    const pct = document.getElementById('ml-progress-pct')
+    const lbl = document.getElementById('ml-progress-label')
+    // Animação de progresso
+    let p = 0
+    const interval = setInterval(() => {
+      p = Math.min(p + Math.random() * 15, 85)
+      if (bar) bar.style.width = p + '%'
+      if (pct) pct.textContent = Math.round(p) + '%'
+      if (lbl) lbl.textContent = p < 40 ? 'Resolvendo links curtos...' : p < 70 ? 'Extraindo IDs do Mercado Livre...' : 'Salvando no banco de dados...'
+    }, 400)
+
+    const data = await api('POST', '/admin/api/stores/ml/import-affiliate-links', { links: raw })
+
+    clearInterval(interval)
+    if (bar) bar.style.width = '100%'
+    if (pct) pct.textContent = '100%'
+    if (lbl) lbl.textContent = 'Concluído!'
+
+    renderMlImportResult(data, resultEl)
+  } else {
+    const data = await api('POST', '/admin/api/stores/ml/import-affiliate-links', { links: raw })
+    renderMlImportResult(data, resultEl)
+  }
+
+  if (btn) { btn.disabled = false; btn.textContent = '⚡ Importar Novamente' }
+}
+
+function renderMlImportResult(data, container) {
+  if (!container) return
+  container.classList.remove('hidden')
+
+  if (!data || data.error) {
+    container.innerHTML = `
+      <div class="bg-red-50 border border-red-200 rounded-xl p-4 mb-3">
+        <p class="text-sm font-semibold text-red-700">❌ Erro: ${data?.error || 'Falha na requisição'}</p>
+      </div>`
+    return
+  }
+
+  const { total, matched, saved, errors, results } = data
+
+  // Cards de resumo
+  container.innerHTML = `
+    <div class="grid grid-cols-4 gap-2 mb-4">
+      <div class="bg-blue-50 rounded-xl p-2.5 text-center">
+        <div class="text-xl font-black text-blue-700">${total}</div>
+        <div class="text-xs text-blue-500 font-medium">Total</div>
+      </div>
+      <div class="bg-green-50 rounded-xl p-2.5 text-center">
+        <div class="text-xl font-black text-green-700">${saved}</div>
+        <div class="text-xs text-green-500 font-medium">Salvos</div>
+      </div>
+      <div class="bg-amber-50 rounded-xl p-2.5 text-center">
+        <div class="text-xl font-black text-amber-700">${matched}</div>
+        <div class="text-xs text-amber-500 font-medium">Vinculados</div>
+      </div>
+      <div class="bg-red-50 rounded-xl p-2.5 text-center">
+        <div class="text-xl font-black text-red-700">${errors}</div>
+        <div class="text-xs text-red-500 font-medium">Erros</div>
+      </div>
+    </div>
+
+    <div class="border border-slate-100 rounded-xl overflow-hidden">
+      <div class="bg-slate-50 px-3 py-2 flex items-center justify-between">
+        <span class="text-xs font-semibold text-slate-600">Resultado por link</span>
+        <span class="text-xs text-slate-400">${results?.length || 0} processados</span>
+      </div>
+      <div class="max-h-52 overflow-y-auto divide-y divide-slate-50">
+        ${(results || []).map(r => {
+          const icon = r.status === 'matched' ? '✅' : r.status === 'resolved' ? '🔗' : '❌'
+          const bg   = r.status === 'matched' ? 'bg-green-50' : r.status === 'resolved' ? 'bg-blue-50' : 'bg-red-50'
+          const label = r.status === 'matched'
+            ? `<span class="text-green-700 font-semibold text-xs truncate max-w-[160px] block">${r.product_name || r.ml_item_id}</span>`
+            : r.status === 'resolved'
+            ? `<span class="text-blue-700 text-xs">${r.ml_item_id} — sem produto no banco</span>`
+            : `<span class="text-red-600 text-xs">${r.error}</span>`
+          const shortUrl = (r.url || '').replace('https://', '').substring(0, 28)
+          return `<div class="flex items-center gap-2.5 px-3 py-2 ${bg}">
+            <span class="text-sm flex-shrink-0">${icon}</span>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs text-slate-500 font-mono truncate">${shortUrl}</div>
+              ${label}
+            </div>
+          </div>`
+        }).join('')}
+      </div>
+    </div>
+  `
+
+  if (saved > 0) toast(`✅ ${saved} link(s) de afiliado salvos com sucesso!`, 'success')
+  else if (matched === 0 && errors === 0) toast('Links resolvidos! Nenhum produto vinculado ainda.', 'info')
+}
+
+async function loadMlImportHistory() {
+  const container = document.getElementById('ml-history-content')
+  if (!container) return
+
+  const data = await api('GET', '/admin/api/stores/ml/import-history')
+  const rows = data?.results || []
+
+  if (rows.length === 0) {
+    container.innerHTML = '<div class="text-center py-10 text-slate-400 text-sm">Nenhuma importação ainda</div>'
+    return
+  }
+
+  container.innerHTML = `
+    <div class="border border-slate-100 rounded-xl overflow-hidden">
+      <div class="bg-slate-50 px-3 py-2 flex items-center justify-between">
+        <span class="text-xs font-semibold text-slate-600">Últimas importações</span>
+        <span class="text-xs text-slate-400">${rows.length} registros</span>
+      </div>
+      <div class="max-h-80 overflow-y-auto divide-y divide-slate-50">
+        ${rows.map(r => {
+          const icon = r.status === 'matched' ? '✅' : r.status === 'resolved' ? '🔗' : '❌'
+          const bg   = r.status === 'matched' ? '' : r.status === 'resolved' ? 'bg-blue-50/40' : 'bg-red-50/40'
+          const date = r.imported_at ? new Date(r.imported_at).toLocaleString('pt-BR', { dateStyle:'short', timeStyle:'short' }) : '—'
+          const shortUrl = (r.original_url || '').replace('https://','').substring(0, 30)
+          return `<div class="flex items-center gap-2.5 px-3 py-2 ${bg}">
+            <span class="text-sm flex-shrink-0">${icon}</span>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-mono text-slate-500 truncate">${shortUrl}</div>
+              <div class="text-xs text-slate-400">${r.ml_item_id || r.error_msg || '—'} ${r.product_name ? '· ' + r.product_name : ''}</div>
+            </div>
+            <div class="text-xs text-slate-300 flex-shrink-0">${date}</div>
+          </div>`
+        }).join('')}
+      </div>
+    </div>
+  `
 }
 
 async function renderStores(area) {

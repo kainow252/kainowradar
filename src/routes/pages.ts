@@ -985,137 +985,133 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
 
   </aside>
 
-  <!-- HEADER PRINCIPAL -->
-  <header class="sticky top-0 z-50 bg-white border-b border-gray-100" id="main-header">
+  <!-- HEADER PRINCIPAL — tudo numa única linha: Logo | Categorias | Alertas+Entrar -->
+  <header class="sticky top-0 z-50 bg-white shadow-sm" id="main-header">
 
-    <!-- Barra superior: hambúrguer + logo + busca + usuário -->
-    <div class="max-w-7xl mx-auto px-3 md:px-4">
-      <div class="flex items-center gap-2 md:gap-3 h-[60px]">
+    <div class="w-full px-3 md:px-6">
+      <div class="flex items-center h-[58px] gap-3">
 
-        <!-- Botão Hambúrguer (só mobile) -->
+        <!-- Hambúrguer (só mobile) -->
         <button id="hamburger-btn" onclick="openHamburger()" aria-label="Abrir menu"
-          class="md:hidden flex-shrink-0 w-10 h-10 flex flex-col items-center justify-center gap-[5px] rounded-xl hover:bg-gray-100 active:bg-gray-200 transition-colors">
+          class="md:hidden flex-shrink-0 w-9 h-9 flex flex-col items-center justify-center gap-[5px] rounded-xl hover:bg-gray-100 transition-colors">
           <span class="ham-bar"></span>
           <span class="ham-bar"></span>
           <span class="ham-bar"></span>
         </button>
 
-        <!-- Logo -->
-        <a href="/" class="flex items-center gap-2.5 shrink-0">
-          <div class="w-11 h-11 bg-gradient-to-br from-blue-500 to-blue-700 rounded-xl flex items-center justify-center shadow-md shadow-blue-200">
-            <svg viewBox="0 0 24 24" class="w-6 h-6" fill="white" xmlns="http://www.w3.org/2000/svg">
+        <!-- Logo — fixo à esquerda -->
+        <a href="/" class="flex items-center gap-2.5 shrink-0 group">
+          <div class="w-9 h-9 bg-gradient-to-br from-blue-500 to-blue-700 rounded-xl flex items-center justify-center shadow-md shadow-blue-200">
+            <svg viewBox="0 0 24 24" class="w-5 h-5" fill="white" xmlns="http://www.w3.org/2000/svg">
               <path d="M5 3h3v7.5l7-7.5h4L11 11l8.5 10H15l-7-8.5V21H5V3z"/>
             </svg>
           </div>
-          <div class="hidden sm:block">
-            <span class="font-black text-2xl text-gray-900 tracking-tight leading-none">Kainow</span><span class="font-black text-2xl text-blue-600 tracking-tight leading-none">Radar</span>
+          <div class="hidden sm:flex flex-col leading-none">
+            <span class="font-black text-lg tracking-tight text-gray-900 leading-none">Kainow<span class="text-blue-600">Radar</span></span>
+            <span class="text-[9px] font-semibold text-gray-400 tracking-widest uppercase">Compare &amp; Economize</span>
           </div>
         </a>
 
-        <!-- search-input oculto: mantém funcionalidade JS sem aparecer no header -->
+        <!-- Separador vertical -->
+        <div class="hidden md:block w-px h-7 bg-gray-200 shrink-0"></div>
+
+        <!-- Categorias — meio, rolável, ocupa todo espaço disponível -->
+        <nav id="cat-subnav" class="hidden md:flex flex-1 min-w-0 items-center overflow-hidden relative">
+
+          <!-- Seta ◀ esquerda -->
+          <button id="subnav-prev"
+            onclick="document.getElementById('subnav-track').scrollBy({left:-280,behavior:'smooth'})"
+            class="shrink-0 w-7 h-7 flex items-center justify-center rounded-full border border-gray-200 bg-white text-gray-400 hover:text-blue-600 hover:border-blue-300 transition-all shadow-sm z-20">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7"/>
+            </svg>
+          </button>
+
+          <!-- trilha rolável -->
+          <div id="subnav-track"
+            class="flex items-center gap-0 overflow-x-auto scrollbar-hide h-[58px] flex-1 scroll-smooth px-1">
+            ${(opts.navCategories && opts.navCategories.length > 0
+              ? opts.navCategories
+              : [
+                  { slug: 'smartphones',      icon: '📱', name: 'Smartphones' },
+                  { slug: 'notebooks',        icon: '💻', name: 'Notebooks' },
+                  { slug: 'tv',               icon: '📺', name: 'TVs' },
+                  { slug: 'games',            icon: '🎮', name: 'Games' },
+                  { slug: 'eletrodomesticos', icon: '🏠', name: 'Eletrodomésticos' },
+                  { slug: 'audio',            icon: '🎧', name: 'Áudio' },
+                  { slug: 'cameras',          icon: '📷', name: 'Câmeras' },
+                  { slug: 'moda',             icon: '👗', name: 'Moda' },
+                ]
+            ).map(cat => `
+              <a href="/categoria/${cat.slug}" class="subnav-link shrink-0">${cat.icon || ''} ${cat.name}</a>
+            `).join('')}
+            <div class="h-4 w-px bg-gray-200 mx-1 shrink-0"></div>
+            <a href="/ofertas" class="subnav-link subnav-hot shrink-0">🔥 Ofertas do Dia</a>
+          </div>
+
+          <!-- Seta ▶ direita -->
+          <button id="subnav-next"
+            onclick="document.getElementById('subnav-track').scrollBy({left:280,behavior:'smooth'})"
+            class="shrink-0 w-7 h-7 flex items-center justify-center rounded-full border border-gray-200 bg-white text-gray-400 hover:text-blue-600 hover:border-blue-300 transition-all shadow-sm z-20">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
+            </svg>
+          </button>
+
+        </nav>
+
+        <!-- search-input oculto (mantém funcionalidade JS) -->
         <input type="text" id="search-input" class="hidden" autocomplete="off"
           onkeydown="if(event.key==='Enter') searchProducts()"
           oninput="debounceSearch(this.value)">
-        <div id="suggestions" class="hidden absolute top-16 left-1/2 -translate-x-1/2 w-[600px] mt-1 bg-white rounded-2xl shadow-xl border border-gray-100 z-50 max-h-80 overflow-auto"></div>
+        <div id="suggestions" class="hidden absolute top-[58px] left-1/2 -translate-x-1/2 w-[600px] mt-1 bg-white rounded-2xl shadow-xl border border-gray-100 z-50 max-h-80 overflow-auto"></div>
 
-        <!-- Spacer: empurra alertas/entrar para a direita -->
-        <div class="flex-1"></div>
+        <!-- Botões — fixos à direita -->
+        <div class="flex items-center gap-2 shrink-0 ml-auto md:ml-0">
 
-        <!-- Alertas (ícone) — só desktop -->
-        <a href="/meus-alertas" title="Meus Alertas"
-           class="hidden md:flex items-center gap-1.5 border border-amber-400 text-amber-600 hover:bg-amber-400 hover:text-white transition-all px-3 py-1.5 rounded-xl shrink-0 font-semibold text-xs">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
-          </svg>
-          <span>Alertas</span>
-        </a>
+          <!-- Alertas — só desktop -->
+          <a href="/meus-alertas"
+             class="hidden md:flex items-center gap-1.5 bg-amber-50 border border-amber-300 text-amber-700 hover:bg-amber-400 hover:text-white hover:border-amber-400 transition-all px-3.5 py-1.5 rounded-xl font-bold text-sm shadow-sm">
+            <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+            </svg>
+            <span class="hidden lg:inline">Alertas</span>
+          </a>
 
-        <!-- Área do usuário: só desktop -->
-        <div id="user-area" class="hidden md:block shrink-0">
-          <button onclick="openAuthModal('login')"
-             class="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-bold px-5 py-2 rounded-xl transition-all whitespace-nowrap shadow-sm hover:shadow-md">
-            Entrar
-          </button>
-        </div>
-        <div id="user-menu" class="hidden shrink-0 relative">
-          <button onclick="toggleUserMenu()" class="flex items-center gap-2 hover:bg-gray-100 rounded-xl px-2 py-1.5 transition-all">
-            <img id="user-avatar" src="" class="w-8 h-8 rounded-full object-cover border-2 border-blue-200" alt="">
-            <span id="user-name" class="text-sm font-semibold text-gray-700 hidden md:block max-w-[100px] truncate"></span>
-            <svg class="w-3.5 h-3.5 text-gray-400 hidden md:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-          </button>
-          <div id="user-dropdown" class="hidden absolute right-0 top-full mt-2 w-52 bg-white rounded-2xl shadow-xl border border-gray-100 py-2 z-50">
-            <a href="/meus-alertas" class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 rounded-lg mx-1">🔔 Meus Alertas</a>
-            <a href="/perfil" class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 rounded-lg mx-1">👤 Meu Perfil</a>
-            <div class="border-t border-gray-100 my-1.5 mx-3"></div>
-            <a href="/auth/logout" class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-red-500 hover:bg-red-50 rounded-lg mx-1">🚪 Sair</a>
+          <!-- Entrar -->
+          <div id="user-area" class="hidden md:block shrink-0">
+            <button onclick="openAuthModal('login')"
+               class="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-black px-5 py-2 rounded-xl transition-all whitespace-nowrap shadow-md hover:shadow-lg">
+              Entrar
+            </button>
           </div>
-        </div>
 
-      </div>
-    </div>
+          <!-- Menu usuário logado -->
+          <div id="user-menu" class="hidden shrink-0 relative">
+            <button onclick="toggleUserMenu()" class="flex items-center gap-2 hover:bg-gray-100 rounded-xl px-2 py-1.5 transition-all">
+              <img id="user-avatar" src="" class="w-8 h-8 rounded-full object-cover border-2 border-blue-200" alt="">
+              <span id="user-name" class="text-sm font-semibold text-gray-700 hidden md:block max-w-[100px] truncate"></span>
+              <svg class="w-3.5 h-3.5 text-gray-400 hidden md:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </button>
+            <div id="user-dropdown" class="hidden absolute right-0 top-full mt-2 w-52 bg-white rounded-2xl shadow-xl border border-gray-100 py-2 z-50">
+              <a href="/meus-alertas" class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 rounded-lg mx-1">🔔 Meus Alertas</a>
+              <a href="/perfil" class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 rounded-lg mx-1">👤 Meu Perfil</a>
+              <div class="border-t border-gray-100 my-1.5 mx-3"></div>
+              <a href="/auth/logout" class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-red-500 hover:bg-red-50 rounded-lg mx-1">🚪 Sair</a>
+            </div>
+          </div>
 
-    <!-- Sub-nav de categorias — carrossel com setas -->
-    <nav class="border-t border-gray-100 bg-white hidden md:block overflow-hidden" id="cat-subnav">
-      <div class="relative flex items-center overflow-hidden">
+        </div><!-- fim botões direita -->
+      </div><!-- fim flex h-[58px] -->
+    </div><!-- fim px -->
 
-        <!-- Seta esquerda -->
-        <button id="subnav-prev"
-          onclick="document.getElementById('subnav-track').scrollBy({left:-320,behavior:'smooth'})"
-          class="absolute left-0 z-10 h-full px-2 bg-gradient-to-r from-white via-white to-transparent
-                 flex items-center text-gray-400 hover:text-blue-600 transition-colors"
-          aria-label="Anterior">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7"/>
-          </svg>
-        </button>
-
-        <!-- Trilha rolável -->
-        <div id="subnav-track"
-          class="flex items-center gap-0.5 overflow-x-auto scrollbar-hide h-10 px-8 w-full scroll-smooth">
-          ${(opts.navCategories && opts.navCategories.length > 0
-            ? opts.navCategories
-            : [
-                { slug: 'smartphones',      icon: '📱', name: 'Celulares' },
-                { slug: 'notebooks',        icon: '💻', name: 'Notebooks' },
-                { slug: 'tv',               icon: '📺', name: 'TVs' },
-                { slug: 'games',            icon: '🎮', name: 'Games' },
-                { slug: 'eletrodomesticos', icon: '🏠', name: 'Eletrodomésticos' },
-                { slug: 'audio',            icon: '🎧', name: 'Áudio' },
-                { slug: 'cameras',          icon: '📷', name: 'Câmeras' },
-                { slug: 'moda',             icon: '👗', name: 'Moda' },
-              ]
-          ).map(cat => `
-            <a href="/categoria/${cat.slug}" class="subnav-link shrink-0">${cat.icon || ''} ${cat.name}</a>
-          `).join('')}
-          <div class="h-5 w-px bg-gray-200 mx-1 shrink-0"></div>
-          <a href="/ofertas" class="subnav-link subnav-hot shrink-0">🔥 Ofertas do Dia</a>
-        </div>
-
-        <!-- Seta direita -->
-        <button id="subnav-next"
-          onclick="document.getElementById('subnav-track').scrollBy({left:320,behavior:'smooth'})"
-          class="absolute right-0 z-10 h-full px-2 bg-gradient-to-l from-white via-white to-transparent
-                 flex items-center text-gray-400 hover:text-blue-600 transition-colors"
-          aria-label="Próximo">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
-          </svg>
-        </button>
-
-      </div>
-    </nav>
     <script>
       (function(){
         var track = document.getElementById('subnav-track');
-        var prev  = document.getElementById('subnav-prev');
-        var next  = document.getElementById('subnav-next');
         if (!track) return;
-        function update() {
-          if (prev) prev.style.opacity = track.scrollLeft > 10 ? '1' : '0.3';
-          if (next) next.style.opacity = track.scrollLeft < track.scrollWidth - track.clientWidth - 10 ? '1' : '0.3';
-        }
-        track.addEventListener('scroll', update);
-        update();
+        track.addEventListener('wheel', function(e){
+          if(e.deltaY !== 0){ e.preventDefault(); track.scrollLeft += e.deltaY; }
+        }, { passive: false });
       })();
     </script>
 

@@ -1661,6 +1661,204 @@ admin.post('/api/affiliate-bot/apply', async (c) => {
   return c.json({ ok: true })
 })
 
+// ── POST /admin/api/stores/ml/import-affiliate-links ────────────
+// Recebe bloco de texto ou CSV com links meli.la/... ou links ML longos
+//
+// LÓGICA:
+//  - Links meli.la/... já SÃO links de afiliado gerados pelo programa ML
+//    → salvar como affiliate_url diretamente (não precisam de resolução)
+//  - Links longos do ML (mercadolivre.com.br/...) com MLB... na URL
+//    → extrair MLB ID + injetar parâmetros matt_word/matt_tool
+//  - Tenta vincular ao produto existente no banco via ml_item_id
+//    → para links meli.la, tenta descobrir o MLB via API ML (GET /items)
+admin.post('/api/stores/ml/import-affiliate-links', async (c) => {
+  const { DB } = c.env
+  const PUBLISHER_ID = 'cfegdhabc31955'
+  const MATT_TOOL    = '38524122'
+
+  const body = await c.req.json().catch(() => ({}))
+  const raw: string = body.links || ''
+
+  if (!raw.trim()) return c.json({ error: 'Nenhum link enviado' }, 400)
+
+  // Extrai todas as URLs do bloco (suporta CSV, TXT, quebra de linha, espaços, tab)
+  const urlRegex = /https?:\/\/[^\s,;"'<>\n\r\t]+/g
+  const urls = Array.from(new Set(
+    (raw.match(urlRegex) || []).map(u => u.replace(/[.,;)>\]]+$/, '').trim())
+  )).filter(Boolean)
+
+  if (urls.length === 0) return c.json({ error: 'Nenhuma URL válida encontrada' }, 400)
+  if (urls.length > 500) return c.json({ error: 'Máximo 500 links por importação' }, 400)
+
+  // ── Helpers ─────────────────────────────────────────────────
+
+  // Detecta se é link curto de afiliado ML (meli.la gerado pelo programa)
+  function isShortAffiliateLink(url: string): boolean {
+    return /meli\.la\/|mlv\.cl\/|merc\.ad\//i.test(url)
+  }
+
+  // Detecta se é link longo do ML com MLB na URL
+  function isLongMlLink(url: string): boolean {
+    return /mercadolivre\.com\.br|mercadopago\.com\.br|produto\.mercadolivre/i.test(url)
+  }
+
+  // Extrai MLB... de uma URL longa do ML
+  function extractMlbId(url: string): string | null {
+    const patterns = [
+      /\/(MLB-?\d{7,12})/i,
+      /item[_-]id=(MLB-?\d{7,12})/i,
+      /product[_-]id=(MLB-?\d{7,12})/i,
+      /-(MLB-?\d{7,12})[_\-\.]/i,
+      /\/(MLB-?\d{7,12})$/i,
+    ]
+    for (const p of patterns) {
+      const m = url.match(p)
+      if (m) return m[1].replace(/-/g, '').toUpperCase()
+    }
+    return null
+  }
+
+  // Injeta parâmetros de rastreamento num link longo do ML
+  function buildTrackedUrl(longUrl: string): string {
+    try {
+      const u = new URL(longUrl)
+      u.searchParams.set('matt_word', PUBLISHER_ID)
+      u.searchParams.set('matt_tool', MATT_TOOL)
+      u.searchParams.set('forceInApp', 'true')
+      return u.toString()
+    } catch {
+      return `${longUrl}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+    }
+  }
+
+  // Tenta descobrir MLB ID a partir de um link curto meli.la
+  // via API pública do ML (resolve o item_id no endpoint de redirects, se disponível)
+  // Fallback: busca no banco por affiliate_url parecida
+  async function lookupMlbFromShortLink(shortUrl: string): Promise<string | null> {
+    // Tenta o endpoint de expand do ML (não oficial mas funcional)
+    try {
+      const apiUrl = `https://api.mercadolibre.com/short-urls?url=${encodeURIComponent(shortUrl)}`
+      const r = await fetch(apiUrl, {
+        headers: { 'User-Agent': 'KainowRadar/1.0', Accept: 'application/json' },
+        redirect: 'follow',
+      })
+      if (r.ok) {
+        const j = await r.json() as any
+        const longUrl = j?.resource_id || j?.url || j?.redirect_url || ''
+        if (longUrl) return extractMlbId(String(longUrl))
+      }
+    } catch { /* ignora */ }
+    return null
+  }
+
+  // ── Processamento ───────────────────────────────────────────
+
+  const results: any[] = []
+  let matched = 0, saved = 0, errors = 0, imported = 0
+
+  for (const originalUrl of urls) {
+    try {
+      const isShort = isShortAffiliateLink(originalUrl)
+      const isLong  = isLongMlLink(originalUrl)
+
+      let affiliateUrl: string
+      let mlbId: string | null = null
+
+      if (isShort) {
+        // Link meli.la já É o link de afiliado — usa direto
+        affiliateUrl = originalUrl
+        // Tenta descobrir MLB para vincular ao produto
+        mlbId = await lookupMlbFromShortLink(originalUrl)
+      } else if (isLong) {
+        // Link longo → extrai MLB e injeta tracking
+        mlbId = extractMlbId(originalUrl)
+        affiliateUrl = buildTrackedUrl(originalUrl)
+      } else {
+        // Link desconhecido — tenta extrair MLB de qualquer forma e usa como está
+        mlbId = extractMlbId(originalUrl)
+        affiliateUrl = originalUrl
+      }
+
+      imported++
+
+      // Busca produto vinculado pelo ml_item_id (se encontrado)
+      let product: any = null
+      if (mlbId) {
+        product = await DB.prepare(
+          'SELECT id, name FROM products WHERE ml_item_id = ? LIMIT 1'
+        ).bind(mlbId).first<any>()
+      }
+
+      if (product) {
+        matched++
+        await DB.prepare(`
+          UPDATE products
+          SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(affiliateUrl, product.id).run()
+        saved++
+      }
+
+      // Log da importação
+      await DB.prepare(`
+        INSERT INTO ml_affiliate_imports
+          (original_url, resolved_url, ml_item_id, affiliate_url,
+           product_id, product_name, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        originalUrl,
+        isShort ? originalUrl : originalUrl,
+        mlbId ?? null,
+        affiliateUrl,
+        product?.id ?? null,
+        product?.name ?? null,
+        product ? 'matched' : 'resolved'
+      ).run()
+
+      results.push({
+        url:          originalUrl,
+        affiliate_url: affiliateUrl,
+        ml_item_id:   mlbId ?? null,
+        status:       product ? 'matched' : 'resolved',
+        product_id:   product?.id ?? null,
+        product_name: product?.name ?? null,
+        type:         isShort ? 'short' : isLong ? 'long' : 'unknown',
+      })
+
+    } catch (e: any) {
+      errors++
+      await DB.prepare(
+        "INSERT INTO ml_affiliate_imports (original_url, status, error_msg) VALUES (?, 'error', ?)"
+      ).bind(originalUrl, e?.message || String(e)).run().catch(() => {})
+      results.push({ url: originalUrl, status: 'error', error: e?.message || String(e) })
+    }
+  }
+
+  return c.json({
+    ok: true,
+    total:    urls.length,
+    imported,
+    matched,
+    saved,
+    errors,
+    results,
+  })
+})
+
+// ── GET /admin/api/stores/ml/import-history ─────────────────────
+// Retorna histórico dos últimos 100 links importados
+admin.get('/api/stores/ml/import-history', async (c) => {
+  const { DB } = c.env
+  const { results } = await DB.prepare(`
+    SELECT id, original_url, resolved_url, ml_item_id, affiliate_url,
+           product_id, product_name, status, error_msg, imported_at
+    FROM ml_affiliate_imports
+    ORDER BY imported_at DESC
+    LIMIT 100
+  `).all<any>()
+  return c.json({ results })
+})
+
 // ── POST /admin/api/cron/run — Executa scraper ML manualmente ──
 admin.post('/api/cron/run', async (c) => {
   const { DB, CACHE } = c.env
