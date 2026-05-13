@@ -1261,10 +1261,16 @@ ml.get('/browse', async (c) => {
 
     if (!res.ok) {
       const err: any = await res.json().catch(() => ({}))
+      // 403 no /sites/MLB/search = app em modo test/legacy — endpoint bloqueado pelo ML
+      // Solução: usar /items/{id} com import-url ou aguardar aprovação do app
+      const isForbidden = res.status === 403
       return c.json({
-        error:   err.message || err.error || `ML API HTTP ${res.status}`,
+        error:   isForbidden
+          ? 'API ML: acesso negado ao /sites/MLB/search (app em modo test). Use o endpoint /api/ml/item/:id com IDs diretos.'
+          : (err.message || err.error || `ML API HTTP ${res.status}`),
         status:  res.status,
-        details: err,
+        hint:    isForbidden ? 'Para desbloquear, o app precisa ser aprovado na categoria no painel ML.' : undefined,
+        details: isForbidden ? undefined : err,
       }, res.status as any)
     }
 
@@ -1532,9 +1538,13 @@ ml.get('/search', async (c) => {
 
     if (!res.ok) {
       const err: any = await res.json().catch(() => ({}))
+      const isForbidden = res.status === 403
       return c.json({
-        error:  err.message || err.error || `ML API HTTP ${res.status}`,
+        error:  isForbidden
+          ? 'API ML: acesso negado ao /sites/MLB/search (app em modo test). Use import-url com IDs diretos.'
+          : (err.message || err.error || `ML API HTTP ${res.status}`),
         status: res.status,
+        hint:   isForbidden ? 'Para desbloquear, o app precisa ser aprovado no painel ML.' : undefined,
       }, res.status as any)
     }
 
