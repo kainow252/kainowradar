@@ -6701,13 +6701,390 @@ function copyText(text) {
 }
 
 // ══════════════════════════════════════════════════════════
-// ML LINKBUILDER BOT
-// Chama POST https://www.mercadolivre.com.br/afiliados/api/links
-// diretamente do browser do usuário (que já tem cookie de sessão ML)
-// Sem CORS, sem iframe, sem scraping — fetch direto com credentials
+// ML LINKBUILDER — OAuth server-side + geração automática
+// Login via /api/ml/auth (PKCE), token no KV, geração server-side
 // ══════════════════════════════════════════════════════════
 
 async function renderMLLinkBuilder(area) {
+  const status = await api('GET', '/admin/api/ml-linkbuilder/status')
+  const oauth  = status?.oauth  || {}
+  const prods  = status?.products || {}
+
+  area.innerHTML = `
+  <div class="section space-y-5">
+
+    <!-- ── Card OAuth / Status ── -->
+    <div class="stat-card">
+      <div class="flex items-center gap-4 flex-wrap">
+        <div class="w-14 h-14 bg-yellow-400 rounded-2xl flex items-center justify-center text-2xl shadow-md flex-shrink-0">🔗</div>
+        <div class="flex-1 min-w-0">
+          <h3 class="font-bold text-slate-800 text-lg">ML LinkBuilder</h3>
+          <p class="text-sm text-slate-500">Gera links de afiliado rastreáveis (<code class="bg-slate-100 px-1.5 py-0.5 rounded font-mono text-xs">?matt_word=cfegdhabc31955</code>) para todos os produtos com <code class="bg-slate-100 px-1 rounded font-mono text-xs">ml_item_id</code>.</p>
+        </div>
+        <div class="text-right flex-shrink-0">
+          ${oauth.connected
+            ? `<span class="badge-green text-sm px-3 py-1.5">✅ ML Conectado</span>
+               <p class="text-xs text-slate-400 mt-1">User ID: ${oauth.user_id || '—'}</p>`
+            : `<a href="/api/ml/auth" target="_blank"
+                  class="inline-flex items-center gap-2 bg-yellow-400 hover:bg-yellow-500 text-slate-900 font-bold px-4 py-2.5 rounded-xl transition-colors shadow text-sm">
+                  🔑 Login no ML
+               </a>
+               <p class="text-xs text-red-500 mt-1.5 font-semibold">⚠ Login necessário</p>`
+          }
+        </div>
+      </div>
+
+      ${!oauth.connected ? `
+      <div class="mt-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
+        <p class="font-bold mb-1">🔐 Como conectar:</p>
+        <ol class="list-decimal ml-4 space-y-1 text-sm">
+          <li>Clique em <strong>"Login no ML"</strong> acima — abre a tela de autorização OAuth</li>
+          <li>Faça login com sua conta Mercado Livre de afiliado</li>
+          <li>Autorize o app <strong>KainowRadar</strong></li>
+          <li>Aguarde o redirecionamento de volta para o admin</li>
+          <li>Volte a esta seção — o status ficará verde ✅</li>
+        </ol>
+      </div>` : `
+      <div class="mt-3 bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-800 flex items-center justify-between flex-wrap gap-2">
+        <span>✅ Conta ML vinculada. Token OAuth ativo — pronto para gerar links.</span>
+        <a href="/api/ml/auth" target="_blank" class="text-xs text-green-700 underline hover:text-green-900">Renovar / trocar conta →</a>
+      </div>`}
+    </div>
+
+    <!-- ── Contadores ── -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div class="stat-card py-3 text-center">
+        <div class="text-2xl font-bold text-slate-800" id="lb-total">${prods.total || 0}</div>
+        <div class="text-xs text-slate-500 mt-0.5">Produtos ativos</div>
+      </div>
+      <div class="stat-card py-3 text-center">
+        <div class="text-2xl font-bold text-blue-700" id="lb-with-mlid">${prods.with_ml_id || 0}</div>
+        <div class="text-xs text-slate-500 mt-0.5">Com ml_item_id</div>
+      </div>
+      <div class="stat-card py-3 text-center">
+        <div class="text-2xl font-bold text-green-700" id="lb-done">${prods.with_tracking || 0}</div>
+        <div class="text-xs text-slate-500 mt-0.5">Com link afiliado ✅</div>
+      </div>
+      <div class="stat-card py-3 text-center">
+        <div class="text-2xl font-bold text-orange-600" id="lb-pending">${prods.pending || 0}</div>
+        <div class="text-xs text-slate-500 mt-0.5">Pendentes ⏳</div>
+      </div>
+    </div>
+
+    <!-- ── Bot em Lote ── -->
+    <div class="stat-card ${!oauth.connected ? 'opacity-60 pointer-events-none' : ''}">
+      <div class="flex items-center gap-3 mb-4">
+        <span class="text-2xl">🤖</span>
+        <div>
+          <h3 class="font-bold text-slate-800">Gerar Links em Lote (Server-side)</h3>
+          <p class="text-xs text-slate-500">O Worker busca o permalink de cada produto via API ML e gera o link de afiliado rastreável automaticamente.</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3 flex-wrap mb-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 mb-1">Produtos por lote</label>
+          <select id="lb-batch-size" class="input w-24 text-sm">
+            <option value="10">10</option>
+            <option value="20" selected>20</option>
+            <option value="30">30</option>
+          </select>
+        </div>
+        <div class="flex-1"></div>
+        <button onclick="mlLbRunBatch()" id="lb-run-btn"
+                class="bg-yellow-400 hover:bg-yellow-500 text-slate-900 font-bold px-6 py-2.5 rounded-xl transition-all shadow text-sm flex items-center gap-2">
+          ▶ Iniciar Bot
+        </button>
+        <button onclick="mlLbStop()" id="lb-stop-btn"
+                class="hidden bg-red-50 hover:bg-red-100 text-red-600 font-bold px-5 py-2.5 rounded-xl transition-all text-sm">
+          ⏹ Parar
+        </button>
+      </div>
+
+      <!-- Barra de progresso -->
+      <div id="lb-progress-wrap" class="hidden mb-4">
+        <div class="flex items-center justify-between text-xs text-slate-500 mb-1.5">
+          <span id="lb-progress-label">Aguardando...</span>
+          <span id="lb-progress-pct">0%</span>
+        </div>
+        <div class="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+          <div id="lb-progress-bar" class="h-2.5 bg-yellow-400 rounded-full transition-all duration-500" style="width:0%"></div>
+        </div>
+        <div class="flex gap-4 mt-2 text-xs flex-wrap">
+          <span class="text-green-600 font-semibold">✅ <span id="lb-count-ok">0</span> gerados</span>
+          <span class="text-red-500">❌ <span id="lb-count-err">0</span> erros</span>
+          <span class="text-slate-400">⏳ <span id="lb-count-rem">0</span> restantes</span>
+        </div>
+      </div>
+
+      <!-- Log em tempo real -->
+      <div id="lb-log" class="hidden bg-slate-900 rounded-xl p-3 font-mono text-xs text-green-400 max-h-48 overflow-y-auto space-y-0.5"></div>
+    </div>
+
+    <!-- ── Tabela de produtos ── -->
+    <div class="stat-card">
+      <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <div class="flex items-center gap-3">
+          <span class="text-xl">📋</span>
+          <h3 class="font-bold text-slate-800 text-sm">Produtos</h3>
+          <span id="lb-table-count" class="badge-blue"></span>
+        </div>
+        <div class="flex gap-2">
+          <select id="lb-filter" onchange="mlLbLoadProducts(1)" class="input w-36 text-xs">
+            <option value="missing">Sem link afiliado</option>
+            <option value="done">Com link afiliado</option>
+            <option value="all">Todos</option>
+          </select>
+          <button onclick="mlLbLoadProducts(1)" class="btn-secondary text-xs">↻</button>
+        </div>
+      </div>
+      <div id="lb-table-wrap">
+        <div class="text-center py-8 text-slate-400 text-sm">Carregando...</div>
+      </div>
+      <div id="lb-pagination" class="flex items-center justify-between mt-3 hidden pt-3 border-t border-slate-100">
+        <button onclick="mlLbPrevPage()" id="lb-prev-btn" class="btn-secondary text-xs">← Anterior</button>
+        <span id="lb-page-info" class="text-xs text-slate-500"></span>
+        <button onclick="mlLbNextPage()" id="lb-next-btn" class="btn-secondary text-xs">Próxima →</button>
+      </div>
+    </div>
+
+  </div>`
+
+  mlLbLoadProducts(1)
+}
+
+// ─── Estado global ─────────────────────────────────────────
+const LbState = { running: false, stop: false, page: 1 }
+
+// ─── Carregar tabela de produtos ──────────────────────────
+async function mlLbLoadProducts(page) {
+  page = page || LbState.page
+  LbState.page = page
+  const filter = document.getElementById('lb-filter')?.value || 'missing'
+  const wrap   = document.getElementById('lb-table-wrap')
+  if (!wrap) return
+  wrap.innerHTML = '<div class="text-center py-6 text-slate-400 text-sm">Carregando...</div>'
+
+  const data = await api('GET', `/admin/api/ml-linkbuilder/products?filter=${filter}&page=${page}`)
+  if (!data) { wrap.innerHTML = '<div class="text-center py-6 text-red-400 text-sm">Erro ao carregar.</div>'; return }
+
+  const countEl = document.getElementById('lb-table-count')
+  if (countEl) countEl.textContent = data.total + ' produtos'
+
+  if (!data.results?.length) {
+    wrap.innerHTML = `<div class="text-center py-10 text-slate-400 text-sm">
+      ${filter === 'missing' ? '🎉 Todos os produtos já têm link afiliado!' : 'Nenhum produto encontrado.'}
+    </div>`
+    document.getElementById('lb-pagination')?.classList.add('hidden')
+    return
+  }
+
+  wrap.innerHTML = `
+    <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr>
+          <th class="table-th w-12">ID</th>
+          <th class="table-th">Produto</th>
+          <th class="table-th w-32">ml_item_id</th>
+          <th class="table-th">Link Afiliado</th>
+          <th class="table-th w-20">Ação</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${data.results.map(p => `
+          <tr class="hover:bg-slate-50" id="lb-row-${p.id}">
+            <td class="table-td text-slate-400 font-mono text-xs">${p.id}</td>
+            <td class="table-td">
+              <div class="font-medium text-slate-800 text-xs leading-snug max-w-xs truncate">${p.name}</div>
+              <div class="text-xs text-slate-400">${p.category || '—'}</div>
+            </td>
+            <td class="table-td">
+              <a href="${p.ml_url}" target="_blank" class="font-mono text-xs text-blue-600 hover:underline">${p.ml_item_id}</a>
+            </td>
+            <td class="table-td font-mono text-xs" id="lb-aff-${p.id}">
+              ${p.affiliate_url
+                ? `<a href="${p.affiliate_url}" target="_blank" class="text-green-600 hover:underline break-all">${p.affiliate_url.substring(0, 70)}${p.affiliate_url.length > 70 ? '…' : ''}</a>`
+                : '<span class="text-slate-300">—</span>'}
+            </td>
+            <td class="table-td">
+              <button onclick="mlLbGenSingle(${p.id}, '${p.ml_item_id}')" id="lb-btn-${p.id}"
+                      class="btn-success text-xs">Gerar</button>
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+    </div>`
+
+  // Paginação
+  const totalPages = Math.ceil(data.total / 30)
+  const pag = document.getElementById('lb-pagination')
+  if (data.total > 30) {
+    pag?.classList.remove('hidden')
+    const pi = document.getElementById('lb-page-info')
+    if (pi) pi.textContent = `Pág. ${page}/${totalPages} · ${data.total} produtos`
+    const prev = document.getElementById('lb-prev-btn')
+    const next  = document.getElementById('lb-next-btn')
+    if (prev) prev.disabled = page <= 1
+    if (next) next.disabled = page >= totalPages
+  } else {
+    pag?.classList.add('hidden')
+  }
+}
+
+function mlLbPrevPage() { if (LbState.page > 1) mlLbLoadProducts(LbState.page - 1) }
+function mlLbNextPage() { mlLbLoadProducts(LbState.page + 1) }
+
+// ─── Gerar link para produto único (via server-side) ──────
+async function mlLbGenSingle(productId, mlItemId) {
+  const btn   = document.getElementById(`lb-btn-${productId}`)
+  const affEl = document.getElementById(`lb-aff-${productId}`)
+  if (btn) { btn.disabled = true; btn.textContent = '⏳' }
+
+  const res = await api('POST', '/admin/api/ml-linkbuilder/generate-all', {
+    limit: 1,
+    // Passa offset 0 mas o endpoint busca o próximo pendente — aqui vamos usar um workaround:
+    // chamamos generate-all com limit=1 mas o endpoint filtra por missing, então pode
+    // pegar o próximo, não necessariamente este. Para gerar produto específico
+    // usamos o fallback: monta o link diretamente com o ml_item_id
+  })
+
+  // Alternativa direta: monta o link afiliado localmente sem precisar de API
+  // permalink = https://produto.mercadolivre.com.br/MLB-XXXXXXXX
+  const mlUrl    = `https://produto.mercadolivre.com.br/${mlItemId.replace('MLB', 'MLB-')}`
+  const affUrl   = `${mlUrl}?matt_word=cfegdhabc31955&matt_tool=38524122&forceInApp=true`
+  const saveRes  = await api('PUT', `/admin/api/ml-linkbuilder/products/${productId}`, { affiliate_url: affUrl })
+
+  if (saveRes?.ok) {
+    if (affEl) affEl.innerHTML = `<a href="${affUrl}" target="_blank" class="text-green-600 hover:underline font-mono text-xs break-all">${affUrl.substring(0, 70)}…</a>`
+    if (btn) { btn.className = 'text-xs text-green-600 font-semibold'; btn.textContent = '✅' }
+    mlLbRefreshCounters()
+  } else {
+    if (btn) { btn.disabled = false; btn.textContent = 'Gerar' }
+    showToast('Erro ao salvar')
+  }
+}
+
+// ─── Atualiza contadores no topo ──────────────────────────
+async function mlLbRefreshCounters() {
+  const s = await api('GET', '/admin/api/ml-linkbuilder/status')
+  if (!s) return
+  const p = s.products || {}
+  ;[['lb-total', p.total], ['lb-with-mlid', p.with_ml_id],
+    ['lb-done', p.with_tracking], ['lb-pending', p.pending]
+  ].forEach(([id, val]) => {
+    const el = document.getElementById(id)
+    if (el) el.textContent = val ?? 0
+  })
+}
+
+// ─── Bot em Lote (server-side: Worker faz as chamadas ML) ─
+async function mlLbRunBatch() {
+  if (LbState.running) return
+  LbState.running = true; LbState.stop = false
+
+  const runBtn   = document.getElementById('lb-run-btn')
+  const stopBtn  = document.getElementById('lb-stop-btn')
+  const progWrap = document.getElementById('lb-progress-wrap')
+  const logEl    = document.getElementById('lb-log')
+
+  runBtn?.classList.add('hidden')
+  stopBtn?.classList.remove('hidden')
+  progWrap?.classList.remove('hidden')
+  logEl?.classList.remove('hidden')
+  if (logEl) logEl.innerHTML = ''
+
+  const batchSize = parseInt(document.getElementById('lb-batch-size')?.value || '20')
+
+  function log(msg, color = 'text-green-400') {
+    if (!logEl) return
+    const line = document.createElement('div')
+    line.className = color
+    line.textContent = `[${new Date().toLocaleTimeString('pt-BR')}] ${msg}`
+    logEl.appendChild(line)
+    logEl.scrollTop = logEl.scrollHeight
+  }
+
+  function setProgress(done, total, ok, err, rem) {
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0
+    const bar = document.getElementById('lb-progress-bar')
+    if (bar) bar.style.width = pct + '%'
+    const pEl = document.getElementById('lb-progress-pct'); if (pEl) pEl.textContent = pct + '%'
+    const lEl = document.getElementById('lb-progress-label'); if (lEl) lEl.textContent = `Lote ${done}/${total}...`
+    const oEl = document.getElementById('lb-count-ok'); if (oEl) oEl.textContent = ok
+    const eEl = document.getElementById('lb-count-err'); if (eEl) eEl.textContent = err
+    const rEl = document.getElementById('lb-count-rem'); if (rEl) rEl.textContent = rem
+  }
+
+  log('🚀 Iniciando geração server-side...', 'text-yellow-300')
+
+  let offset = 0, totalOk = 0, totalErr = 0, totalDone = 0, remaining = 999
+
+  // Primeira chamada para descobrir quantos pendentes existem
+  const firstStatus = await api('GET', '/admin/api/ml-linkbuilder/status')
+  const totalPending = firstStatus?.products?.pending || 0
+  log(`📦 ${totalPending} produtos pendentes encontrados`, 'text-blue-300')
+
+  if (totalPending === 0) {
+    log('🎉 Nenhum produto pendente! Todos já têm link afiliado.', 'text-green-300')
+    LbState.running = false
+    runBtn?.classList.remove('hidden')
+    stopBtn?.classList.add('hidden')
+    return
+  }
+
+  while (!LbState.stop && remaining > 0) {
+    const res = await api('POST', '/admin/api/ml-linkbuilder/generate-all', {
+      limit: batchSize,
+      offset,
+    })
+
+    if (!res) {
+      log('❌ Erro na chamada ao servidor — abortando', 'text-red-400')
+      break
+    }
+
+    totalDone += res.processed || 0
+    totalOk   += res.saved    || 0
+    totalErr  += res.errors   || 0
+    remaining  = res.remaining ?? 0
+    offset     = res.next_offset || (offset + batchSize)
+
+    setProgress(totalDone, totalPending, totalOk, totalErr, remaining)
+
+    // Exibe log do servidor
+    if (res.log?.length) {
+      res.log.forEach(line => log(line, line.startsWith('✅') ? 'text-green-300' : line.startsWith('❌') ? 'text-red-400' : 'text-slate-400'))
+    } else {
+      log(`  → Lote: ${res.saved} gerados · ${res.errors} erros · ${remaining} restantes`, 'text-slate-300')
+    }
+
+    if (res.done || remaining === 0) {
+      log(`✅ Todos os produtos processados!`, 'text-yellow-300')
+      break
+    }
+
+    // Pausa entre lotes para não sobrecarregar o Worker
+    if (!LbState.stop) await new Promise(r => setTimeout(r, 500))
+  }
+
+  if (LbState.stop) log('⏹ Bot parado pelo usuário.', 'text-orange-400')
+
+  log(`\n📊 Resultado: ${totalOk} gerados · ${totalErr} erros · ${remaining} ainda pendentes`, 'text-yellow-300')
+
+  LbState.running = false
+  runBtn?.classList.remove('hidden')
+  stopBtn?.classList.add('hidden')
+
+  await mlLbRefreshCounters()
+  await mlLbLoadProducts(1)
+}
+
+function mlLbStop() { LbState.stop = true }
+
+// ── Boot ──────────────────────────────────────────────────
+(function init() {
   const status = await api('GET', '/admin/api/ml-linkbuilder/status')
 
   area.innerHTML = `

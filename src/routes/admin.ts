@@ -5382,44 +5382,122 @@ admin.post('/api/ml-highlights/import', async (c) => {
 })
 
 // ══════════════════════════════════════════════════════════
-// ML LINKBUILDER BOT
-// Gera links meli.la/* chamando o endpoint interno do ML
-// O browser do usuário já tem o cookie de sessão ML → sem CORS
-// Endpoint descoberto: POST https://www.mercadolivre.com.br/afiliados/api/links
-//   body: { "url": "https://produto.mercadolivre.com.br/MLB-..." }
-//   resp: { "link": "https://meli.la/xxxxx", ... }  (quando autenticado)
+// ML LINKBUILDER — OAuth server-side + geração automática
+// Fluxo:
+//  1. Admin loga via /api/ml/auth (OAuth PKCE)
+//  2. access_token + refresh_token ficam no KV (ml_access_token / ml_refresh_token)
+//  3. generate-all: pega todos produtos com ml_item_id → monta permalink
+//     → constrói link afiliado com matt_word/matt_tool → salva no banco
+//  Nota: link afiliado padrão ML = permalink?matt_word=PUB_ID&matt_tool=MATT_TOOL
+//  O meli.la é gerado apenas pelo linkbuilder web (exige cookie de sessão)
+//  Aqui usamos o padrão rastreável com matt_word que é igualmente válido
 // ══════════════════════════════════════════════════════════
 
+const LB_PUBLISHER_ID = 'cfegdhabc31955'
+const LB_MATT_TOOL    = '38524122'
+const LB_ML_API       = 'https://api.mercadolibre.com'
+
+// ── Helper: obtém token OAuth ML do KV (com auto-refresh) ──
+async function getLBToken(env: any): Promise<string | null> {
+  const CACHE = env.CACHE as KVNamespace | undefined
+  if (!CACHE) return null
+
+  // 1. access_token cacheado (válido 6h)
+  const access = await CACHE.get('ml_access_token').catch(() => null)
+  if (access) return access
+
+  // 2. refresh_token → renova access_token
+  const refresh = await CACHE.get('ml_refresh_token').catch(() => null)
+  const appId   = (env.ML_APP_ID as string) || '3098423019766450'
+  const secret  = (env.ML_SECRET  as string) || ''
+  if (refresh && secret) {
+    try {
+      const res = await fetch(`${LB_ML_API}/oauth/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token', client_id: appId,
+          client_secret: secret, refresh_token: refresh,
+        }),
+      })
+      if (res.ok) {
+        const td: any = await res.json()
+        if (td.access_token) {
+          await CACHE.put('ml_access_token',  td.access_token, { expirationTtl: td.expires_in || 21600 }).catch(() => {})
+          if (td.refresh_token) await CACHE.put('ml_refresh_token', td.refresh_token, { expirationTtl: 86400 * 30 }).catch(() => {})
+          return td.access_token
+        }
+      }
+    } catch { /* continua */ }
+  }
+
+  return null
+}
+
+// ── Helper: monta affiliate_url rastreável a partir do permalink ──
+function buildMLAffUrl(permalink: string): string {
+  // Garante que o permalink está no domínio produto.mercadolivre.com.br
+  // e adiciona os parâmetros de rastreio do afiliado
+  const base = permalink.split('?')[0]
+  return `${base}?matt_word=${LB_PUBLISHER_ID}&matt_tool=${LB_MATT_TOOL}&forceInApp=true`
+}
+
+// GET /admin/api/ml-linkbuilder/status
+admin.get('/api/ml-linkbuilder/status', async (c) => {
+  const { DB } = c.env
+  const CACHE = c.env.CACHE as KVNamespace | undefined
+
+  // Status OAuth
+  const accessToken  = await CACHE?.get('ml_access_token').catch(() => null)
+  const refreshToken = await CACHE?.get('ml_refresh_token').catch(() => null)
+  const userId       = await CACHE?.get('ml_user_id').catch(() => null)
+
+  // Contadores
+  const [total, withAff, withMlId, withMeliLa] = await Promise.all([
+    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1").first<any>(),
+    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND affiliate_url IS NOT NULL AND affiliate_url != ''").first<any>(),
+    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND ml_item_id IS NOT NULL AND ml_item_id != ''").first<any>(),
+    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND affiliate_url LIKE '%matt_word%'").first<any>(),
+  ])
+
+  return c.json({
+    oauth: {
+      connected:     !!accessToken || !!refreshToken,
+      has_access:    !!accessToken,
+      has_refresh:   !!refreshToken,
+      user_id:       userId,
+      auth_url:      '/api/ml/auth',
+    },
+    products: {
+      total:          total?.n    || 0,
+      with_ml_id:     withMlId?.n || 0,
+      with_affiliate: withAff?.n  || 0,
+      with_tracking:  withMeliLa?.n || 0,
+      pending:        (withMlId?.n || 0) - (withMeliLa?.n || 0),
+    },
+  })
+})
+
 // GET /admin/api/ml-linkbuilder/products
-// Lista produtos ativos com seus permalinks ML para o bot processar
 admin.get('/api/ml-linkbuilder/products', async (c) => {
   const { DB } = c.env
-  const filter  = c.req.query('filter') || 'missing'   // missing | all | done
+  const filter  = c.req.query('filter') || 'missing'
   const page    = Math.max(1, parseInt(c.req.query('page') || '1'))
-  const perPage = Math.min(100, parseInt(c.req.query('per_page') || '50'))
+  const perPage = 30
   const offset  = (page - 1) * perPage
 
   let where = "WHERE p.is_active = 1 AND p.ml_item_id IS NOT NULL AND p.ml_item_id != ''"
-  if (filter === 'missing') {
-    where += " AND (p.affiliate_url IS NULL OR p.affiliate_url = '' OR p.affiliate_url NOT LIKE '%meli.la%')"
-  } else if (filter === 'done') {
-    where += " AND p.affiliate_url LIKE '%meli.la%'"
-  }
+  if (filter === 'missing') where += " AND (p.affiliate_url IS NULL OR p.affiliate_url = '' OR p.affiliate_url NOT LIKE '%matt_word%')"
+  if (filter === 'done')    where += " AND p.affiliate_url LIKE '%matt_word%'"
 
   const { results } = await DB.prepare(`
-    SELECT p.id, p.name, p.ml_item_id, p.affiliate_url, p.best_price, p.category
-    FROM products p
-    ${where}
-    ORDER BY p.id ASC
-    LIMIT ? OFFSET ?
+    SELECT p.id, p.name, p.ml_item_id, p.affiliate_url, p.best_price, p.category, p.thumbnail
+    FROM products p ${where}
+    ORDER BY p.id ASC LIMIT ? OFFSET ?
   `).bind(perPage, offset).all<any>()
 
-  const count = await DB.prepare(
-    `SELECT COUNT(*) as n FROM products p ${where}`
-  ).first<any>()
+  const count = await DB.prepare(`SELECT COUNT(*) as n FROM products p ${where}`).first<any>()
 
-  // Monta permalink ML a partir do ml_item_id
-  // MLB24045332 → https://produto.mercadolivre.com.br/MLB-24045332-...
   const products = results.map((p: any) => ({
     ...p,
     ml_url: `https://produto.mercadolivre.com.br/${p.ml_item_id.replace('MLB', 'MLB-')}`,
@@ -5428,78 +5506,116 @@ admin.get('/api/ml-linkbuilder/products', async (c) => {
   return c.json({ results: products, total: count?.n || 0, page, per_page: perPage })
 })
 
-// PUT /admin/api/ml-linkbuilder/products/:id
-// Salva o link meli.la gerado pelo bot no banco
+// POST /admin/api/ml-linkbuilder/generate-all
+// Geração server-side em lote: busca permalink via /items/{id} → monta link afiliado → salva
+// Processa até `limit` produtos por chamada (evita timeout do Worker)
+admin.post('/api/ml-linkbuilder/generate-all', async (c) => {
+  const { DB } = c.env
+  const body: any = await c.req.json().catch(() => ({}))
+  const limit  = Math.min(parseInt(body.limit  || '30'), 50)
+  const offset = Math.max(parseInt(body.offset || '0'),  0)
+
+  const token = await getLBToken(c.env)
+  if (!token) {
+    return c.json({ ok: false, error: 'Sem token OAuth ML. Conecte via "Login no ML" primeiro.' }, 401)
+  }
+
+  // Busca produtos sem affiliate_url rastreável
+  const { results: products } = await DB.prepare(`
+    SELECT id, name, ml_item_id, affiliate_url
+    FROM products
+    WHERE is_active = 1
+      AND ml_item_id IS NOT NULL AND ml_item_id != ''
+      AND (affiliate_url IS NULL OR affiliate_url = '' OR affiliate_url NOT LIKE '%matt_word%')
+    ORDER BY id ASC
+    LIMIT ? OFFSET ?
+  `).bind(limit, offset).all<any>()
+
+  if (!products.length) {
+    return c.json({ ok: true, processed: 0, saved: 0, errors: 0, done: true })
+  }
+
+  let saved = 0, errors = 0
+  const log: string[] = []
+
+  for (const p of products) {
+    const mlId = p.ml_item_id as string
+    try {
+      // Tenta /products/{id}/items primeiro (catalog ID — funciona de IPs externos)
+      const isShort = mlId.replace('MLB', '').length <= 8
+      let permalink: string | null = null
+
+      if (isShort) {
+        const r = await fetch(`${LB_ML_API}/products/${mlId}/items?limit=1`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+          signal: AbortSignal.timeout(6000),
+        })
+        if (r.ok) {
+          const d: any = await r.json()
+          const item = (d.results || [])[0]
+          permalink = item?.permalink || null
+        }
+      }
+
+      // Fallback: /items/{id} direto
+      if (!permalink) {
+        const r = await fetch(`${LB_ML_API}/items/${mlId}?attributes=id,permalink,price`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+          signal: AbortSignal.timeout(6000),
+        })
+        if (r.ok) {
+          const d: any = await r.json()
+          permalink = d?.permalink || null
+        }
+      }
+
+      if (permalink) {
+        const affUrl = buildMLAffUrl(permalink)
+        await DB.prepare(`
+          UPDATE products SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP WHERE id = ?
+        `).bind(affUrl, p.id).run()
+        saved++
+        log.push(`✅ ${mlId} → ${affUrl.substring(0, 80)}`)
+      } else {
+        errors++
+        log.push(`⚠️ ${mlId} → permalink não encontrado`)
+      }
+    } catch (e: any) {
+      errors++
+      log.push(`❌ ${mlId} → ${e.message || 'erro'}`)
+    }
+  }
+
+  // Verifica se ainda há pendentes
+  const remaining = await DB.prepare(`
+    SELECT COUNT(*) as n FROM products
+    WHERE is_active = 1 AND ml_item_id IS NOT NULL AND ml_item_id != ''
+      AND (affiliate_url IS NULL OR affiliate_url = '' OR affiliate_url NOT LIKE '%matt_word%')
+  `).first<any>()
+
+  return c.json({
+    ok: true,
+    processed: products.length,
+    saved,
+    errors,
+    done: (remaining?.n || 0) === 0,
+    remaining: remaining?.n || 0,
+    next_offset: offset + limit,
+    log: log.slice(0, 30),
+  })
+})
+
+// PUT /admin/api/ml-linkbuilder/products/:id — salva link manualmente
 admin.put('/api/ml-linkbuilder/products/:id', async (c) => {
   const { DB } = c.env
   const id = parseInt(c.req.param('id'))
   if (!id) return c.json({ error: 'ID inválido' }, 400)
-
-  const body: any = await c.req.json().catch(() => ({}))
-  const { affiliate_url } = body
-
-  if (!affiliate_url || !affiliate_url.includes('meli.la')) {
-    return c.json({ error: 'affiliate_url inválida — deve conter meli.la' }, 400)
-  }
-
+  const { affiliate_url } = await c.req.json().catch(() => ({} as any))
+  if (!affiliate_url) return c.json({ error: 'affiliate_url obrigatória' }, 400)
   await DB.prepare(`
-    UPDATE products
-    SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
+    UPDATE products SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP WHERE id = ?
   `).bind(affiliate_url, id).run()
-
   return c.json({ ok: true, id, affiliate_url })
-})
-
-// POST /admin/api/ml-linkbuilder/batch-save
-// Salva múltiplos links de uma vez (resultado do bot em lote)
-admin.post('/api/ml-linkbuilder/batch-save', async (c) => {
-  const { DB } = c.env
-  const body: any = await c.req.json().catch(() => ({}))
-  const items: Array<{ id: number; affiliate_url: string }> = body.items || []
-
-  if (!items.length) return c.json({ error: 'items[] obrigatório' }, 400)
-
-  let saved = 0
-  let errors = 0
-
-  for (const item of items) {
-    if (!item.id || !item.affiliate_url?.includes('meli.la')) {
-      errors++
-      continue
-    }
-    try {
-      await DB.prepare(`
-        UPDATE products
-        SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).bind(item.affiliate_url, item.id).run()
-      saved++
-    } catch {
-      errors++
-    }
-  }
-
-  return c.json({ ok: true, saved, errors })
-})
-
-// GET /admin/api/ml-linkbuilder/status
-// Resumo: quantos produtos têm link meli.la vs total
-admin.get('/api/ml-linkbuilder/status', async (c) => {
-  const { DB } = c.env
-  const [total, withMeliLa, withAnyAffiliate, withMlId] = await Promise.all([
-    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1").first<any>(),
-    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND affiliate_url LIKE '%meli.la%'").first<any>(),
-    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND affiliate_url IS NOT NULL AND affiliate_url != ''").first<any>(),
-    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND ml_item_id IS NOT NULL AND ml_item_id != ''").first<any>(),
-  ])
-  return c.json({
-    total:             total?.n         || 0,
-    with_meli_la:      withMeliLa?.n    || 0,
-    with_any_affiliate: withAnyAffiliate?.n || 0,
-    with_ml_id:        withMlId?.n      || 0,
-    missing_meli_la:   (withMlId?.n || 0) - (withMeliLa?.n || 0),
-  })
 })
 
 // ── Página HTML do Admin (SPA) ────────────────────────────
@@ -5642,46 +5758,19 @@ function renderAdminSPA(): string {
         <span class="text-lg">💰</span> Ofertas
       </div>
       <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Integrações</div>
-      <div onclick="showSection('stores')" class="sidebar-link" data-section="stores">
-        <span class="text-lg">🏪</span> Lojas Parceiras
-      </div>
-      <div onclick="showSection('api-configs')" class="sidebar-link" data-section="api-configs">
-        <span class="text-lg">🔌</span> APIs & Feeds
-      </div>
-      <div onclick="showSection('queue')" class="sidebar-link" data-section="queue">
-        <span class="text-lg">⚡</span> Fila de Preços
-      </div>
-      <div onclick="showSection('editorial')" class="sidebar-link" data-section="editorial">
-        <span class="text-lg">🤖</span> IA Editorial
-      </div>
-      <div onclick="showSection('footer')" class="sidebar-link" data-section="footer">
-        <span class="text-lg">🦶</span> Rodapé do Site
-      </div>
-      <div onclick="showSection('social')" class="sidebar-link" data-section="social">
-        <span class="text-lg">📣</span> Social Media
-      </div>
-      <div onclick="showSection('affiliate-bot')" class="sidebar-link" data-section="affiliate-bot">
-        <span class="text-lg">🤝</span> Bot Afiliados ML
-      </div>
-      <div onclick="showSection('buscape-import')" class="sidebar-link" data-section="buscape-import">
-        <span class="text-lg">🛒</span> Importar Buscapé
-      </div>
-      <div onclick="showSection('lomadee-import')" class="sidebar-link" data-section="lomadee-import">
-        <span class="text-lg">🟠</span> Importar Lomadee
-      </div>
-      <div onclick="showSection('awin-import')" class="sidebar-link" data-section="awin-import">
-        <span class="text-lg">🔵</span> Awin Afiliados
-      </div>
       <div onclick="showSection('ml-import')" class="sidebar-link" data-section="ml-import">
         <span class="text-lg">🟡</span> Importar do ML
       </div>
       <div onclick="showSection('ml-linkbuilder')" class="sidebar-link" data-section="ml-linkbuilder">
-        <span class="text-lg">🔗</span> ML LinkBuilder Bot
+        <span class="text-lg">🔗</span> ML LinkBuilder
       </div>
-      <div onclick="showSection('affiliate-codes')" class="sidebar-link" data-section="affiliate-codes">
-        <span class="text-lg">🔗</span> Códigos Afiliados
+      <div onclick="showSection('stores')" class="sidebar-link" data-section="stores">
+        <span class="text-lg">🏪</span> Lojas Parceiras
       </div>
-      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Análise</div>
+      <div onclick="showSection('api-configs')" class="sidebar-link" data-section="api-configs">
+        <span class="text-lg">🔌</span> APIs & Secrets
+      </div>
+      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest mt-1">Análise</div>
       <div onclick="showSection('analytics')" class="sidebar-link" data-section="analytics">
         <span class="text-lg">📈</span> Analytics
       </div>
