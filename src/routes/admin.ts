@@ -2063,6 +2063,60 @@ admin.get('/api/resolve-url', async (c) => {
   }
 })
 
+// ── GET /admin/api/ml-token-test — Diagnóstico da API ML ────────
+// Testa se o Bearer token funciona e o que a API ML retorna para um mlbId
+admin.get('/api/ml-token-test', async (c) => {
+  const mlbId = c.req.query('mlbId') || 'MLB2740971896'
+  const results: Record<string, any> = { mlbId, timestamp: new Date().toISOString() }
+
+  // 1. Testa obtenção do token
+  try {
+    const token = await getMlBearerToken(c.env)
+    results.tokenOk = !!token
+    results.tokenPrefix = token ? token.slice(0, 20) + '...' : null
+
+    // 2. Testa API ML com token
+    if (token) {
+      const r = await fetch(
+        `https://api.mercadolibre.com/items/${mlbId}?attributes=id,title,price,pictures,thumbnail`,
+        { headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+          signal: AbortSignal.timeout(5000) }
+      )
+      results.mlApiWithToken = { status: r.status, ok: r.ok }
+      if (r.ok) {
+        const d = await r.json() as any
+        results.mlApiWithToken.price = d.price
+        results.mlApiWithToken.title = d.title?.slice(0, 60)
+        results.mlApiWithToken.pics  = d.pictures?.length
+      } else {
+        results.mlApiWithToken.body = await r.text().then(t => t.slice(0, 200))
+      }
+    }
+  } catch(e: any) {
+    results.tokenError = e?.message
+  }
+
+  // 3. Testa API ML sem token (simula comportamento browser)
+  try {
+    const r2 = await fetch(
+      `https://api.mercadolibre.com/items/${mlbId}?attributes=id,title,price,thumbnail`,
+      { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(5000) }
+    )
+    results.mlApiNoToken = { status: r2.status, ok: r2.ok }
+    if (r2.ok) {
+      const d2 = await r2.json() as any
+      results.mlApiNoToken.price = d2.price
+      results.mlApiNoToken.title = d2.title?.slice(0, 60)
+    } else {
+      results.mlApiNoToken.body = await r2.text().then(t => t.slice(0, 200))
+    }
+  } catch(e: any) {
+    results.mlApiNoTokenError = e?.message
+  }
+
+  return c.json(results)
+})
+
 // ── GET /admin/api/fetch-product-meta ────────────────────────────
 // LEGADO — mantido para compatibilidade, mas resolve-url é preferível
 // Suporta: meli.la (redirect), mercadolivre.com.br, amazon.com.br, etc.

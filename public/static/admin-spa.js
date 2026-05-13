@@ -893,61 +893,98 @@ async function siImportAuto(storeId) {
 }
 
 // ── Fetch de metadados — estratégia em camadas ──────────────────
-// 1) Backend resolve-url: segue redirect (UA mobile), extrai og:title + og:image + mlbId
-// 2) Se tem mlbId → API ML do browser (CORS aberto) → preço real
-// 3) Fallback: allorigins.win para links não-ML
+// Para links Mercado Livre:
+//   1) Backend resolve-url → extrai mlbId (confiável) + og:title/og:image
+//   2) PRIORITÁRIO: API ML direto do browser (CORS aberto) → preço real + imagem HD
+//      O browser da produção (shopping-compare.pages.dev) tem permissão CORS na API ML.
+//      O backend (Cloudflare Worker) recebe 403 da API ML mesmo com Bearer token.
+//   3) Fallback: usa og:title/og:image do backend com proxy de imagem
+// Para outros links: allorigins.win como fallback
 async function siFetchMetaClientSide(originalUrl) {
-  // Camada 1: backend faz scraping do HTML (nome + imagem)
-  // Timeout de 12s — se demorar mais, parte pro fallback
+  const isML = /mercadolivre\.com\.br|mercadolibre\.com|meli\.la/i.test(originalUrl)
+
+  // ── CAMADA 1: backend scraping → pega mlbId + og:title + og:image ──
   let r = null
   try {
-    r = await api('GET', '/admin/api/resolve-url?url=' + encodeURIComponent(originalUrl), null, 12000)
+    r = await api('GET', '/admin/api/resolve-url?url=' + encodeURIComponent(originalUrl), null, 14000)
   } catch(e) { r = null }
 
   if (r && r.ok) {
     let name  = (r.name  || '').trim()
-    let image = r.image || null
-    let price = r.price || null
+    let image = r.image  || null
+    let price = r.price  || null   // backend retorna null para links /social/ (403 ML backend)
 
-    // Camada 2: complementa preço (e nome se faltou) via API ML do browser
-    if (r.mlbId && (!price || !name)) {
+    // ── CAMADA 2: API ML via browser — FONTE PRIMÁRIA para preço + imagem ──
+    // Ativa para qualquer link ML que tenha mlbId (independente de já ter preço)
+    // O browser tem CORS aberto; o Worker backend recebe 403 da API ML
+    if (r.mlbId) {
       try {
         const ml = await siFetchMlApi(r.mlbId)
         if (ml) {
-          if (!name  && ml.name)  name  = ml.name
-          if (!image && ml.image) image = ml.image
-          if (!price && ml.price) price = ml.price
+          // API ML tem prioridade sobre og:title/og:image/scraping
+          if (ml.name)  name  = ml.name     // título limpo via API
+          if (ml.image) image = ml.image     // imagem HD, sem hotlink block
+          if (ml.price) price = ml.price     // ← PREÇO REAL (fonte mais confiável)
         }
-      } catch(e) {}
+      } catch(e) {
+        console.warn('[siFetchMetaClientSide] siFetchMlApi falhou para', r.mlbId, e?.message)
+      }
     }
 
+    // Retorna se temos ao menos nome
     if (name) return { name, price, image }
   }
 
-  // Camada 3: fallback allorigins.win
-  try { return await siFetchOgMeta(originalUrl) } catch(e) { return null }
+  // ── CAMADA 3: fallback allorigins.win (links não-ML ou resolve-url falhou) ──
+  if (!isML) {
+    try { return await siFetchOgMeta(originalUrl) } catch(e) { /* ignora */ }
+  }
+
+  return null
 }
 
-// Chama API pública do Mercado Livre — CORS aberto para browsers
-// Retorna imagem via proxy para evitar hotlink block no <img>
+// Chama API pública do Mercado Livre — CORS aberto para browsers em produção
+// A API ML bloqueia servidores (403 "PA_UNAUTHORIZED_RESULT_FROM_POLICIES")
+// mas permite acesso direto de browsers autorizados via CORS.
+// Retorna: { name, price, image } — imagem via proxy só se for mlstatic.com
 async function siFetchMlApi(mlbId) {
   try {
     const r = await fetch(
       'https://api.mercadolibre.com/items/' + mlbId + '?attributes=id,title,price,thumbnail,pictures',
-      { headers: { 'Accept': 'application/json' } }
+      {
+        headers: {
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+        signal: AbortSignal.timeout(10000),
+      }
     )
-    if (!r.ok) return null
+    if (!r.ok) {
+      console.warn('[siFetchMlApi] HTTP', r.status, 'para', mlbId)
+      return null
+    }
     const d = await r.json()
     if (!d || !d.title) return null
+
     const pics = d.pictures || []
-    // pictures[0].url da API ML é CDN direto (sem hotlink block) — usa sem proxy
+    // pictures[0].url da API ML é CDN direto — sem hotlink block, usa sem proxy
     const rawImg = (pics[0] && pics[0].url)
       ? pics[0].url.replace('http://', 'https://')
-      : (d.thumbnail || '').replace('-I.jpg', '-O.jpg').replace('-I.webp', '-O.webp').replace('http://', 'https://')
-    // Aplica proxy só se ainda for mlstatic.com (og:image fallback)
+      : (d.thumbnail || '')
+          .replace('-I.jpg', '-O.jpg')
+          .replace('-I.webp', '-O.webp')
+          .replace('http://', 'https://')
+
+    // Aplica proxy só se for mlstatic.com (og:image fallback); CDN direto usa sem proxy
     const img = rawImg ? siProxyImg(rawImg) : null
-    return { name: d.title || '', price: d.price || null, image: img || null }
-  } catch { return null }
+
+    const price = (d.price && d.price > 0) ? d.price : null
+    console.log('[siFetchMlApi] OK', mlbId, '→ preço:', price, 'img:', rawImg?.slice(0,60))
+    return { name: d.title || '', price, image: img || null }
+  } catch(e) {
+    console.warn('[siFetchMlApi] erro:', mlbId, e?.message)
+    return null
+  }
 }
 
 // Fallback: og:meta tags via allorigins (proxy CORS público)
