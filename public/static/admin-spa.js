@@ -681,9 +681,11 @@ function siCountLinks() {
 }
 
 // ── IMPORTAÇÃO AUTOMÁTICA COMPLETA ───────────────────────────────
-// 1) Extrai URLs do textarea
-// 2) Para cada URL: faz GET /admin/api/fetch-product-meta (segue redirect, scrapa nome/preço/imagem)
-// 3) Monta payload com os dados e salva no banco em lote
+// Fetch 100% client-side no browser:
+// 1) meli.la → browser segue redirect → URL ML com MLB ID
+// 2) Extrai MLB ID da URL final
+// 3) Chama api.mercadolibre.com/items/{id} (CORS aberto, sem auth)
+// 4) Salva tudo no banco via API admin
 async function siImportAuto(storeId) {
   const val  = document.getElementById('si-textarea')?.value || ''
   const urls = (val.match(/https?:\/\/[^\s,|]+/g) || [])
@@ -697,7 +699,6 @@ async function siImportAuto(storeId) {
   const btn  = document.getElementById('si-main-btn')
   if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> Buscando dados...' }
 
-  // Renderiza lista de cards em estado "buscando"
   live.innerHTML = siLiveCards(urls) +
     '<div id="si-prog-wrap" class="mb-3">' +
       '<div class="flex justify-between text-xs text-slate-500 mb-1">' +
@@ -711,24 +712,17 @@ async function siImportAuto(storeId) {
     '<div id="si-result-area"></div>' +
     '<button id="si-save-btn" disabled class="w-full py-3 rounded-xl bg-slate-200 text-slate-400 text-sm font-bold cursor-not-allowed mt-2">Aguarde...</button>'
 
-  // Busca metadados em paralelo (lotes de 6)
   const metaMap = {}
-  const BATCH = 6
+  const BATCH = 4
   let done = 0
 
   for (let s = 0; s < urls.length; s += BATCH) {
     const batch = urls.slice(s, s + BATCH)
-    const results = await Promise.all(batch.map(async u => {
-      try {
-        const d = await api('GET', '/admin/api/fetch-product-meta?url=' + encodeURIComponent(u))
-        return d?.ok ? d : null
-      } catch { return null }
-    }))
+    const results = await Promise.all(batch.map(u => siFetchMetaClientSide(u)))
     batch.forEach((u, bi) => {
       metaMap[u] = results[bi]
       done++
       siUpdateCard(s + bi, u, results[bi])
-      // Progresso
       const pct = Math.round((done / urls.length) * 100)
       const bar = document.getElementById('si-prog-bar')
       const nEl = document.getElementById('si-prog-n')
@@ -739,39 +733,43 @@ async function siImportAuto(storeId) {
     })
   }
 
-  // Esconde barra de progresso, habilita botão Salvar
   const progWrap = document.getElementById('si-prog-wrap')
   if (progWrap) progWrap.innerHTML = '<p class="text-xs text-green-600 font-semibold text-center py-1">\u2713 Informa\u00e7\u00f5es carregadas \u2014 salvando no banco...</p>'
 
-  // Monta linhas para o backend: "url | nome | preco | imagem"
-  const lines = urls.map(u => {
+  const lines = urls.map(function(u) {
     const m = metaMap[u]
     let line = u
-    if (m?.name)  line += ' | ' + m.name
-    if (m?.price) line += ' | ' + m.price
-    if (m?.image) line += ' | ' + m.image
+    if (m && m.name)  line += ' | ' + m.name
+    if (m && m.price) line += ' | ' + m.price
+    if (m && m.image) line += ' | ' + m.image
     return line
   })
 
-  // Salva tudo no banco
   if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> Salvando no banco...' }
 
   const data = await api('POST', '/admin/api/stores/' + storeId + '/import-links', { links: lines.join('\n') })
 
-  // Resultado
   const resEl = document.getElementById('si-result-area')
   if (resEl && data) siRenderResult(data, resEl)
 
-  if (data?.ok) {
+  if (data && data.ok) {
     toast('\u2713 ' + data.imported + ' produto(s) importados em ' + data.store_name + '!', 'success')
     if (btn) {
       btn.disabled = false
       btn.className = 'w-full py-3 rounded-xl bg-green-600 text-white text-sm font-bold mt-2'
       btn.innerHTML = '\u2713 ' + data.imported + ' produto(s) salvos! Importar mais'
-      btn.onclick = function() { document.getElementById('si-textarea').value=''; siCountLinks(); siLiveArea(); btn.innerHTML='&#128640; Importar Automaticamente'; btn.onclick=function(){siImportAuto(storeId)} }
+      btn.onclick = function() {
+        document.getElementById('si-textarea').value = ''
+        siCountLinks()
+        document.getElementById('si-live-area').innerHTML = ''
+        btn.innerHTML = '&#128640; Importar Automaticamente'
+        btn.disabled = false
+        btn.className = 'w-full py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 active:scale-95 transition-all'
+        btn.onclick = function() { siImportAuto(storeId) }
+      }
     }
   } else {
-    toast(data?.error || 'Erro ao salvar', 'error')
+    toast((data && data.error) || 'Erro ao salvar', 'error')
     if (btn) {
       btn.disabled = false
       btn.className = 'w-full py-3 rounded-xl bg-red-600 text-white text-sm font-bold mt-2'
@@ -781,150 +779,80 @@ async function siImportAuto(storeId) {
   }
 }
 
-// Renderiza cards skeleton para cada URL
-function siLiveCards(urls) {
-  return '<div class="space-y-2 mb-3" id="si-cards-wrap">' +
-    urls.map(function(url, i) {
-      return '<div id="si-card-' + i + '" class="flex items-center gap-3 p-2.5 rounded-xl border border-slate-100 bg-white">' +
-        '<div id="si-card-img-' + i + '" class="w-11 h-11 rounded-lg bg-slate-100 flex-shrink-0 flex items-center justify-center overflow-hidden">' +
-          '<svg class="w-5 h-5 animate-spin text-indigo-300" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>' +
-        '</div>' +
-        '<div class="flex-1 min-w-0">' +
-          '<div id="si-card-name-' + i + '" class="h-3 bg-slate-100 rounded animate-pulse w-3/4 mb-1"></div>' +
-          '<div class="text-xs font-mono text-slate-400 truncate">' + url + '</div>' +
-        '</div>' +
-        '<div id="si-card-price-' + i + '" class="text-xs text-slate-300 flex-shrink-0">...</div>' +
-      '</div>'
-    }).join('') +
-  '</div>'
-}
+// ── Fetch de metadados via backend resolve-url ──────────────────
+// Uma única chamada: backend segue redirect completo (UA mobile),
+// extrai og:title + og:image + preço do HTML final e devolve tudo.
+// Funciona para meli.la, mercadolivre.com.br, amazon.com.br e outros.
+async function siFetchMetaClientSide(originalUrl) {
+  try {
+    // Estratégia 1: backend resolve-url (segue redirect + scraping HTML)
+    const r = await api('GET', '/admin/api/resolve-url?url=' + encodeURIComponent(originalUrl))
+    if (r && r.ok && r.name) {
+      return {
+        name:  r.name  || '',
+        price: r.price || null,
+        image: r.image || null,
+      }
+    }
 
-// Atualiza um card com os dados retornados pelo scraper
-function siUpdateCard(i, url, meta) {
-  const imgEl   = document.getElementById('si-card-img-'   + i)
-  const nameEl  = document.getElementById('si-card-name-'  + i)
-  const priceEl = document.getElementById('si-card-price-' + i)
+    // Estratégia 2: se o backend retornou mlbId mas sem nome,
+    // tenta a API pública do ML diretamente do browser (CORS aberto)
+    if (r && r.mlbId) {
+      const mlData = await siFetchMlApi(r.mlbId)
+      if (mlData) return mlData
+    }
 
-  if (meta && meta.name) {
-    if (imgEl) {
-      imgEl.innerHTML = meta.image
-        ? '<img src="' + meta.image + '" class="w-11 h-11 object-cover rounded-lg" onerror="this.parentElement.innerHTML=\'&#128722;\'">'
-        : '<span class="text-xl">&#128722;</span>'
-    }
-    if (nameEl) {
-      nameEl.className = 'text-xs font-semibold text-slate-700 truncate'
-      nameEl.textContent = meta.name
-    }
-    if (priceEl) {
-      priceEl.className = meta.price ? 'text-xs font-bold text-green-700 flex-shrink-0' : 'text-xs text-slate-400 flex-shrink-0'
-      priceEl.textContent = meta.price ? 'R$ ' + parseFloat(meta.price).toFixed(2).replace('.',',') : 'sem pre\u00e7o'
-    }
-    // Borda verde no card
-    const card = document.getElementById('si-card-' + i)
-    if (card) card.className = 'flex items-center gap-3 p-2.5 rounded-xl border border-green-200 bg-green-50'
-  } else {
-    // Falhou — avisa usuário
-    if (imgEl)   imgEl.innerHTML   = '<span class="text-lg">&#10067;</span>'
-    if (nameEl)  { nameEl.className = 'text-xs text-amber-600 font-semibold'; nameEl.textContent = 'N\u00e3o encontrado automaticamente' }
-    if (priceEl) { priceEl.className = 'text-xs text-amber-500 flex-shrink-0'; priceEl.textContent = 'manual' }
-    const card = document.getElementById('si-card-' + i)
-    if (card) card.className = 'flex items-center gap-3 p-2.5 rounded-xl border border-amber-200 bg-amber-50'
+    // Estratégia 3: fallback via allorigins.win (para links sem MLB)
+    return await siFetchOgMeta(originalUrl)
+  } catch(e) {
+    return null
   }
 }
 
-function siLiveArea() {
-  const el = document.getElementById('si-live-area')
-  if (el) el.innerHTML = ''
+// Chama API pública do Mercado Livre — CORS aberto para browsers
+async function siFetchMlApi(mlbId) {
+  try {
+    const r = await fetch(
+      'https://api.mercadolibre.com/items/' + mlbId + '?attributes=id,title,price,thumbnail,pictures',
+      { headers: { 'Accept': 'application/json' } }
+    )
+    if (!r.ok) return null
+    const d = await r.json()
+    if (!d || !d.title) return null
+    const pics = d.pictures || []
+    const img = (pics[0] && pics[0].url)
+      ? pics[0].url.replace('http://', 'https://')
+      : (d.thumbnail || '').replace('-I.jpg', '-O.jpg').replace('http://', 'https://')
+    return { name: d.title || '', price: d.price || null, image: img || null }
+  } catch { return null }
 }
 
-function siRenderResult(data, container) {
-  if (!data) return
-  const ok   = data.imported || 0
-  const skip = data.skipped  || 0
-  const err  = data.errors   || 0
-  let html = '<div class="grid grid-cols-3 gap-2 mb-3 mt-2">' +
-    '<div class="bg-green-50 border border-green-100 rounded-xl p-3 text-center">' +
-      '<div class="text-2xl font-black text-green-700">' + ok + '</div>' +
-      '<div class="text-xs text-green-600 mt-0.5 font-medium">Importados</div></div>' +
-    '<div class="bg-blue-50 border border-blue-100 rounded-xl p-3 text-center">' +
-      '<div class="text-2xl font-black text-blue-700">' + skip + '</div>' +
-      '<div class="text-xs text-blue-600 mt-0.5 font-medium">Atualizados</div></div>' +
-    '<div class="bg-red-50 border border-red-100 rounded-xl p-3 text-center">' +
-      '<div class="text-2xl font-black text-red-700">' + err + '</div>' +
-      '<div class="text-xs text-red-600 mt-0.5 font-medium">Erros</div></div>' +
-  '</div>'
-  ;(data.results || []).slice(0, 20).forEach(function(r) {
-    const icon  = r.status==='importado' ? '\u2713' : r.status==='atualizado' ? '\u21bb' : '\u2717'
-    const color = r.status==='importado' ? 'text-green-600' : r.status==='atualizado' ? 'text-blue-500' : 'text-red-500'
-    const thumb = r.image_url
-      ? '<img src="'+r.image_url+'" class="w-8 h-8 rounded-lg object-cover flex-shrink-0 border border-slate-100" onerror="this.style.display=\'none\'">'
-      : '<div class="w-8 h-8 rounded-lg bg-slate-100 flex-shrink-0 flex items-center justify-center text-sm">&#128722;</div>'
-    html += '<div class="flex items-center gap-2 py-1.5 border-b border-slate-50 text-xs">' +
-      thumb +
-      '<span class="' + color + ' text-base font-bold flex-shrink-0">' + icon + '</span>' +
-      '<div class="flex-1 min-w-0">' +
-        '<div class="font-medium text-slate-700 truncate">' + (r.name || r.url || '') + '</div>' +
-        (r.price > 0 ? '<div class="text-green-700 font-bold">R$ ' + parseFloat(r.price).toFixed(2).replace('.',',') + '</div>' : '') +
-      '</div>' +
-    '</div>'
-  })
-  if ((data.results||[]).length > 20) html += '<div class="text-xs text-slate-400 text-center pt-2">+ ' + ((data.results.length)-20) + ' mais...</div>'
-  container.innerHTML = html
-}
+// Fallback: og:meta tags via allorigins (proxy CORS público)
+async function siFetchOgMeta(url) {
+  try {
+    const proxyUrl = 'https://api.allorigins.win/get?url=' + encodeURIComponent(url)
+    const r = await fetch(proxyUrl, { signal: AbortSignal.timeout(8000) })
+    if (!r.ok) return null
+    const d = await r.json()
+    const html = d.contents || ''
+    if (!html) return null
 
-function siReadCsv(input, storeId) {
-  const file = input.files?.[0]
-  if (!file) return
-  document.getElementById('si-csv-name').textContent = file.name + ' (' + (file.size/1024).toFixed(1) + ' KB)'
-  const reader = new FileReader()
-  reader.onload = function(e) {
-    const text  = e.target.result
-    const lines = text.trim().split('\n').filter(Boolean)
-    const data  = /^url[,;]/i.test(lines[0]) ? lines.slice(1) : lines
-    const urls  = data.map(function(l) {
-      const sep = l.includes(';') ? ';' : ','
-      return l.split(sep)[0].replace(/^["']|["']$/g,'').trim()
-    }).filter(function(u) { return u.startsWith('http') })
-    if (!urls.length) { toast('Nenhuma URL encontrada no arquivo', 'warning'); return }
-    // Leva para aba paste e importa automaticamente
-    const ta = document.getElementById('si-textarea')
-    if (ta) ta.value = urls.join('\n')
-    siTab('paste')
-    siCountLinks()
-    siImportAuto(storeId)
-  }
-  reader.readAsText(file)
-}
+    function getMeta(prop) {
+      const m = html.match(new RegExp('<meta[^>]+(?:property|name)=["\']' + prop + '["\'][^>]+content=["\']([^"\']+)["\']', 'i'))
+             || html.match(new RegExp('<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']' + prop + '["\']', 'i'))
+      return m ? m[1].trim() : ''
+    }
 
-async function siLoadHistory(storeId) {
-  const el = document.getElementById('si-history-content')
-  if (!el) return
-  const data = await api('GET', '/admin/api/stores/' + storeId + '/import-links/history')
-  const rows = data?.results || []
-  if (!rows.length) {
-    el.innerHTML = '<div class="text-center py-10 text-slate-400 text-sm">&#128237; Nenhum link importado ainda nesta loja</div>'
-    return
-  }
-  let html = '<div class="text-xs text-slate-500 mb-2">' + rows.length + ' produto(s) importado(s)</div>' +
-    '<div class="space-y-2 max-h-[420px] overflow-y-auto">'
-  rows.forEach(function(r) {
-    const thumb = r.image_url
-      ? '<img src="'+r.image_url+'" class="w-12 h-12 rounded-xl object-cover flex-shrink-0 border border-slate-100" onerror="this.style.display=\'none\'">'
-      : '<div class="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center flex-shrink-0 text-xl">&#128722;</div>'
-    html += '<div class="flex items-center gap-3 py-2 border-b border-slate-100 text-xs">' +
-      thumb +
-      '<div class="flex-1 min-w-0">' +
-        '<div class="font-semibold text-slate-700 truncate">' + (r.title || '&mdash;') + '</div>' +
-        '<a href="' + r.affiliate_url + '" target="_blank" class="text-indigo-500 hover:underline truncate block">' + r.affiliate_url + '</a>' +
-        '<div class="text-slate-400">' + fDate(r.created_at) + '</div>' +
-      '</div>' +
-      '<div class="text-right flex-shrink-0">' +
-        (r.price > 0 ? '<div class="font-bold text-green-700">R$ ' + parseFloat(r.price).toFixed(2).replace('.',',') + '</div>' : '<div class="text-slate-400">sem pre\u00e7o</div>') +
-      '</div>' +
-    '</div>'
-  })
-  html += '</div>'
-  el.innerHTML = html
+    let name = getMeta('og:title') || getMeta('twitter:title') || ''
+    name = name.replace(/\s*[|\u2013\u2014-]\s*(Mercado Livr[eo]|Amazon\.com\.br|Americanas|Magazine Luiza|Shopee).*/gi, '').trim()
+
+    const img    = getMeta('og:image') || getMeta('twitter:image') || ''
+    const priceM = html.match(/"price"\s*:\s*([\d]+(?:[.,][\d]{1,2})?)/)
+    const price  = priceM ? parseFloat(priceM[1].replace(',', '.')) : null
+
+    if (!name) return null
+    return { name, price: price || null, image: img || null }
+  } catch { return null }
 }
 
 // ── IMPORTAR LINKS AFILIADOS ML (legado) ────────────────────────

@@ -1859,10 +1859,84 @@ admin.get('/api/stores/ml/import-history', async (c) => {
   return c.json({ results })
 })
 
+// ── GET /admin/api/resolve-url ───────────────────────────────────
+// Resolve qualquer link (meli.la, mercadolivre.com.br, etc.)
+// Segue redirect completo com UA mobile, extrai og:title, og:image,
+// MLB ID e preço do HTML da página final — retorna tudo de uma vez.
+admin.get('/api/resolve-url', async (c) => {
+  const url = c.req.query('url') || ''
+  if (!url.startsWith('http')) return c.json({ error: 'URL inválida' }, 400)
+
+  try {
+    // Segue redirect completo com UA mobile (contorna CloudFront meli.la)
+    const res = await fetch(url, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'pt-BR,pt;q=0.9',
+      },
+      signal: AbortSignal.timeout(8000),
+    })
+
+    const finalUrl = res.url || url
+    const html = await res.text()
+
+    // ── Helper: extrai conteúdo de meta tag ──────────────────────
+    const getMeta = (prop: string): string => {
+      const m = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)["']`, 'i'))
+             || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${prop}["']`, 'i'))
+      return m ? m[1].trim() : ''
+    }
+
+    // ── Extrai nome via og:title ou <title> ──────────────────────
+    let name = getMeta('og:title') || getMeta('twitter:title')
+    if (!name) {
+      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i)
+      name = titleMatch ? titleMatch[1].trim() : ''
+    }
+    // Remove sufixos tipo " | Perfil Social", " - Mercado Livre"
+    name = name.replace(/\s*[|–-]\s*(Mercado Livr[eo].*|Perfil Social.*|ML.*|Amazon.*|Americanas.*)$/i, '').trim()
+
+    // ── Extrai imagem via og:image ───────────────────────────────
+    let image = getMeta('og:image') || getMeta('twitter:image')
+    // Converte .webp para .jpg se necessário e garante https
+    if (image && image.startsWith('//')) image = 'https:' + image
+    // Melhora resolução ML: troca sufixo _T por _O (original) ou _B (big)
+    image = image.replace(/_[A-Z](\.(webp|jpg|png))$/, '_O$1')
+
+    // ── Extrai MLB ID da URL final ou do HTML ────────────────────
+    let mlbId: string | null = null
+    const mlbFromUrl = finalUrl.match(/MLB\d+/i)
+    if (mlbFromUrl) {
+      mlbId = mlbFromUrl[0].toUpperCase()
+    } else {
+      // Procura no HTML (JSON embutido ou atributos)
+      const mlbFromHtml = html.match(/["'/](MLB\d{7,12})["'/]/i)
+      if (mlbFromHtml) mlbId = mlbFromHtml[1].toUpperCase()
+    }
+
+    // ── Extrai preço do HTML (heurística) ────────────────────────
+    let price: number | null = null
+    // Tenta JSON-LD / meta price
+    const priceMeta = html.match(/"price"\s*:\s*"?([\d.,]+)"?/)
+                   || html.match(/content=["']([\d.,]+)["'][^>]*itemprop=["']price["']/i)
+                   || html.match(/itemprop=["']price["'][^>]*content=["']([\d.,]+)["']/i)
+    if (priceMeta) {
+      const raw = priceMeta[1].replace(/\./g, '').replace(',', '.')
+      const parsed = parseFloat(raw)
+      if (!isNaN(parsed) && parsed > 0) price = parsed
+    }
+
+    return c.json({ ok: true, finalUrl, mlbId, name, image, price })
+  } catch (err: any) {
+    return c.json({ ok: false, error: err?.message || 'Falha ao resolver URL' })
+  }
+})
+
 // ── GET /admin/api/fetch-product-meta ────────────────────────────
-// Faz scraping de uma URL de produto e retorna nome, preço, imagem
+// LEGADO — mantido para compatibilidade, mas resolve-url é preferível
 // Suporta: meli.la (redirect), mercadolivre.com.br, amazon.com.br, etc.
-// Usado pelo frontend para auto-preencher campos antes de salvar
 admin.get('/api/fetch-product-meta', async (c) => {
   const url = c.req.query('url') || ''
   if (!url.startsWith('http')) return c.json({ error: 'URL inválida' }, 400)
@@ -7130,7 +7204,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260513c"><\/script>
+<script src="/static/admin-spa.js?v=20260513d"><\/script>
 </body>
 </html>`
 }
