@@ -1267,8 +1267,10 @@ async function siFetchMetaClientSide(originalUrl, affiliateUrl) {
   }
 
   // ── CAMADA 3: API ML via browser (fallback para Item IDs) ───────
-  // Só funciona para Item IDs (MLB + ≥11 dígitos); Product IDs retornam 403
-  if (mlbId && !price) {
+  // Acionada quando falta preço OU nome (backend pode ter retornado 403/404 da API ML).
+  // A API ML pública tem CORS aberto — o browser do usuário acessa sem bloqueio.
+  // Product IDs (≤10 dígitos) retornam 403 da API pública, só Item IDs funcionam.
+  if (mlbId && (!price || !name)) {
     const digits = mlbId.replace(/^MLB/i, '')
     if (digits.length >= 11) {
       try {
@@ -1276,7 +1278,7 @@ async function siFetchMetaClientSide(originalUrl, affiliateUrl) {
         if (ml) {
           if (ml.name)  name  = name  || ml.name
           if (ml.image) image = image || ml.image
-          if (ml.price) price = ml.price
+          if (ml.price && !price) price = ml.price
         }
       } catch(e) {
         console.warn('[siFetchMlApi] falhou para', mlbId, e?.message)

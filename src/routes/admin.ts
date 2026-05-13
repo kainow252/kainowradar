@@ -2194,8 +2194,8 @@ admin.get('/api/resolve-url', async (c) => {
     //     (HTML via Googlebot falha: IPs CF bloqueados pelo ML)
     //
     //   Item IDs (MLB + ≥11 dígitos, ex: MLB5385902202):
-    //     ✅ produto.mercadolivre.com.br/MLB-XXXXX → HTML 200 SEM cookie ✅
-    //     ✅ API ML /items/{id}             → preço + título + imagem
+    //     ✅ API ML /items/{id}             → preço + título + imagem (primário, sem bloqueio de IP)
+    //     ✅ produto.mercadolivre.com.br     → fallback SSR (funciona fora de CF; bloqueado em datacenter)
     // ════════════════════════════════════════════════════════════════
     if (mlbId && isMlLink) {
       const mlbDigits   = mlbId.replace(/^MLB/i, '')
@@ -2264,36 +2264,71 @@ admin.get('/api/resolve-url', async (c) => {
         } catch { /* usa dados do passo 1 */ }
 
       } else {
-        // ── Item ID: usa produto.mercadolivre.com.br (SSR sem bloqueio) ──
-        const botUrl = `https://produto.mercadolivre.com.br/${mlbId.replace(/^MLB/i, 'MLB-')}`
+        // ── Item ID (≥11 dígitos): usa API ML /items/{id} como primário ──
+        // IPs de datacenter CF são bloqueados pelo produto.mercadolivre.com.br,
+        // mas a API ML autenticada não tem esse bloqueio.
+        let itemApiOk = false
         try {
-          const step2 = await fetch(botUrl, {
-            redirect: 'follow',
-            headers: {
-              'User-Agent':      botUA,
-              'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-              'Accept-Language': 'pt-BR,pt;q=0.9',
-              'Accept-Encoding': 'identity',
-            },
-            signal: AbortSignal.timeout(9000),
-          })
-
-          if (step2.ok && !step2.url.includes('/gz/account-verification')) {
-            const html2 = await step2.text()
-
-            const p2 = extractPrice(html2)
-            if (p2 && p2 > 0) price = p2
-
-            const rawT2 = (extractMeta(html2, 'og:title') || extractMeta(html2, 'twitter:title') || '').trim()
-            if (rawT2 && rawT2.length > 3) {
-              if (!price) price = extractPriceFromTitle(rawT2)
-              name = cleanName(rawT2)
+          const token = await getMlBearerToken(c.env)
+          if (token) {
+            const rItem = await fetch(
+              `https://api.mercadolibre.com/items/${mlbId}?attributes=id,title,price,thumbnail,pictures`,
+              {
+                headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+                signal: AbortSignal.timeout(7000),
+              }
+            )
+            if (rItem.ok) {
+              const dItem = await rItem.json() as any
+              if (dItem.price && dItem.price > 0 && !price) price = dItem.price
+              if (dItem.title && (!name || name.length < 5))  name  = cleanName(dItem.title)
+              if (!image) {
+                // Prefere pictures[] (maior resolução) → fallback para thumbnail
+                const pics: any[] = dItem.pictures || []
+                const bestPic = pics.find((p: any) => p.url?.includes('mlstatic')) || pics[0]
+                const rawImg  = bestPic?.url || dItem.thumbnail || ''
+                if (rawImg) image = fixImgUrl(rawImg)
+              }
+              itemApiOk = true
             }
-
-            const img2fixed = fixImgUrl(extractMeta(html2, 'og:image') || extractMeta(html2, 'twitter:image'))
-            if (img2fixed && img2fixed.includes('mlstatic')) image = img2fixed
           }
-        } catch { /* usa dados do passo 1 */ }
+        } catch { /* segue para fallback */ }
+
+        // ── Fallback: produto.mercadolivre.com.br (SSR, só funciona fora de CF) ──
+        // Tenta apenas se a API ML não retornou dados suficientes.
+        if (!itemApiOk || !price || !name) {
+          const botUrl = `https://produto.mercadolivre.com.br/${mlbId.replace(/^MLB/i, 'MLB-')}`
+          try {
+            const step2 = await fetch(botUrl, {
+              redirect: 'follow',
+              headers: {
+                'User-Agent':      botUA,
+                'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'pt-BR,pt;q=0.9',
+                'Accept-Encoding': 'identity',
+              },
+              signal: AbortSignal.timeout(9000),
+            })
+            if (step2.ok && !step2.url.includes('/gz/account-verification')) {
+              const html2 = await step2.text()
+              if (!price) {
+                const p2 = extractPrice(html2)
+                if (p2 && p2 > 0) price = p2
+              }
+              if (!name || name.length < 5) {
+                const rawT2 = (extractMeta(html2, 'og:title') || extractMeta(html2, 'twitter:title') || '').trim()
+                if (rawT2 && rawT2.length > 3) {
+                  if (!price) price = extractPriceFromTitle(rawT2)
+                  name = cleanName(rawT2)
+                }
+              }
+              if (!image) {
+                const img2fixed = fixImgUrl(extractMeta(html2, 'og:image') || extractMeta(html2, 'twitter:image'))
+                if (img2fixed && img2fixed.includes('mlstatic')) image = img2fixed
+              }
+            }
+          } catch { /* usa dados do passo 1 */ }
+        }
       }
     }
 
