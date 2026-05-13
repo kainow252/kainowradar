@@ -1674,7 +1674,7 @@ admin.post('/api/affiliate-bot/apply', async (c) => {
 admin.post('/api/stores/ml/import-affiliate-links', async (c) => {
   const { DB } = c.env
   const PUBLISHER_ID = 'cfegdhabc31955'
-  const MATT_TOOL    = '38524122'
+  const MATT_TOOL    = '61674414'
 
   const body = await c.req.json().catch(() => ({}))
   const raw: string = body.links || ''
@@ -2302,7 +2302,7 @@ admin.get('/api/resolve-url', async (c) => {
     // monta o link afiliado: permalink?matt_word=PUBLISHER_ID&matt_tool=MATT_TOOL
     // Isso permite importar só com a URL do produto — sem precisar do link /social/
     const PUBLISHER_ID = 'cfegdhabc31955'
-    const MATT_TOOL    = '38524122'
+    const MATT_TOOL    = '61674414'
     let affiliateUrl: string | null = null
     if (mlbId) {
       // Permalink canônico: produto.mercadolivre.com.br/MLB-XXXXX
@@ -2944,11 +2944,11 @@ admin.get('/api/cron/status', async (c) => {
 //   Fase 1: produtos COM ml_item_id -> GET /items/{id} -> permalink real
 //   Fase 2: produtos SEM ml_item_id -> GET /sites/MLB/search -> 1o match -> permalink
 //   Fallback: lista.mercadolivre.com.br/BUSCA?matt_word=... (rastreavel, sem produto especifico)
-// Link final: permalink?matt_word=PUBLISHER_ID&matt_tool=38524122&forceInApp=true
+// Link final: permalink?matt_word=PUBLISHER_ID&matt_tool=61674414&forceInApp=true
 admin.post('/api/affiliate-bot/run-all', async (c) => {
   const { DB, CACHE } = c.env
   const PUBLISHER_ID = 'cfegdhabc31955'
-  const MATT_TOOL    = '38524122'
+  const MATT_TOOL    = '61674414'
   const ML_API       = 'https://api.mercadolibre.com'
   const body: any = await c.req.json().catch(() => ({}))
   const LIMIT = Math.min(Math.max(parseInt(body.limit) || 50, 1), 100)
@@ -3147,7 +3147,7 @@ admin.post('/api/affiliate-bot/import-search', async (c) => {
   if (!query) return c.json({ error: 'query obrigatória' }, 400)
 
   const PUBLISHER_ID = 'cfegdhabc31955'
-  const MATT_TOOL    = '38524122'
+  const MATT_TOOL    = '61674414'
   const ML_API       = 'https://api.mercadolibre.com'
   const appId        = (c.env as any).ML_APP_ID || '3098423019766450'
   const secret       = (c.env as any).ML_SECRET  || ''
@@ -3496,7 +3496,7 @@ admin.post('/api/affiliate-bot/import-search', async (c) => {
 // Scrapa mercadolivre.com.br/ofertas, extrai o JSON embutido (_n.ctx.r)
 // e importa os produtos com link de afiliado — SEM chamar /items/{id}.
 // Todo o dados (titulo, preco, imagem, permalink) ja estao no HTML.
-// Link afiliado = permalink + ?matt_word=cfegdhabc31955&matt_tool=38524122&forceInApp=true
+// Link afiliado = permalink + ?matt_word=cfegdhabc31955&matt_tool=61674414&forceInApp=true
 admin.post('/api/affiliate-bot/import-offers', async (c) => {
   const { DB } = c.env
   const body: any    = await c.req.json().catch(() => ({}))
@@ -3505,7 +3505,7 @@ admin.post('/api/affiliate-bot/import-offers', async (c) => {
   const dryRun       = !!body.dry_run
 
   const PUBLISHER_ID = 'cfegdhabc31955'
-  const MATT_TOOL    = '38524122'
+  const MATT_TOOL    = '61674414'
 
   // ── 1. Scrapa /ofertas ────────────────────────────────────
   let scrape_status  = 0
@@ -3773,7 +3773,7 @@ admin.post('/api/affiliate-bot/import-ids', async (c) => {
   if (!rawIds.length) return c.json({ error: 'ids[] obrigatório' }, 400)
 
   const PUBLISHER_ID = 'cfegdhabc31955'
-  const MATT_TOOL    = '38524122'
+  const MATT_TOOL    = '61674414'
   const ML_API       = 'https://api.mercadolibre.com'
   const appId        = (c.env as any).ML_APP_ID || '3098423019766450'
   const secret       = (c.env as any).ML_SECRET  || ''
@@ -4011,7 +4011,7 @@ admin.post('/api/affiliate-bot/auto-sync', async (c) => {
   const pricesLimit = Math.min(parseInt(body.prices_limit) || 1, 5)
 
   const PUBLISHER_ID = 'cfegdhabc31955'
-  const MATT_TOOL    = '38524122'
+  const MATT_TOOL    = '61674414'
 
   const affLink = (url: string) =>
     `${url}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
@@ -5979,7 +5979,7 @@ admin.get('/api/awin/stats', async (c) => {
 
 const PRICE_SYNC_ML_API    = 'https://api.mercadolibre.com'
 const PRICE_SYNC_PUB_ID    = 'cfegdhabc31955'
-const PRICE_SYNC_MATT_TOOL = '38524122'
+const PRICE_SYNC_MATT_TOOL = '61674414'
 const PRICE_SYNC_STORE_ID  = 3   // Mercado Livre store_id no banco
 
 // Helper interno: obtém token ML válido — prioriza refresh_token OAuth do usuário
@@ -6640,7 +6640,7 @@ admin.post('/api/ml-highlights/import', async (c) => {
 // ══════════════════════════════════════════════════════════
 
 const LB_PUBLISHER_ID = 'cfegdhabc31955'
-const LB_MATT_TOOL    = '38524122'
+const LB_MATT_TOOL    = '61674414'
 const LB_ML_API       = 'https://api.mercadolibre.com'
 
 // ── Helper: obtém token ML com login automático ─────────────
@@ -7040,7 +7040,7 @@ admin.post('/api/ml/import-by-category', async (c) => {
   const { DB, CACHE }  = c.env
   const ML_API         = 'https://api.mercadolibre.com'
   const PUBLISHER_ID   = 'cfegdhabc31955'
-  const MATT_TOOL      = '38524122'
+  const MATT_TOOL      = '61674414'
 
   const body = await c.req.json().catch(() => ({}) as any)
   const categoryId: string = body.category_id || ''
@@ -7194,7 +7194,7 @@ admin.post('/api/ml/crawl-category', async (c) => {
   const { DB, CACHE } = c.env
   const ML_API_URL    = 'https://api.mercadolibre.com'
   const PUB_ID        = 'cfegdhabc31955'
-  const M_TOOL        = '38524122'
+  const M_TOOL        = '61674414'
   const LIMIT         = 50  // máximo permitido pela API ML
 
   const body = await c.req.json().catch(() => ({}) as any)
