@@ -502,6 +502,130 @@ pages.get('/produto/:slug', async (c) => {
   }))
 })
 
+// ── Página de loja (/loja/:slug) ──────────────────────────
+// Exibe todos os produtos importados via link para uma loja específica.
+// Usa JOIN em offers (não filtra por category) para incluir produtos
+// importados manualmente que não têm categoria definida.
+pages.get('/loja/:slug', async (c) => {
+  const slug = c.req.param('slug')
+  const page = parseInt(c.req.query('page') || '1')
+  const sort = c.req.query('sort') || 'name_asc'
+  const { DB } = c.env
+
+  // Busca dados da loja
+  const store = await DB.prepare(
+    `SELECT id, name, slug, logo_url FROM stores WHERE slug = ? LIMIT 1`
+  ).bind(slug).first<any>()
+
+  if (!store) {
+    return c.html(renderLayout('Loja não encontrada', `
+      <div class="max-w-2xl mx-auto px-4 py-16 text-center">
+        <p class="text-5xl mb-4">🏪</p>
+        <h1 class="text-2xl font-bold text-gray-800 mb-2">Loja não encontrada</h1>
+        <p class="text-gray-500 mb-6">Nenhuma loja com o slug <strong>${slug}</strong>.</p>
+        <a href="/" class="btn-primary">← Voltar ao início</a>
+      </div>`, { navCategories: [], footerConfig: null }))
+  }
+
+  const offset = (page - 1) * 24
+  const orderBy = sort === 'price_asc'  ? 'COALESCE(o.price, p.best_price) ASC NULLS LAST'
+                : sort === 'price_desc' ? 'COALESCE(o.price, p.best_price) DESC NULLS LAST'
+                :                        'p.name ASC'
+
+  const [{ results: products }, totalRow, { results: navCatsLoja }] = await Promise.all([
+    // Busca produtos via offers — inclui importados sem categoria/preço
+    DB.prepare(`
+      SELECT DISTINCT
+        p.id, p.name, p.slug, p.category, p.image_url, p.best_price,
+        p.is_active, p.offer_count, p.brand,
+        p.best_store_id,
+        s2.name  AS best_store_name,
+        s2.slug  AS best_store_slug,
+        o.price  AS offer_price,
+        o.affiliate_url,
+        o.image_url AS offer_image
+      FROM offers o
+      JOIN products p  ON p.id = o.product_id
+      LEFT JOIN stores s2 ON s2.id = p.best_store_id
+      WHERE o.store_id = ? AND o.is_active = 1 AND p.is_active = 1
+      ORDER BY ${orderBy}
+      LIMIT 24 OFFSET ?
+    `).bind(store.id, offset).all<any>(),
+
+    DB.prepare(`
+      SELECT COUNT(DISTINCT p.id) as total
+      FROM offers o
+      JOIN products p ON p.id = o.product_id
+      WHERE o.store_id = ? AND o.is_active = 1 AND p.is_active = 1
+    `).bind(store.id).first<{ total: number }>(),
+
+    DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>(),
+  ])
+
+  const total   = totalRow?.total ?? 0
+  const pages   = Math.ceil(total / 24)
+
+  // Usa imagem da oferta se o produto não tiver imagem própria
+  const enriched = products.map((p: any) => ({
+    ...p,
+    image_url:  p.image_url  || p.offer_image  || null,
+    best_price: p.offer_price ?? p.best_price   ?? null,
+  }))
+
+  const storeLogo = store.logo_url
+    ? `<img src="${store.logo_url}" alt="${store.name}" class="h-10 max-w-[140px] object-contain">`
+    : `<span class="text-2xl font-black text-gray-800">${store.name}</span>`
+
+  const pagination = pages > 1 ? `
+    <div class="flex items-center justify-center gap-2 mt-8">
+      ${page > 1  ? `<a href="/loja/${slug}?page=${page-1}&sort=${sort}" class="px-4 py-2 rounded-lg border border-gray-200 text-sm font-semibold hover:bg-gray-50">← Anterior</a>` : ''}
+      <span class="text-sm text-gray-500">Página ${page} de ${pages}</span>
+      ${page < pages ? `<a href="/loja/${slug}?page=${page+1}&sort=${sort}" class="px-4 py-2 rounded-lg border border-gray-200 text-sm font-semibold hover:bg-gray-50">Próxima →</a>` : ''}
+    </div>
+  ` : ''
+
+  const emptyMsg = `
+    <div class="text-center py-16">
+      <p class="text-5xl mb-4">📭</p>
+      <h2 class="text-xl font-bold text-gray-700 mb-2">Nenhum produto importado ainda</h2>
+      <p class="text-gray-400 text-sm">Importe links de afiliados pelo painel admin.</p>
+    </div>`
+
+  const content = `
+    <div class="max-w-7xl mx-auto px-4 py-6">
+
+      <!-- Header da loja -->
+      <div class="flex items-center gap-4 mb-6 pb-4 border-b border-gray-100">
+        <div class="w-16 h-16 rounded-2xl border border-gray-200 bg-white shadow-sm flex items-center justify-center overflow-hidden p-1">
+          ${storeLogo}
+        </div>
+        <div class="flex-1 min-w-0">
+          <h1 class="text-xl font-black text-gray-900 leading-tight">🛍️ ${store.name}</h1>
+          <p class="text-sm text-gray-500 mt-0.5">${total} produto${total !== 1 ? 's' : ''} importado${total !== 1 ? 's' : ''}</p>
+        </div>
+        <select onchange="location.href='/loja/${slug}?sort='+this.value" class="sort-select text-sm border border-gray-200 rounded-lg px-3 py-2">
+          <option value="name_asc"    ${sort === 'name_asc'    ? 'selected' : ''}>A → Z</option>
+          <option value="price_asc"   ${sort === 'price_asc'   ? 'selected' : ''}>Menor Preço</option>
+          <option value="price_desc"  ${sort === 'price_desc'  ? 'selected' : ''}>Maior Preço</option>
+        </select>
+      </div>
+
+      <!-- Grid de produtos -->
+      ${enriched.length > 0
+        ? `<div class="product-grid">${enriched.map(renderProductCard).join('')}</div>`
+        : emptyMsg}
+
+      ${pagination}
+    </div>
+  `
+
+  const footerCfgLoja = await loadFooterConfig(DB)
+  return c.html(renderLayout(`${store.name} — Produtos | KainowRadar`, content, {
+    navCategories: navCatsLoja,
+    footerConfig: footerCfgLoja,
+  }))
+})
+
 // ── Página de categoria ───────────────────────────────────
 pages.get('/categoria/:slug', async (c) => {
   const slug = c.req.param('slug')
@@ -936,7 +1060,7 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
               { name:'FastShop',    color:'#00843D', textColor:'#fff', initial:'FS', slug:'fastshop'  },
               { name:'Ponto Frio',  color:'#00AAFF', textColor:'#fff', initial:'PF', slug:'pontofrio' },
             ].map(s => `
-              <a href="/categoria/smartphones?loja=${s.slug}" onclick="closeHamburger()"
+              <a href="/loja/${s.slug}" onclick="closeHamburger()"
                 class="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-blue-50 transition-colors group">
                 <div class="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm" style="background:${s.color}">
                   <span class="font-black text-[11px] leading-none" style="color:${s.textColor}">${s.initial}</span>

@@ -535,7 +535,7 @@ app.get('/', async (c) => {
   // ── FAIXA DE LOJAS PARCEIRAS ──────────────────────────────
   // Duplica o array para criar loop contínuo no marquee
   const storeCards = (arr: typeof stores) => arr.map(s => `
-    <a href="/categoria/${s.slug}"
+    <a href="/loja/${s.slug}"
        class="store-pill-card flex-shrink-0 flex flex-col items-center gap-1.5 w-20 cursor-pointer group"
        title="Comparar preços na ${s.name}">
       <div class="store-logo-circle w-14 h-14 rounded-2xl flex items-center justify-center border-2 shadow-sm transition-all duration-200 group-hover:scale-110 group-hover:shadow-md overflow-hidden"
