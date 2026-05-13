@@ -716,17 +716,28 @@ function siIsProductUrl(u) {
   return /mercadolivre\.com\.br|meli\.la/i.test(u) && !siIsSocialUrl(u)
 }
 
+// Extrai URLs de um trecho de texto, separando mesmo URLs grudadas (sem espaço entre elas)
+// Usa split em 'https://' como delimitador para capturar URLs concatenadas
+function siExtractUrlsFromText(text) {
+  return text
+    .split(/(?=https?:\/\/)/g)
+    .map(s => s.trim())
+    .filter(s => /^https?:\/\//i.test(s))
+    .map(u => u.replace(/[.,;)>\]]+$/, '').trim())
+    .filter(Boolean)
+}
+
 // Parseia o texto da textarea em itens: cada item é { url1, url2? }
-// Regra: se numa linha aparecerem 2 URLs e uma for /social/ + outra for produto → par
-// Caso contrário cada URL é um item individual
+// Regra: se numa linha tiver URL de produto ML + URL /social/ → une como par
+// Suporta URLs grudadas (sem espaço/vírgula entre elas) — split em https://
 function siParseTextarea(val) {
   const items = []
   const seen  = new Set()
   const lines = val.split(/\n/)
   for (const line of lines) {
-    const raw = (line.match(/https?:\/\/[^\s]+/g) || [])
-      .map(u => u.replace(/[.,;)>\]]+$/, '').trim())
-      .filter(Boolean)
+    if (!line.trim()) continue
+    // Extrai todas as URLs da linha — separa mesmo URLs grudadas
+    const raw = siExtractUrlsFromText(line)
     if (!raw.length) continue
     if (raw.length >= 2) {
       // Tenta achar par produto+social dentro da mesma linha
@@ -981,10 +992,12 @@ async function siImportAuto(storeId) {
     }
 
     // Filtra apenas URLs que têm nome (o backend exige nome)
+    // Usa affiliateUrl montado pelo backend (permalink?matt_word=...) quando disponível
     const lines = urls.map(function(u) {
       const m = metaMap[u]
       if (!m || !m.name) return null   // sem nome = pula
-      let line = u + ' | ' + m.name
+      const saveUrl = m.affiliateUrl || u
+      let line = saveUrl + ' | ' + m.name
       if (m.price) line += ' | ' + m.price
       if (m.image) line += ' | ' + m.image
       return line
@@ -1120,7 +1133,9 @@ async function siImportDual(storeId, pairs) {
     metaArr.forEach((m, i) => {
       if (!m || !m.name) return
       const u = pairs[i].url1
-      let line = u + ' | ' + m.name
+      // Usa affiliateUrl montado pelo backend (permalink?matt_word=...) quando disponível
+      const saveUrl = m.affiliateUrl || u
+      let line = saveUrl + ' | ' + m.name
       if (m.price) line += ' | ' + m.price
       if (m.image) line += ' | ' + m.image
       lines.push(line)
@@ -1182,7 +1197,9 @@ async function siFetchMetaClientSide(originalUrl, affiliateUrl) {
   let name  = (r?.name  || '').trim()
   let image = r?.image  || null
   let price = r?.price  || null
-  const mlbId = r?.mlbId || null
+  const mlbId       = r?.mlbId       || null
+  // affiliateUrl montado automaticamente pelo backend: permalink?matt_word=...&matt_tool=...
+  const builtAffUrl = r?.affiliateUrl || null
 
   // ── CAMADA 2: browser busca HTML da página ML ──────────────────
   // IPs do datacenter Cloudflare são banidos pelo ML (302→account-verification).
@@ -1268,7 +1285,7 @@ async function siFetchMetaClientSide(originalUrl, affiliateUrl) {
   }
 
   // Retorna se temos ao menos nome
-  if (name) return { name, price, image }
+  if (name) return { name, price, image, affiliateUrl: builtAffUrl }
 
   // ── CAMADA 4: fallback allorigins.win (links não-ML) ────────────
   if (!isML) {

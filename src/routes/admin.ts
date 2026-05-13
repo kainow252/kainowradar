@@ -2297,7 +2297,20 @@ admin.get('/api/resolve-url', async (c) => {
       }
     }
 
-    return c.json({ ok: true, finalUrl, mlbId, name: name || null, image: image || null, price, hasSocial: !!socialUrl, hasFragment: !!mlbIdFromFragment })
+    // ── Monta link afiliado automaticamente ────────────────────────
+    // Se temos mlbId (do wid= fragment ou item_id do /social/),
+    // monta o link afiliado: permalink?matt_word=PUBLISHER_ID&matt_tool=MATT_TOOL
+    // Isso permite importar só com a URL do produto — sem precisar do link /social/
+    const PUBLISHER_ID = 'cfegdhabc31955'
+    const MATT_TOOL    = '38524122'
+    let affiliateUrl: string | null = null
+    if (mlbId) {
+      // Permalink canônico: produto.mercadolivre.com.br/MLB-XXXXX
+      const mlbDash = mlbId.replace(/^MLB/i, 'MLB-')
+      affiliateUrl = `https://produto.mercadolivre.com.br/${mlbDash}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+    }
+
+    return c.json({ ok: true, finalUrl, affiliateUrl, mlbId, name: name || null, image: image || null, price, hasSocial: !!socialUrl, hasFragment: !!mlbIdFromFragment })
   } catch (err: any) {
     return c.json({ ok: false, error: err?.message || 'Falha ao resolver URL' })
   }
