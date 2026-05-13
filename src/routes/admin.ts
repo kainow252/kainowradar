@@ -1940,17 +1940,64 @@ async function getMlBearerToken(env: AdminBindings): Promise<string | null> {
 }
 
 // ── GET /admin/api/resolve-url ───────────────────────────────────
-// Resolve qualquer link (meli.la, mercadolivre.com.br, etc.)
-// Segue redirect completo com UA mobile, extrai og:title, og:image,
-// MLB ID e preço do HTML da página final — retorna tudo de uma vez.
-// Se encontrar mlbId → tenta API ML autenticada para preço real + imagem HD.
+// Resolve qualquer link (meli.la, /social/, mercadolivre.com.br, etc.)
+//
+// ESTRATÉGIA DUPLA para links ML:
+//
+// PASSO 1 — resolve URL e extrai mlbId
+//   • UA mobile → segue redirect do link /social/ ou meli.la
+//   • Extrai MLB ID da URL final ou do HTML
+//
+// PASSO 2 — busca HTML completo com Googlebot UA
+//   • URL: produto.mercadolivre.com.br/MLB-XXXXXXXXX
+//   • O ML serve HTML completo (SSR) para bots — inclui preço, og:title, og:image
+//   • Confirmado: retorna ~450KB com "price":119.9 e og:image válido
+//   • MUITO mais confiável que scraping de página de usuário (SPA)
+//
+// A API ML /items/{id} retorna 403 de qualquer servidor — não usar no backend.
 admin.get('/api/resolve-url', async (c) => {
   const url = c.req.query('url') || ''
   if (!url.startsWith('http')) return c.json({ error: 'URL inválida' }, 400)
 
+  // ── Helper reutilizável: extrai meta tag de um HTML ──────────────
+  const extractMeta = (html: string, prop: string): string => {
+    const m = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)["']`, 'i'))
+           || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${prop}["']`, 'i'))
+    return m ? m[1].trim() : ''
+  }
+
+  // ── Helper: extrai MLB ID de uma string (URL ou HTML) ───────────
+  const extractMlbId = (s: string): string | null => {
+    const m = s.match(/\b(MLB\d{7,12})\b/i)
+    return m ? m[1].toUpperCase() : null
+  }
+
+  // ── Helper: extrai preço de HTML do ML ─────────────────────────
+  const extractPrice = (html: string): number | null => {
+    // Prioridade 1: JSON estruturado  "price":119.9
+    const patterns = [
+      /"price"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/,
+      /content=["']([\d.,]+)["'][^>]*itemprop=["']price["']/i,
+      /itemprop=["']price["'][^>]*content=["']([\d.,]+)["']/i,
+      /"amount"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/,
+    ]
+    for (const pat of patterns) {
+      const m = html.match(pat)
+      if (m) {
+        // Remove separadores de milhar (ponto BR) e converte vírgula → ponto
+        const raw = m[1].replace(/\.(?=\d{3})/g, '').replace(',', '.')
+        const val = parseFloat(raw)
+        if (!isNaN(val) && val > 0 && val < 9_000_000) return val
+      }
+    }
+    return null
+  }
+
   try {
-    // Segue redirect completo com UA mobile (contorna CloudFront meli.la)
-    const res = await fetch(url, {
+    // ════════════════════════════════════════════════════════════
+    // PASSO 1: resolve redirect → descobre URL final e mlbId
+    // ════════════════════════════════════════════════════════════
+    const step1 = await fetch(url, {
       redirect: 'follow',
       headers: {
         'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
@@ -1960,104 +2007,81 @@ admin.get('/api/resolve-url', async (c) => {
       signal: AbortSignal.timeout(8000),
     })
 
-    const finalUrl = res.url || url
-    const html = await res.text()
+    const finalUrl = step1.url || url
+    const html1    = await step1.text()
 
-    // ── Helper: extrai conteúdo de meta tag ──────────────────────
-    const getMeta = (prop: string): string => {
-      const m = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)["']`, 'i'))
-             || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${prop}["']`, 'i'))
-      return m ? m[1].trim() : ''
-    }
+    // Extrai mlbId: primeiro da URL final, depois do HTML
+    let mlbId = extractMlbId(finalUrl) || extractMlbId(html1)
 
-    // ── Extrai nome via og:title ou <title> ──────────────────────
-    let name = getMeta('og:title') || getMeta('twitter:title')
-    if (!name) {
-      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i)
-      name = titleMatch ? titleMatch[1].trim() : ''
-    }
-    // Remove sufixos tipo " | Perfil Social", " - Mercado Livre"
-    name = name.replace(/\s*[|–-]\s*(Mercado Livr[eo].*|Perfil Social.*|ML.*|Amazon.*|Americanas.*)$/i, '').trim()
-
-    // ── Extrai imagem via og:image ───────────────────────────────
-    let image = getMeta('og:image') || getMeta('twitter:image')
-    // Converte .webp para .jpg se necessário e garante https
-    if (image && image.startsWith('//')) image = 'https:' + image
-    // Melhora resolução ML: troca sufixo _T por _O (original) ou _B (big)
-    image = image.replace(/_[A-Z](\.(webp|jpg|png))$/, '_O$1')
-
-    // ── Extrai MLB ID da URL final ou do HTML ────────────────────
-    let mlbId: string | null = null
-    const mlbFromUrl = finalUrl.match(/MLB\d+/i)
-    if (mlbFromUrl) {
-      mlbId = mlbFromUrl[0].toUpperCase()
-    } else {
-      // Procura no HTML (JSON embutido ou atributos)
-      const mlbFromHtml = html.match(/["'/](MLB\d{7,12})["'/]/i)
-      if (mlbFromHtml) mlbId = mlbFromHtml[1].toUpperCase()
-    }
-
-    // ── Extrai preço do HTML (heurística) ────────────────────────
+    // Valores iniciais do passo 1 (podem ser substituídos no passo 2)
+    let name  = ''
+    let image = ''
     let price: number | null = null
-    // Tenta JSON-LD / meta price
-    const priceMeta = html.match(/"price"\s*:\s*"?([\d.,]+)"?/)
-                   || html.match(/content=["']([\d.,]+)["'][^>]*itemprop=["']price["']/i)
-                   || html.match(/itemprop=["']price["'][^>]*content=["']([\d.,]+)["']/i)
-    if (priceMeta) {
-      const raw = priceMeta[1].replace(/\./g, '').replace(',', '.')
-      const parsed = parseFloat(raw)
-      if (!isNaN(parsed) && parsed > 0) price = parsed
-    }
 
-    // ── Camada 2: API ML autenticada — preço real + imagem HD ────
-    // Ativa quando: encontrou mlbId E (preço ainda null OU imagem do og:image)
+    // Tenta extrair dados básicos do HTML do passo 1 como fallback
+    const n1 = (extractMeta(html1, 'og:title') || extractMeta(html1, 'twitter:title') || '').trim()
+    if (n1) name = n1.replace(/\s*[|–\-]\s*(Mercado Livr[eo].*|Perfil Social.*|ML.*)$/i, '').trim()
+    const img1 = extractMeta(html1, 'og:image') || extractMeta(html1, 'twitter:image')
+    if (img1 && !img1.startsWith('data:')) {
+      image = img1.startsWith('//') ? 'https:' + img1 : img1
+      image = image.replace(/_[A-Z](\.(webp|jpg|png))$/, '_O$1')
+    }
+    price = extractPrice(html1)
+
+    // ════════════════════════════════════════════════════════════
+    // PASSO 2: Googlebot UA → HTML SSR completo com preço real
+    // Só executa se encontrou mlbId (links ML)
+    // ════════════════════════════════════════════════════════════
     if (mlbId) {
       try {
-        const token = await getMlBearerToken(c.env)
-        if (token) {
-          const mlRes = await fetch(
-            `https://api.mercadolibre.com/items/${mlbId}?attributes=id,title,price,pictures,thumbnail`,
-            {
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'Accept': 'application/json',
-              },
-              signal: AbortSignal.timeout(5000),
-            }
-          )
-          if (mlRes.ok) {
-            const mlData = await mlRes.json() as any
+        // URL canônica do produto — o ML serve SSR completo para bots
+        // Formato: produto.mercadolivre.com.br/MLB-XXXXXXXXX
+        const botUrl = `https://produto.mercadolivre.com.br/${mlbId.replace('MLB', 'MLB-')}`
 
-            // Preço real da API (sempre mais confiável que HTML)
-            if (mlData.price && mlData.price > 0) {
-              price = mlData.price
-            }
+        const step2 = await fetch(botUrl, {
+          redirect: 'follow',
+          headers: {
+            'User-Agent':      'Googlebot/2.1 (+http://www.google.com/bot.html)',
+            'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'pt-BR,pt;q=0.9',
+            'Accept-Encoding': 'identity', // evita gzip para facilitar parsing
+          },
+          signal: AbortSignal.timeout(9000),
+        })
 
-            // Imagem HD da API — URL sem hotlink block (pictures[0].url é CDN direto)
-            if (mlData.pictures && mlData.pictures.length > 0) {
-              const picUrl: string = mlData.pictures[0].url || mlData.pictures[0].secure_url || ''
-              if (picUrl) {
-                // URLs da API ML não têm hotlink block — pode usar direto no <img>
-                image = picUrl.replace('http://', 'https://')
-              }
-            } else if (mlData.thumbnail) {
-              // Fallback: thumbnail com sufixo melhorado
-              image = (mlData.thumbnail as string)
-                .replace('http://', 'https://')
-                .replace(/-I\.jpg$/, '-O.jpg')
-                .replace(/-I\.webp$/, '-O.webp')
-            }
+        if (step2.ok) {
+          const html2 = await step2.text()
 
-            // Nome do produto via API (mais limpo que og:title)
-            if (!name && mlData.title) {
-              name = mlData.title
-            }
+          // Preço do HTML SSR — MUITO mais confiável que qualquer heurística
+          const p2 = extractPrice(html2)
+          if (p2 && p2 > 0) price = p2
+
+          // Nome via og:title (SSR tem título real, sem sufixos)
+          const n2 = (extractMeta(html2, 'og:title') || extractMeta(html2, 'twitter:title') || '').trim()
+          if (n2 && n2.length > 3) {
+            name = n2.replace(/\s*[|–\-]\s*(Mercado Livr[eo].*|Perfil Social.*|ML.*)$/i, '').trim()
+          }
+
+          // Imagem via og:image do SSR (URL direto, sem hotlink block)
+          const img2 = extractMeta(html2, 'og:image') || extractMeta(html2, 'twitter:image')
+          if (img2 && !img2.startsWith('data:') && img2.includes('mlstatic')) {
+            image = img2.startsWith('//') ? 'https:' + img2 : img2
+            // Garante resolução máxima: sufixo _O (original)
+            image = image.replace(/_[A-Z](-\d+)?(\.(webp|jpg|png))(\?.*)?$/, '_O$2')
           }
         }
-      } catch { /* silencia erros da API ML — usa o que já tem */ }
+      } catch { /* silencia — usa dados do passo 1 */ }
     }
 
-    return c.json({ ok: true, finalUrl, mlbId, name, image, price })
+    // Limpeza final do nome
+    if (name) {
+      name = name
+        .replace(/\s*[|–\-]\s*(Mercado Livr[eo].*|Perfil Social.*|ML.*|Amazon.*|Americanas.*)$/i, '')
+        .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+        .trim()
+    }
+
+    return c.json({ ok: true, finalUrl, mlbId, name, image: image || null, price })
   } catch (err: any) {
     return c.json({ ok: false, error: err?.message || 'Falha ao resolver URL' })
   }
