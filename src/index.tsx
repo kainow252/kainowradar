@@ -13,6 +13,7 @@ import onboarding from './routes/onboarding'
 import pages, { renderLayout, renderProductCard, formatCurrency, loadFooterConfig } from './routes/pages'
 import editorial from './routes/editorial'
 import ml from './routes/ml'
+import v1 from './routes/v1'
 import { CacheManager } from './lib/cache'
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -51,6 +52,12 @@ app.route('/api/editorial', editorial)
 
 // ── Mercado Livre — OAuth2, Webhook (público) ───────────────
 app.route('/api/ml', ml)
+
+// ── API Pública v1 — autenticada por X-API-Key ────────────
+app.route('/api/v1', v1)
+
+// ── Página de Documentação da API ─────────────────────────
+app.get('/api-docs', (c) => c.html(renderApiDocs()))
 // /api/ml-callback → ml.get('/') para receber o code do OAuth2
 app.get('/api/ml-callback', async (c) => {
   const code  = c.req.query('code')
@@ -1026,6 +1033,356 @@ app.notFound((c) => {
     </div>
   `), 404)
 })
+
+// ── Página de Documentação da API ─────────────────────────
+function renderApiDocs(): string {
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KainowRadar API — Documentação</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .endpoint-card { border-left: 4px solid #3b82f6; }
+    pre { white-space: pre-wrap; word-break: break-all; }
+    .try-btn { cursor: pointer; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+
+  <!-- Hero -->
+  <div class="bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 text-white">
+    <div class="max-w-5xl mx-auto px-6 py-16">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-700 rounded-2xl flex items-center justify-center shadow-xl">
+          <svg viewBox="0 0 24 24" class="w-7 h-7" fill="white"><path d="M5 3h3v7.5l7-7.5h4L11 11l8.5 10H15l-7-8.5V21H5V3z"/></svg>
+        </div>
+        <div>
+          <div class="font-black text-xl tracking-tight"><span class="text-white">Kainow</span><span class="text-yellow-300">Radar</span></div>
+          <div class="text-blue-300 text-xs">API Pública</div>
+        </div>
+      </div>
+      <h1 class="text-4xl font-black mb-3">API Reference <span class="text-blue-400">v1</span></h1>
+      <p class="text-slate-300 text-lg max-w-2xl">Acesse produtos, preços e ofertas em tempo real do KainowRadar. Autenticação simples por API Key.</p>
+      <div class="flex flex-wrap gap-3 mt-6">
+        <span class="bg-green-500/20 text-green-300 border border-green-500/30 text-xs font-bold px-3 py-1.5 rounded-full">✅ REST JSON</span>
+        <span class="bg-blue-500/20 text-blue-300 border border-blue-500/30 text-xs font-bold px-3 py-1.5 rounded-full">🔑 API Key Auth</span>
+        <span class="bg-purple-500/20 text-purple-300 border border-purple-500/30 text-xs font-bold px-3 py-1.5 rounded-full">⚡ Edge — Cloudflare</span>
+        <span class="bg-yellow-500/20 text-yellow-300 border border-yellow-500/30 text-xs font-bold px-3 py-1.5 rounded-full">📦 CORS habilitado</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="max-w-5xl mx-auto px-6 py-12 space-y-10">
+
+    <!-- Autenticação -->
+    <section id="auth">
+      <h2 class="text-2xl font-black text-slate-900 mb-4">🔑 Autenticação</h2>
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+        <p class="text-slate-600">Todas as requisições precisam de uma API Key válida. Passe a chave de uma das formas abaixo:</p>
+        <div class="grid md:grid-cols-2 gap-4">
+          <div>
+            <p class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Via Header (recomendado)</p>
+            <pre class="bg-slate-900 text-green-400 rounded-xl p-4 text-sm">X-API-Key: kr_live_sua_chave_aqui</pre>
+          </div>
+          <div>
+            <p class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Via Query Param</p>
+            <pre class="bg-slate-900 text-green-400 rounded-xl p-4 text-sm">?api_key=kr_live_sua_chave_aqui</pre>
+          </div>
+        </div>
+        <div class="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-800">
+          <strong>Obtendo sua chave:</strong> Acesse o painel administrativo em <code class="bg-white px-1 rounded">/admin</code> → seção <strong>🔑 API Keys</strong> e clique em "Gerar API Key".
+        </div>
+      </div>
+    </section>
+
+    <!-- Rate Limit -->
+    <section id="rate-limit">
+      <h2 class="text-2xl font-black text-slate-900 mb-4">⏱️ Rate Limit</h2>
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+        <div class="grid md:grid-cols-3 gap-4 mb-4">
+          <div class="bg-slate-50 rounded-xl p-4 text-center">
+            <div class="text-2xl font-black text-slate-700">100</div>
+            <div class="text-xs text-slate-500 mt-1">req/hora — Free</div>
+          </div>
+          <div class="bg-blue-50 rounded-xl p-4 text-center">
+            <div class="text-2xl font-black text-blue-700">1.000</div>
+            <div class="text-xs text-slate-500 mt-1">req/hora — Pro</div>
+          </div>
+          <div class="bg-purple-50 rounded-xl p-4 text-center">
+            <div class="text-2xl font-black text-purple-700">10.000</div>
+            <div class="text-xs text-slate-500 mt-1">req/hora — Enterprise</div>
+          </div>
+        </div>
+        <p class="text-sm text-slate-600">Os headers de resposta informam sua quota atual:</p>
+        <pre class="bg-slate-900 text-green-400 rounded-xl p-4 text-sm mt-3">X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 87
+X-RateLimit-Reset: 1718300400</pre>
+        <p class="text-xs text-slate-400 mt-2">Quando exceder o limite, a API retorna <code class="bg-slate-100 px-1 rounded">HTTP 429</code> com o horário de reset.</p>
+      </div>
+    </section>
+
+    <!-- Base URL -->
+    <section>
+      <h2 class="text-2xl font-black text-slate-900 mb-4">🌐 Base URL</h2>
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+        <pre class="bg-slate-900 text-yellow-300 rounded-xl p-4 text-sm font-bold">https://kainowradar.com.br/api/v1</pre>
+      </div>
+    </section>
+
+    <!-- Endpoints -->
+    <section id="endpoints">
+      <h2 class="text-2xl font-black text-slate-900 mb-6">📋 Endpoints</h2>
+      <div class="space-y-6">
+
+        <!-- STATUS -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden endpoint-card">
+          <div class="p-5 flex items-start justify-between gap-4">
+            <div class="flex-1">
+              <div class="flex items-center gap-3 mb-2">
+                <span class="bg-blue-100 text-blue-700 text-xs font-black px-2.5 py-1 rounded-lg">GET</span>
+                <code class="font-bold text-slate-800">/api/v1/status</code>
+              </div>
+              <p class="text-sm text-slate-600">Verifica se a chave é válida e retorna informações de quota e plano.</p>
+            </div>
+          </div>
+          <div class="border-t border-slate-100 p-5">
+            <p class="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Resposta de exemplo</p>
+            <pre class="bg-slate-900 text-green-400 rounded-xl p-4 text-xs">{
+  "ok": true,
+  "app_name": "Meu App",
+  "plan": "free",
+  "scopes": ["read"],
+  "quota": {
+    "limit_per_hour": 100,
+    "remaining": 98,
+    "used": 2
+  },
+  "docs": "https://kainowradar.com.br/api-docs"
+}</pre>
+          </div>
+        </div>
+
+        <!-- PRODUCTS -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden endpoint-card">
+          <div class="p-5">
+            <div class="flex items-center gap-3 mb-2">
+              <span class="bg-blue-100 text-blue-700 text-xs font-black px-2.5 py-1 rounded-lg">GET</span>
+              <code class="font-bold text-slate-800">/api/v1/products</code>
+            </div>
+            <p class="text-sm text-slate-600 mb-4">Lista produtos com filtros, paginação e ordenação.</p>
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs">
+                <thead><tr class="bg-slate-50">
+                  <th class="text-left px-3 py-2 font-bold text-slate-500">Param</th>
+                  <th class="text-left px-3 py-2 font-bold text-slate-500">Tipo</th>
+                  <th class="text-left px-3 py-2 font-bold text-slate-500">Padrão</th>
+                  <th class="text-left px-3 py-2 font-bold text-slate-500">Descrição</th>
+                </tr></thead>
+                <tbody class="divide-y divide-slate-50">
+                  ${[
+                    ['q','string','—','Busca por nome, marca ou EAN'],
+                    ['category','string','—','Slug da categoria (ex: smartphones)'],
+                    ['brand','string','—','Filtro por marca'],
+                    ['min_price','number','—','Preço mínimo (R$)'],
+                    ['max_price','number','—','Preço máximo (R$)'],
+                    ['sort','string','relevance','relevance | price_asc | price_desc | newest | name'],
+                    ['page','integer','1','Página (paginação)'],
+                    ['limit','integer','20','Itens por página (máx 50)'],
+                  ].map(([p,t,d,desc]) => `
+                    <tr>
+                      <td class="px-3 py-2 font-mono text-blue-700 font-bold">${p}</td>
+                      <td class="px-3 py-2 text-slate-500">${t}</td>
+                      <td class="px-3 py-2 text-slate-400">${d}</td>
+                      <td class="px-3 py-2 text-slate-600">${desc}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="border-t border-slate-100 p-5 bg-slate-50">
+            <p class="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Exemplo de requisição</p>
+            <pre class="bg-slate-900 text-green-400 rounded-xl p-4 text-xs">GET /api/v1/products?category=smartphones&sort=price_asc&limit=10
+X-API-Key: kr_live_sua_chave</pre>
+          </div>
+        </div>
+
+        <!-- PRODUCTS/:id -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden endpoint-card">
+          <div class="p-5">
+            <div class="flex items-center gap-3 mb-2">
+              <span class="bg-blue-100 text-blue-700 text-xs font-black px-2.5 py-1 rounded-lg">GET</span>
+              <code class="font-bold text-slate-800">/api/v1/products/:id</code>
+            </div>
+            <p class="text-sm text-slate-600">Retorna um produto pelo ID numérico ou slug, com todas as ofertas ordenadas por menor preço.</p>
+          </div>
+          <div class="border-t border-slate-100 p-5">
+            <pre class="bg-slate-900 text-green-400 rounded-xl p-4 text-xs">GET /api/v1/products/iphone-15-128gb
+GET /api/v1/products/42</pre>
+          </div>
+        </div>
+
+        <!-- SEARCH -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden endpoint-card">
+          <div class="p-5">
+            <div class="flex items-center gap-3 mb-2">
+              <span class="bg-blue-100 text-blue-700 text-xs font-black px-2.5 py-1 rounded-lg">GET</span>
+              <code class="font-bold text-slate-800">/api/v1/search?q=</code>
+            </div>
+            <p class="text-sm text-slate-600 mb-3">Busca full-text por nome, marca ou EAN. Mínimo 2 caracteres.</p>
+            <pre class="bg-slate-900 text-green-400 rounded-xl p-4 text-xs">GET /api/v1/search?q=Samsung+Galaxy&limit=20</pre>
+          </div>
+        </div>
+
+        <!-- CATEGORIES -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden endpoint-card">
+          <div class="p-5">
+            <div class="flex items-center gap-3 mb-2">
+              <span class="bg-blue-100 text-blue-700 text-xs font-black px-2.5 py-1 rounded-lg">GET</span>
+              <code class="font-bold text-slate-800">/api/v1/categories</code>
+            </div>
+            <p class="text-sm text-slate-600">Lista todas as categorias com contagem de produtos.</p>
+          </div>
+        </div>
+
+        <!-- DEALS -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden endpoint-card">
+          <div class="p-5">
+            <div class="flex items-center gap-3 mb-2">
+              <span class="bg-blue-100 text-blue-700 text-xs font-black px-2.5 py-1 rounded-lg">GET</span>
+              <code class="font-bold text-slate-800">/api/v1/deals</code>
+            </div>
+            <p class="text-sm text-slate-600 mb-3">Melhores ofertas com desconto, ordenadas por maior % de desconto.</p>
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs">
+                <thead><tr class="bg-slate-50">
+                  <th class="text-left px-3 py-2 font-bold text-slate-500">Param</th>
+                  <th class="text-left px-3 py-2 font-bold text-slate-500">Padrão</th>
+                  <th class="text-left px-3 py-2 font-bold text-slate-500">Descrição</th>
+                </tr></thead>
+                <tbody>
+                  <tr><td class="px-3 py-2 font-mono text-blue-700 font-bold">category</td><td class="px-3 py-2 text-slate-400">—</td><td class="px-3 py-2 text-slate-600">Filtrar por categoria</td></tr>
+                  <tr><td class="px-3 py-2 font-mono text-blue-700 font-bold">min_discount</td><td class="px-3 py-2 text-slate-400">5</td><td class="px-3 py-2 text-slate-600">Desconto mínimo em %</td></tr>
+                  <tr><td class="px-3 py-2 font-mono text-blue-700 font-bold">limit</td><td class="px-3 py-2 text-slate-400">20</td><td class="px-3 py-2 text-slate-600">Máximo de resultados (50)</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- PRICE -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden endpoint-card">
+          <div class="p-5">
+            <div class="flex items-center gap-3 mb-2">
+              <span class="bg-blue-100 text-blue-700 text-xs font-black px-2.5 py-1 rounded-lg">GET</span>
+              <code class="font-bold text-slate-800">/api/v1/price/:ml_id</code>
+            </div>
+            <p class="text-sm text-slate-600 mb-3">Consulta o preço atual de um produto pelo ID do Mercado Livre.</p>
+            <pre class="bg-slate-900 text-green-400 rounded-xl p-4 text-xs">GET /api/v1/price/MLB1234567890</pre>
+          </div>
+          <div class="border-t border-slate-100 p-5">
+            <pre class="bg-slate-900 text-green-400 rounded-xl p-4 text-xs">{
+  "ml_item_id": "MLB1234567890",
+  "name": "iPhone 15 128GB",
+  "price": 4499.00,
+  "original_price": 5199.00,
+  "discount_percent": 13,
+  "free_shipping": true,
+  "store": "Mercado Livre",
+  "affiliate_url": "https://...",
+  "updated_at": "2025-05-13T10:00:00Z"
+}</pre>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- Erros -->
+    <section id="erros">
+      <h2 class="text-2xl font-black text-slate-900 mb-4">❌ Códigos de Erro</h2>
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <table class="w-full text-sm">
+          <thead><tr class="bg-slate-50">
+            <th class="text-left px-5 py-3 font-bold text-slate-500">Código</th>
+            <th class="text-left px-5 py-3 font-bold text-slate-500">Significado</th>
+          </tr></thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr><td class="px-5 py-3 font-mono font-bold text-red-600">401</td><td class="px-5 py-3 text-slate-600">API Key ausente ou inválida</td></tr>
+            <tr><td class="px-5 py-3 font-mono font-bold text-red-600">403</td><td class="px-5 py-3 text-slate-600">Chave desativada ou expirada</td></tr>
+            <tr><td class="px-5 py-3 font-mono font-bold text-orange-600">404</td><td class="px-5 py-3 text-slate-600">Recurso não encontrado</td></tr>
+            <tr><td class="px-5 py-3 font-mono font-bold text-yellow-600">429</td><td class="px-5 py-3 text-slate-600">Rate limit excedido — aguarde o reset</td></tr>
+            <tr><td class="px-5 py-3 font-mono font-bold text-red-700">500</td><td class="px-5 py-3 text-slate-600">Erro interno do servidor</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Testador rápido -->
+    <section id="testar">
+      <h2 class="text-2xl font-black text-slate-900 mb-4">🧪 Testar ao Vivo</h2>
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+        <div class="grid md:grid-cols-3 gap-3">
+          <div class="md:col-span-2">
+            <label class="block text-xs font-bold text-slate-500 mb-1.5">Sua API Key</label>
+            <input id="docs-apikey" type="text" placeholder="kr_live_..."
+              class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400">
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-500 mb-1.5">Endpoint</label>
+            <select id="docs-endpoint" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+              <option value="/api/v1/status">GET /status</option>
+              <option value="/api/v1/products?limit=5">GET /products?limit=5</option>
+              <option value="/api/v1/search?q=samsung&limit=5">GET /search?q=samsung</option>
+              <option value="/api/v1/categories">GET /categories</option>
+              <option value="/api/v1/deals?limit=5">GET /deals?limit=5</option>
+            </select>
+          </div>
+        </div>
+        <button onclick="docsTry()" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold px-5 py-2.5 rounded-xl transition-all">
+          ▶ Executar
+        </button>
+        <div id="docs-result" class="hidden">
+          <p class="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Resposta</p>
+          <pre id="docs-result-pre" class="bg-slate-900 text-green-400 rounded-xl p-4 text-xs max-h-80 overflow-auto"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="text-center text-sm text-slate-400 py-8 border-t border-slate-200">
+      <p>KainowRadar API v1 — <a href="/" class="text-blue-500 hover:underline">kainowradar.com.br</a></p>
+      <p class="mt-1">Dúvidas? Acesse o painel admin ou entre em contato.</p>
+    </footer>
+
+  </div>
+
+  <script>
+    async function docsTry() {
+      const key = document.getElementById('docs-apikey').value.trim()
+      const ep  = document.getElementById('docs-endpoint').value
+      const resEl  = document.getElementById('docs-result')
+      const preEl  = document.getElementById('docs-result-pre')
+      if (!key) { alert('Informe sua API Key'); return }
+      preEl.textContent = 'Carregando...'
+      resEl.classList.remove('hidden')
+      try {
+        const r = await fetch(ep, { headers: { 'X-API-Key': key } })
+        const data = await r.json()
+        preEl.textContent = JSON.stringify(data, null, 2)
+      } catch(e) {
+        preEl.textContent = 'Erro: ' + e.message
+      }
+    }
+  </script>
+</body>
+</html>`
+}
+
 
 // ── Cron Triggers (Cloudflare Scheduled Events) ─────────────
 // Executa automaticamente conforme schedule no wrangler.jsonc

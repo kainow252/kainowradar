@@ -105,6 +105,7 @@ async function loadSection(name) {
     'ml-categories': ['🗂️ Categorias ML', 'Sincroniza árvore de categorias do Mercado Livre com o D1'],
     'ml-search': ['🔍 Busca ML API', 'Busca e importa produtos por categoria ou termo via API do ML'],
     'ml-crawl': ['🕷️ Crawl em Massa', 'Varre uma categoria completa do ML com paginação automática (limit=50, loop de páginas)'],
+    'api-keys': ['🔑 API Keys', 'Gerencie chaves de acesso para parceiros e integrações externas'],
     'affiliate-codes': ['🔗 Códigos Afiliados', 'Configure seus códigos por rede e gere links para todos os produtos'],
     'buscape-import': ['🛍️ Importar do Buscapé', 'Importa produtos e preços de múltiplas lojas via Buscapé — gera links afiliados automaticamente'],
     'lomadee-import': ['🟠 Importar Lomadee', 'Busca produtos e gera links afiliados automáticos via API da Lomadee (136 lojas parceiras)'],
@@ -133,6 +134,7 @@ async function loadSection(name) {
     'ml-categories': renderMLCategories,
     'ml-search': renderMLSearch,
     'ml-crawl': renderMLCrawl,
+    'api-keys': renderAPIKeys,
     'affiliate-codes': renderAffiliateCodes,
     'buscape-import': renderBuscapeImport,
     'lomadee-import': renderLomadeeImport,
@@ -7776,4 +7778,398 @@ function mlCrawlClear() {
   if (logEl) logEl.innerHTML = ''
   if (wrap)  wrap.classList.add('hidden')
   if (res)   res.classList.add('hidden')
+}
+
+// ════════════════════════════════════════════════════════════
+// SEÇÃO: API Keys — Gerenciamento de chaves de acesso externo
+// ════════════════════════════════════════════════════════════
+
+function renderAPIKeys(area) {
+  area.innerHTML = `
+    <div class="space-y-6">
+
+      <!-- Header cards -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="bg-gradient-to-br from-blue-600 to-blue-800 rounded-2xl p-5 text-white">
+          <div class="text-3xl mb-1">🔑</div>
+          <div class="text-2xl font-black" id="ak-total">—</div>
+          <div class="text-blue-200 text-sm">Chaves ativas</div>
+        </div>
+        <div class="bg-gradient-to-br from-green-600 to-green-800 rounded-2xl p-5 text-white">
+          <div class="text-3xl mb-1">📊</div>
+          <div class="text-2xl font-black" id="ak-calls">—</div>
+          <div class="text-green-200 text-sm">Total de chamadas</div>
+        </div>
+        <div class="bg-gradient-to-br from-purple-600 to-purple-800 rounded-2xl p-5 text-white">
+          <div class="text-3xl mb-1">🌐</div>
+          <div class="text-sm font-semibold text-purple-100 mt-2">Documentação pública</div>
+          <a href="/api-docs" target="_blank"
+            class="inline-block mt-2 bg-white/20 hover:bg-white/30 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-all">
+            Ver /api-docs →
+          </a>
+        </div>
+      </div>
+
+      <!-- Criar nova chave -->
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+        <h3 class="font-bold text-slate-800 mb-4 flex items-center gap-2">
+          <span class="text-xl">➕</span> Criar Nova API Key
+        </h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5">Nome do App/Parceiro *</label>
+            <input id="ak-name" type="text" class="input" placeholder="Ex: App Mobile, Parceiro X">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5">Email do Responsável</label>
+            <input id="ak-email" type="email" class="input" placeholder="dev@parceiro.com">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5">Plano</label>
+            <select id="ak-plan" class="input">
+              <option value="free">🆓 Free — 100 req/hora</option>
+              <option value="pro">⚡ Pro — 1.000 req/hora</option>
+              <option value="enterprise">🏢 Enterprise — 10.000 req/hora</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5">Limite por hora (req)</label>
+            <input id="ak-rate" type="number" class="input" value="100" min="1" max="10000">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5">Scopes</label>
+            <select id="ak-scopes" class="input">
+              <option value="read">📖 read — somente leitura</option>
+              <option value="read,write">✏️ read, write</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5">Expira em (opcional)</label>
+            <input id="ak-expires" type="date" class="input">
+          </div>
+          <div class="md:col-span-2 lg:col-span-3">
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5">Notas internas</label>
+            <input id="ak-notes" type="text" class="input" placeholder="Obs sobre este parceiro...">
+          </div>
+        </div>
+        <div class="mt-4 flex gap-3">
+          <button onclick="akCreate()" class="btn-primary flex items-center gap-2">
+            <span>🔑</span> Gerar API Key
+          </button>
+        </div>
+        <!-- Exibe chave gerada (só uma vez) -->
+        <div id="ak-new-key-box" class="hidden mt-4 bg-green-50 border-2 border-green-300 rounded-xl p-4">
+          <p class="text-xs font-bold text-green-700 mb-2">✅ Chave gerada! Copie agora — não será exibida novamente:</p>
+          <div class="flex items-center gap-2">
+            <code id="ak-new-key-value" class="flex-1 bg-white border border-green-200 rounded-lg px-3 py-2 text-sm font-mono text-green-800 break-all"></code>
+            <button onclick="akCopyKey()" class="btn-success shrink-0">📋 Copiar</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lista de chaves -->
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-bold text-slate-800 flex items-center gap-2">
+            <span class="text-xl">🗝️</span> Chaves Cadastradas
+          </h3>
+          <button onclick="akLoadList()" class="btn-secondary text-xs">↻ Atualizar</button>
+        </div>
+        <div id="ak-list">
+          <div class="text-center py-8 text-slate-400">
+            <p class="text-2xl mb-2">⏳</p>
+            <p class="text-sm">Carregando...</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Documentação rápida dos endpoints -->
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+        <h3 class="font-bold text-slate-800 mb-4 flex items-center gap-2">
+          <span class="text-xl">📋</span> Endpoints Disponíveis
+        </h3>
+        <div class="space-y-2 text-sm font-mono">
+          ${[
+            ['GET', '/api/v1/status',         'Verifica autenticação e quota'],
+            ['GET', '/api/v1/products',        'Lista produtos (filtros: category, brand, q, min_price, max_price, sort, page, limit)'],
+            ['GET', '/api/v1/products/:id',    'Produto único com todas as ofertas'],
+            ['GET', '/api/v1/search?q=',       'Busca por nome, marca ou EAN'],
+            ['GET', '/api/v1/categories',      'Categorias com contagem de produtos'],
+            ['GET', '/api/v1/deals',           'Melhores ofertas (filtro: category, min_discount)'],
+            ['GET', '/api/v1/price/:ml_id',    'Preço atual de um item pelo ID ML (ex: MLB1234567890)'],
+          ].map(([m,p,d]) => `
+            <div class="flex items-start gap-3 py-2 border-b border-slate-50 last:border-0">
+              <span class="shrink-0 badge-blue">${m}</span>
+              <span class="text-blue-700 font-bold">${p}</span>
+              <span class="text-slate-500 text-xs hidden md:block">${d}</span>
+            </div>
+          `).join('')}
+        </div>
+        <div class="mt-4 bg-slate-50 rounded-xl p-4 text-xs text-slate-600">
+          <strong>Autenticação:</strong> Passe a chave no header <code class="bg-white px-1 rounded">X-API-Key: kr_live_...</code>
+          ou como query param <code class="bg-white px-1 rounded">?api_key=kr_live_...</code>
+        </div>
+      </div>
+
+    </div>
+  `
+  akLoadList()
+}
+
+async function akLoadList() {
+  const listEl = document.getElementById('ak-list')
+  if (!listEl) return
+
+  const keys = await api('GET', '/admin/api/api-keys')
+  if (!Array.isArray(keys) || !keys.length) {
+    listEl.innerHTML = `
+      <div class="text-center py-8 text-slate-400">
+        <p class="text-3xl mb-2">🔑</p>
+        <p class="text-sm">Nenhuma API Key cadastrada ainda.</p>
+      </div>`
+    document.getElementById('ak-total') && (document.getElementById('ak-total').textContent = '0')
+    document.getElementById('ak-calls') && (document.getElementById('ak-calls').textContent = '0')
+    return
+  }
+
+  const active = keys.filter(k => k.is_active)
+  const totalCalls = keys.reduce((s, k) => s + (k.total_calls || 0), 0)
+  if (document.getElementById('ak-total')) document.getElementById('ak-total').textContent = active.length
+  if (document.getElementById('ak-calls')) document.getElementById('ak-calls').textContent = totalCalls.toLocaleString('pt-BR')
+
+  listEl.innerHTML = `
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr>
+            <th class="table-th rounded-tl-lg">Nome</th>
+            <th class="table-th">Prefixo</th>
+            <th class="table-th">Plano</th>
+            <th class="table-th">Limite/h</th>
+            <th class="table-th text-right">Chamadas</th>
+            <th class="table-th">Último uso</th>
+            <th class="table-th">Status</th>
+            <th class="table-th rounded-tr-lg text-right">Ações</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${keys.map(k => `
+            <tr class="hover:bg-slate-50 transition-colors">
+              <td class="table-td">
+                <div class="font-semibold text-slate-800">${k.name}</div>
+                ${k.owner_email ? `<div class="text-xs text-slate-400">${k.owner_email}</div>` : ''}
+              </td>
+              <td class="table-td font-mono text-xs text-slate-500">${k.key_prefix}…</td>
+              <td class="table-td">
+                <span class="badge-blue">${k.plan}</span>
+              </td>
+              <td class="table-td text-slate-600">${(k.rate_limit||100).toLocaleString('pt-BR')}</td>
+              <td class="table-td text-right font-semibold">${(k.total_calls||0).toLocaleString('pt-BR')}</td>
+              <td class="table-td text-xs text-slate-400">
+                ${k.last_used_at ? new Date(k.last_used_at).toLocaleDateString('pt-BR') : '—'}
+              </td>
+              <td class="table-td">
+                <label class="toggle-switch">
+                  <input type="checkbox" ${k.is_active ? 'checked' : ''}
+                    onchange="akToggle('${k.id}', this)">
+                  <span class="toggle-slider"></span>
+                </label>
+              </td>
+              <td class="table-td text-right">
+                <div class="flex items-center justify-end gap-1">
+                  <button onclick="akShowUsage('${k.id}','${k.name}')"
+                    class="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold px-2.5 py-1 rounded-lg transition-colors"
+                    title="Ver uso">
+                    📊
+                  </button>
+                  <button onclick="akRotate('${k.id}','${k.name}')"
+                    class="text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 font-semibold px-2.5 py-1 rounded-lg transition-colors"
+                    title="Rotacionar chave">
+                    🔄
+                  </button>
+                  <button onclick="akDelete('${k.id}','${k.name}')"
+                    class="text-xs bg-red-50 hover:bg-red-100 text-red-600 font-semibold px-2.5 py-1 rounded-lg transition-colors"
+                    title="Revogar">
+                    🗑️
+                  </button>
+                </div>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-xs text-slate-400 mt-3">${keys.length} chave(s) — ${active.length} ativa(s)</p>
+  `
+}
+
+async function akCreate() {
+  const name    = document.getElementById('ak-name')?.value?.trim()
+  const email   = document.getElementById('ak-email')?.value?.trim()
+  const plan    = document.getElementById('ak-plan')?.value || 'free'
+  const rate    = parseInt(document.getElementById('ak-rate')?.value || '100')
+  const scopes  = document.getElementById('ak-scopes')?.value || 'read'
+  const expires = document.getElementById('ak-expires')?.value || null
+  const notes   = document.getElementById('ak-notes')?.value?.trim()
+
+  if (!name) { toast('Nome é obrigatório', 'error'); return }
+
+  const planRateMap = { free: 100, pro: 1000, enterprise: 10000 }
+  const finalRate   = rate || planRateMap[plan] || 100
+
+  const res = await api('POST', '/admin/api/api-keys', {
+    name, owner_email: email || null, plan, scopes,
+    rate_limit: finalRate,
+    expires_at: expires ? expires + 'T23:59:59Z' : null,
+    notes: notes || null,
+  })
+
+  if (res?.ok && res.api_key) {
+    // Exibe chave gerada
+    const box = document.getElementById('ak-new-key-box')
+    const val = document.getElementById('ak-new-key-value')
+    if (box) box.classList.remove('hidden')
+    if (val) val.textContent = res.api_key
+
+    // Limpa form
+    ;['ak-name','ak-email','ak-notes','ak-expires'].forEach(id => {
+      const el = document.getElementById(id)
+      if (el) el.value = ''
+    })
+
+    toast('✅ API Key criada! Copie agora.', 'success')
+    akLoadList()
+  } else {
+    toast(`❌ ${res?.error || 'Erro ao criar chave'}`, 'error')
+  }
+}
+
+function akCopyKey() {
+  const val = document.getElementById('ak-new-key-value')?.textContent || ''
+  if (!val) return
+  navigator.clipboard.writeText(val).then(() => {
+    toast('✅ Chave copiada!', 'success')
+  }).catch(() => {
+    // Fallback
+    const ta = document.createElement('textarea')
+    ta.value = val
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+    toast('✅ Chave copiada!', 'success')
+  })
+}
+
+async function akToggle(id, checkbox) {
+  const res = await api('PATCH', `/admin/api/api-keys/${id}/toggle`)
+  if (res?.ok) {
+    toast(res.is_active ? '✅ Chave ativada' : '⛔ Chave desativada', 'success')
+    akLoadList()
+  } else {
+    checkbox.checked = !checkbox.checked
+    toast('❌ Erro ao alterar status', 'error')
+  }
+}
+
+async function akRotate(id, name) {
+  if (!confirm(`Rotacionar a chave "${name}"?\n\nA chave antiga deixará de funcionar imediatamente.`)) return
+  const res = await api('POST', `/admin/api/api-keys/${id}/rotate`)
+  if (res?.ok && res.api_key) {
+    const box = document.getElementById('ak-new-key-box')
+    const val = document.getElementById('ak-new-key-value')
+    if (box) box.classList.remove('hidden')
+    if (val) val.textContent = res.api_key
+    toast('🔄 Nova chave gerada! Copie agora.', 'success')
+    akLoadList()
+  } else {
+    toast(`❌ ${res?.error || 'Erro'}`, 'error')
+  }
+}
+
+async function akDelete(id, name) {
+  if (!confirm(`Revogar a chave "${name}"?\n\nEsta ação é irreversível e todos os apps usando esta chave perderão acesso.`)) return
+  const res = await api('DELETE', `/admin/api/api-keys/${id}`)
+  if (res?.ok) {
+    toast('🗑️ Chave revogada', 'success')
+    akLoadList()
+  } else {
+    toast(`❌ ${res?.error || 'Erro'}`, 'error')
+  }
+}
+
+async function akShowUsage(id, name) {
+  const data = await api('GET', `/admin/api/api-keys/${id}/usage`)
+  if (!data) return
+
+  const s = data.summary || {}
+  const modal = document.getElementById('modal-container')
+  if (!modal) return
+
+  modal.innerHTML = `
+    <div class="modal-backdrop" onclick="if(event.target===this) this.innerHTML=''">
+      <div class="modal max-w-2xl w-full mx-4">
+        <div class="flex items-center justify-between mb-5">
+          <h3 class="text-lg font-bold text-slate-800">📊 Uso — ${name}</h3>
+          <button onclick="document.getElementById('modal-container').innerHTML=''"
+            class="text-slate-400 hover:text-slate-600 text-xl leading-none">✕</button>
+        </div>
+
+        <!-- Métricas -->
+        <div class="grid grid-cols-3 gap-3 mb-5">
+          <div class="bg-blue-50 rounded-xl p-3 text-center">
+            <div class="text-xl font-black text-blue-700">${(s.total_calls||0).toLocaleString('pt-BR')}</div>
+            <div class="text-xs text-slate-500">Chamadas (30d)</div>
+          </div>
+          <div class="bg-green-50 rounded-xl p-3 text-center">
+            <div class="text-xl font-black text-green-700">${(s.success_calls||0).toLocaleString('pt-BR')}</div>
+            <div class="text-xs text-slate-500">Sucesso</div>
+          </div>
+          <div class="bg-red-50 rounded-xl p-3 text-center">
+            <div class="text-xl font-black text-red-600">${(s.error_calls||0).toLocaleString('pt-BR')}</div>
+            <div class="text-xs text-slate-500">Erros</div>
+          </div>
+        </div>
+
+        <!-- Chamadas por dia -->
+        ${data.by_day?.length ? `
+          <div class="mb-4">
+            <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Últimos 7 dias</p>
+            <div class="flex items-end gap-1 h-16">
+              ${(() => {
+                const max = Math.max(...data.by_day.map(d => d.calls), 1)
+                return data.by_day.map(d => `
+                  <div class="flex-1 flex flex-col items-center gap-1" title="${d.day}: ${d.calls} chamadas">
+                    <div class="w-full bg-blue-500 rounded-t"
+                      style="height:${Math.max(4, Math.round((d.calls/max)*52))}px"></div>
+                    <span class="text-xs text-slate-400">${d.calls}</span>
+                  </div>
+                `).join('')
+              })()}
+            </div>
+          </div>` : ''}
+
+        <!-- Últimas chamadas -->
+        ${data.recent?.length ? `
+          <div>
+            <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Últimas chamadas</p>
+            <div class="max-h-48 overflow-y-auto space-y-1">
+              ${data.recent.slice(0,20).map(r => `
+                <div class="flex items-center gap-2 text-xs py-1 border-b border-slate-50">
+                  <span class="font-mono text-slate-400 shrink-0">${new Date(r.called_at).toLocaleTimeString('pt-BR')}</span>
+                  <span class="${r.status_code < 400 ? 'text-green-600' : 'text-red-500'} font-bold shrink-0">${r.status_code}</span>
+                  <span class="text-slate-600 truncate">${r.endpoint}</span>
+                  <span class="text-slate-400 shrink-0">${r.duration_ms}ms</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>` : '<p class="text-sm text-slate-400 text-center py-4">Sem histórico de uso ainda.</p>'}
+
+        <div class="mt-5 flex justify-end">
+          <button onclick="document.getElementById('modal-container').innerHTML=''"
+            class="btn-secondary">Fechar</button>
+        </div>
+      </div>
+    </div>
+  `
 }

@@ -6196,6 +6196,188 @@ admin.delete('/api/ml/cache', async (c) => {
   })
 })
 
+// ══════════════════════════════════════════════════════════
+// SISTEMA DE API KEYS — Gerenciamento de acesso externo
+// ══════════════════════════════════════════════════════════
+
+// ── Helper: gera token seguro ─────────────────────────────
+async function generateApiKey(): Promise<{ raw: string; hash: string; prefix: string }> {
+  const bytes  = crypto.getRandomValues(new Uint8Array(32))
+  const hex    = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
+  const raw    = `kr_live_${hex}`
+  const prefix = raw.substring(0, 16)
+  const buf    = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw))
+  const hash   = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
+  return { raw, hash, prefix }
+}
+
+// ── GET /admin/api/api-keys ───────────────────────────────
+admin.get('/api/api-keys', async (c) => {
+  const { DB } = c.env
+  const { results } = await DB.prepare(`
+    SELECT id, name, key_prefix, owner_email, plan, scopes,
+           rate_limit, is_active, last_used_at, expires_at,
+           total_calls, notes, created_at
+    FROM api_keys
+    ORDER BY created_at DESC
+  `).all()
+  return c.json(results || [])
+})
+
+// ── POST /admin/api/api-keys ── Cria nova chave ────────────
+admin.post('/api/api-keys', async (c) => {
+  const { DB } = c.env
+  const body = await c.req.json().catch(() => ({}) as any)
+  const { name, owner_email, plan, scopes, rate_limit, expires_at, notes } = body
+
+  if (!name?.trim()) return c.json({ error: 'Nome obrigatório' }, 400)
+
+  const { raw, hash, prefix } = await generateApiKey()
+
+  await DB.prepare(`
+    INSERT INTO api_keys
+      (name, key_hash, key_prefix, owner_email, plan, scopes,
+       rate_limit, is_active, expires_at, notes, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,1,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+  `).bind(
+    name.trim(),
+    hash,
+    prefix,
+    owner_email || null,
+    plan        || 'free',
+    scopes      || 'read',
+    rate_limit  || 100,
+    expires_at  || null,
+    notes       || null,
+  ).run()
+
+  // Retorna a chave RAW apenas uma vez — não fica armazenada em texto puro
+  return c.json({
+    ok:      true,
+    api_key: raw,
+    prefix,
+    message: '⚠️ Guarde esta chave agora! Ela não será exibida novamente.',
+  })
+})
+
+// ── PATCH /admin/api/api-keys/:id ── Edita chave ──────────
+admin.patch('/api/api-keys/:id', async (c) => {
+  const { DB } = c.env
+  const id   = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}) as any)
+  const { name, owner_email, plan, scopes, rate_limit, is_active, expires_at, notes } = body
+
+  await DB.prepare(`
+    UPDATE api_keys SET
+      name        = COALESCE(?, name),
+      owner_email = COALESCE(?, owner_email),
+      plan        = COALESCE(?, plan),
+      scopes      = COALESCE(?, scopes),
+      rate_limit  = COALESCE(?, rate_limit),
+      is_active   = COALESCE(?, is_active),
+      expires_at  = COALESCE(?, expires_at),
+      notes       = COALESCE(?, notes),
+      updated_at  = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(
+    name ?? null, owner_email ?? null, plan ?? null,
+    scopes ?? null, rate_limit ?? null, is_active ?? null,
+    expires_at ?? null, notes ?? null, id,
+  ).run()
+
+  return c.json({ ok: true })
+})
+
+// ── DELETE /admin/api/api-keys/:id ── Revoga chave ────────
+admin.delete('/api/api-keys/:id', async (c) => {
+  const { DB, CACHE } = c.env
+  const id = c.req.param('id')
+  await DB.prepare('DELETE FROM api_keys WHERE id = ?').bind(id).run()
+  // Limpa contadores de rate limit no KV
+  if (CACHE) {
+    const slot = Math.floor(Date.now() / 3_600_000)
+    await CACHE.delete(`rl:${id}:${slot}`).catch(() => {})
+  }
+  return c.json({ ok: true })
+})
+
+// ── PATCH /admin/api/api-keys/:id/toggle ── Ativa/desativa ─
+admin.patch('/api/api-keys/:id/toggle', async (c) => {
+  const { DB } = c.env
+  const id = c.req.param('id')
+  const cur = await DB.prepare('SELECT is_active FROM api_keys WHERE id = ?')
+    .bind(id).first<{ is_active: number }>()
+  if (!cur) return c.json({ error: 'Não encontrado' }, 404)
+  const newActive = cur.is_active === 1 ? 0 : 1
+  await DB.prepare('UPDATE api_keys SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .bind(newActive, id).run()
+  return c.json({ ok: true, is_active: newActive })
+})
+
+// ── POST /admin/api/api-keys/:id/rotate ── Gera nova chave (mantém config) ─
+admin.post('/api/api-keys/:id/rotate', async (c) => {
+  const { DB } = c.env
+  const id = c.req.param('id')
+  const exists = await DB.prepare('SELECT id FROM api_keys WHERE id = ?')
+    .bind(id).first()
+  if (!exists) return c.json({ error: 'Não encontrado' }, 404)
+
+  const { raw, hash, prefix } = await generateApiKey()
+  await DB.prepare(`
+    UPDATE api_keys SET key_hash = ?, key_prefix = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+  `).bind(hash, prefix, id).run()
+
+  return c.json({
+    ok:      true,
+    api_key: raw,
+    prefix,
+    message: '⚠️ Nova chave gerada! Atualize em todos os seus sistemas.',
+  })
+})
+
+// ── GET /admin/api/api-keys/:id/usage ── Histórico de uso ─
+admin.get('/api/api-keys/:id/usage', async (c) => {
+  const { DB } = c.env
+  const id = c.req.param('id')
+
+  const [summary, recent] = await Promise.all([
+    DB.prepare(`
+      SELECT
+        COUNT(*) AS total_calls,
+        COUNT(CASE WHEN status_code < 400 THEN 1 END) AS success_calls,
+        COUNT(CASE WHEN status_code >= 400 THEN 1 END) AS error_calls,
+        AVG(duration_ms) AS avg_duration_ms,
+        MIN(called_at) AS first_call,
+        MAX(called_at) AS last_call
+      FROM api_usage_log
+      WHERE key_id = ?
+        AND called_at >= datetime('now', '-30 days')
+    `).bind(id).first<any>(),
+
+    DB.prepare(`
+      SELECT endpoint, method, status_code, duration_ms, called_at
+      FROM api_usage_log
+      WHERE key_id = ?
+      ORDER BY called_at DESC
+      LIMIT 50
+    `).bind(id).all<any>(),
+  ])
+
+  // Chamadas por dia (últimos 7 dias)
+  const { results: byDay } = await DB.prepare(`
+    SELECT date(called_at) AS day, COUNT(*) AS calls
+    FROM api_usage_log
+    WHERE key_id = ? AND called_at >= datetime('now', '-7 days')
+    GROUP BY day ORDER BY day ASC
+  `).bind(id).all<any>()
+
+  return c.json({
+    summary,
+    by_day:  byDay  || [],
+    recent:  recent.results || [],
+  })
+})
+
 // PUT /admin/api/ml-linkbuilder/products/:id — salva link manualmente
 admin.put('/api/ml-linkbuilder/products/:id', async (c) => {
   const { DB } = c.env
@@ -6363,6 +6545,9 @@ function renderAdminSPA(): string {
       </div>
       <div onclick="showSection('ml-linkbuilder')" class="sidebar-link" data-section="ml-linkbuilder">
         <span class="text-lg">🔗</span> ML LinkBuilder
+      </div>
+      <div onclick="showSection('api-keys')" class="sidebar-link" data-section="api-keys">
+        <span class="text-lg">🔑</span> API Keys
       </div>
       <div onclick="showSection('stores')" class="sidebar-link" data-section="stores">
         <span class="text-lg">🏪</span> Lojas Parceiras
