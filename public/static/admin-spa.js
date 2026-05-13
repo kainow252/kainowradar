@@ -637,6 +637,12 @@ function openStoreImport(storeId, storeName) {
               <span id="si-count" class="text-xs text-slate-400">0 links detectados</span>
               <button onclick="document.getElementById('si-textarea').value='';siCountLinks();document.getElementById('si-live-area').innerHTML=''" class="text-xs text-slate-400 hover:text-red-500">&#10005; Limpar</button>
             </div>
+            <div id="si-wid-warn" class="hidden mt-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1"></div>
+            <div class="mt-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-800 leading-relaxed">
+              <strong>&#9888;&#65039; Produto com variante</strong> (URL tem <code class="bg-amber-100 px-1 rounded">#...&amp;wid=MLB...</code>)?
+              Cole o <strong>link afiliado</strong> (<code class="bg-amber-100 px-1 rounded">/social/...?ref=...</code>) <strong>na mesma linha</strong> — o sistema detecta o par automaticamente.<br>
+              <span class="text-amber-600">Sem o link /social/, produtos com wid= não podem ser importados (bloqueio do ML).</span>
+            </div>
           </div>
 
           <!-- MODO DUPLO: URL produto + URL afiliada lado a lado -->
@@ -778,6 +784,17 @@ function siCountLinks() {
   if (pairs) parts.push(pairs + (pairs === 1 ? ' par produto+afiliado' : ' pares produto+afiliado'))
   if (solo)  parts.push(solo  + (solo  === 1 ? ' link'                  : ' links'))
   el.textContent = parts.join(' + ') + ' detectado' + (items.length === 1 ? '' : 's')
+  // Avisa se há links solo com #wid= (precisam de par /social/ para funcionar)
+  const widSolo = items.filter(i => !i.url2 && /[#&]wid=MLB/i.test(i.url1)).length
+  const warnEl  = document.getElementById('si-wid-warn')
+  if (warnEl) {
+    if (widSolo > 0) {
+      warnEl.textContent = '⚠️ ' + widSolo + (widSolo === 1 ? ' link tem #wid= mas está sem o link /social/ — cole os dois juntos na mesma linha.' : ' links têm #wid= mas estão sem o link /social/ — cole cada par junto na mesma linha.')
+      warnEl.classList.remove('hidden')
+    } else {
+      warnEl.classList.add('hidden')
+    }
+  }
 }
 
 // ── IMPORTAÇÃO AUTOMÁTICA COMPLETA ───────────────────────────────
