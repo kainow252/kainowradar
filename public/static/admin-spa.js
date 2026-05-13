@@ -102,6 +102,8 @@ async function loadSection(name) {
     social: ['📣 Social Media', 'Gerencie contas e publique nas redes sociais'],
     'affiliate-bot': ['🤝 Bot Afiliados ML', 'Gera links de afiliado do Mercado Livre automaticamente'],
     'ml-import': ['🟡 Importar do ML', 'Importa produtos reais do Mercado Livre para o banco de dados'],
+    'ml-categories': ['🗂️ Categorias ML', 'Sincroniza árvore de categorias do Mercado Livre com o D1'],
+    'ml-search': ['🔍 Busca ML API', 'Busca e importa produtos por categoria ou termo via API do ML'],
     'affiliate-codes': ['🔗 Códigos Afiliados', 'Configure seus códigos por rede e gere links para todos os produtos'],
     'buscape-import': ['🛍️ Importar do Buscapé', 'Importa produtos e preços de múltiplas lojas via Buscapé — gera links afiliados automaticamente'],
     'lomadee-import': ['🟠 Importar Lomadee', 'Busca produtos e gera links afiliados automáticos via API da Lomadee (136 lojas parceiras)'],
@@ -127,6 +129,8 @@ async function loadSection(name) {
     social: renderSocial,
     'affiliate-bot': renderAffiliateBot,
     'ml-import': renderMLImport,
+    'ml-categories': renderMLCategories,
+    'ml-search': renderMLSearch,
     'affiliate-codes': renderAffiliateCodes,
     'buscape-import': renderBuscapeImport,
     'lomadee-import': renderLomadeeImport,
@@ -6872,3 +6876,467 @@ function mlLbStop() { LbState.stop = true }
     if (e.key === 'Enter') doLogin()
   })
 })()
+// ══════════════════════════════════════════════════════════
+// 🗂️ ML CATEGORIES — Sincroniza categorias do ML com D1
+// ══════════════════════════════════════════════════════════
+async function renderMLCategories(area) {
+  area.innerHTML = '<div class="section"><div class="stat-card text-center py-10 text-slate-400 text-sm">🔄 Carregando categorias...</div></div>'
+
+  const status = await api('GET', '/admin/api/ml/sync-categories')
+
+  area.innerHTML = `
+    <div class="section space-y-6">
+
+      <!-- Header -->
+      <div class="stat-card">
+        <div class="flex items-center gap-4 flex-wrap">
+          <div class="w-14 h-14 bg-orange-400 rounded-2xl flex items-center justify-center text-2xl shadow-md flex-shrink-0">🗂️</div>
+          <div class="flex-1 min-w-0">
+            <h3 class="font-bold text-slate-800 text-lg">Categorias do Mercado Livre</h3>
+            <p class="text-sm text-slate-500">Sincroniza a árvore real de departamentos via <code class="bg-slate-100 px-1 rounded font-mono text-xs">/sites/MLB/categories</code></p>
+          </div>
+          <div class="flex gap-2 flex-shrink-0">
+            <button onclick="mlSyncCategories()" class="btn-primary flex items-center gap-2">
+              🔄 Sincronizar Agora
+            </button>
+            <button onclick="renderMLCategories(document.getElementById('content-area'))" class="btn-secondary">↻ Atualizar</button>
+          </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="grid grid-cols-3 gap-4 mt-5">
+          <div class="bg-slate-50 rounded-xl p-3 text-center">
+            <div class="text-2xl font-bold text-slate-800">${status?.total || 0}</div>
+            <div class="text-xs text-slate-500 mt-0.5">Total no D1</div>
+          </div>
+          <div class="bg-orange-50 rounded-xl p-3 text-center">
+            <div class="text-2xl font-bold text-orange-600">${status?.with_ml_id || 0}</div>
+            <div class="text-xs text-slate-500 mt-0.5">Com ID ML</div>
+          </div>
+          <div class="bg-green-50 rounded-xl p-3 text-center">
+            <div class="text-2xl font-bold text-green-600">${status?.with_products || 0}</div>
+            <div class="text-xs text-slate-500 mt-0.5">Com Produtos</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Como funciona -->
+      <div class="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-800">
+        <p class="font-bold mb-1">📖 Como funciona:</p>
+        <ol class="list-decimal ml-4 space-y-0.5 text-xs">
+          <li>Clique em <strong>Sincronizar Agora</strong> — busca todas as categorias do ML Brasil</li>
+          <li>As categorias são salvas/atualizadas na tabela <code class="font-mono bg-blue-100 px-1 rounded">categories</code> do D1</li>
+          <li>Após sincronizar, use <strong>Busca ML API</strong> para importar produtos por categoria</li>
+        </ol>
+      </div>
+
+      <!-- Resultado da sync -->
+      <div id="cat-sync-result"></div>
+
+      <!-- Tabela de categorias -->
+      ${status?.categories?.length > 0 ? `
+      <div class="stat-card">
+        <h4 class="font-semibold text-slate-800 mb-3">Categorias no D1 (${status.total})</h4>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr>
+                <th class="table-th">Nome</th>
+                <th class="table-th">Slug</th>
+                <th class="table-th">ID ML</th>
+                <th class="table-th">Produtos</th>
+                <th class="table-th">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${(status.categories || []).map(cat => `
+                <tr class="hover:bg-slate-50">
+                  <td class="table-td font-medium">${cat.icon || '🛍️'} ${cat.name}</td>
+                  <td class="table-td font-mono text-xs text-slate-500">${cat.slug}</td>
+                  <td class="table-td font-mono text-xs">${cat.ml_category_id || '<span class="text-slate-400">—</span>'}</td>
+                  <td class="table-td text-center">${cat.product_count || 0}</td>
+                  <td class="table-td">
+                    ${cat.is_active
+                      ? '<span class="badge-green">Ativa</span>'
+                      : '<span class="badge-red">Inativa</span>'}
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      ` : `
+      <div class="stat-card text-center py-8 text-slate-400">
+        <div class="text-4xl mb-2">🗂️</div>
+        <p class="text-sm font-medium">Nenhuma categoria no D1 ainda</p>
+        <p class="text-xs mt-1">Clique em <strong>Sincronizar Agora</strong> para importar as categorias do ML</p>
+      </div>
+      `}
+
+    </div>
+  `
+}
+
+async function mlSyncCategories() {
+  const btn = document.querySelector('[onclick="mlSyncCategories()"]')
+  if (btn) { btn.disabled = true; btn.textContent = '🔄 Sincronizando...' }
+  const res = document.getElementById('cat-sync-result')
+  if (res) res.innerHTML = '<div class="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-700">🔄 Buscando categorias do ML...</div>'
+
+  const result = await api('POST', '/admin/api/ml/sync-categories')
+  if (btn) { btn.disabled = false; btn.textContent = '🔄 Sincronizar Agora' }
+
+  if (res) {
+    if (result?.ok) {
+      res.innerHTML = `
+        <div class="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-800">
+          <p class="font-bold mb-1">✅ ${result.message}</p>
+          <p class="text-xs mt-1">Total: ${result.total} categorias do ML | Salvas no D1: ${result.upserted}</p>
+          <div class="mt-2 flex flex-wrap gap-1">
+            ${(result.categories || []).slice(0, 20).map(c =>
+              `<span class="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full">${c.name}</span>`
+            ).join('')}
+            ${result.categories?.length > 20 ? `<span class="text-xs text-green-600">+${result.categories.length - 20} mais</span>` : ''}
+          </div>
+        </div>
+      `
+      setTimeout(() => renderMLCategories(document.getElementById('content-area')), 1500)
+    } else {
+      res.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">❌ Erro: ${result?.error || 'Falha desconhecida'}</div>`
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// 🔍 ML SEARCH — Busca e importa produtos por categoria/termo
+// ══════════════════════════════════════════════════════════
+const MlSearchState = { loading: false, results: [], lastQuery: '', lastCategory: '' }
+
+async function renderMLSearch(area) {
+  // Carrega categorias disponíveis para o select
+  const catStatus = await api('GET', '/admin/api/ml/sync-categories').catch(() => null)
+  const categories = catStatus?.categories || []
+
+  area.innerHTML = `
+    <div class="section space-y-6">
+
+      <!-- Header -->
+      <div class="stat-card">
+        <div class="flex items-center gap-4 flex-wrap">
+          <div class="w-14 h-14 bg-yellow-400 rounded-2xl flex items-center justify-center text-2xl shadow-md flex-shrink-0">🔍</div>
+          <div class="flex-1">
+            <h3 class="font-bold text-slate-800 text-lg">Busca & Importação via API ML</h3>
+            <p class="text-sm text-slate-500">Busca produtos reais no ML por categoria ou termo — com links afiliados automáticos e cache KV (6h)</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Filtros de busca -->
+      <div class="stat-card">
+        <h4 class="font-semibold text-slate-800 mb-3">🔎 Parâmetros de Busca</h4>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+          <!-- Busca por termo -->
+          <div>
+            <label class="text-xs font-semibold text-slate-600 mb-1 block">Termo de busca</label>
+            <input id="ml-search-q" type="text" placeholder="Ex: Samsung Galaxy S24, Nike Air Max..."
+              class="input" onkeydown="if(event.key==='Enter') mlSearchRun()">
+          </div>
+
+          <!-- Categoria -->
+          <div>
+            <label class="text-xs font-semibold text-slate-600 mb-1 block">Categoria ML</label>
+            <select id="ml-search-cat" class="input">
+              <option value="">Todas as categorias</option>
+              ${categories.filter(c => c.ml_category_id).map(c =>
+                `<option value="${c.ml_category_id}">${c.icon || '🛍️'} ${c.name}</option>`
+              ).join('')}
+            </select>
+          </div>
+
+          <!-- Limit -->
+          <div>
+            <label class="text-xs font-semibold text-slate-600 mb-1 block">Itens por busca</label>
+            <select id="ml-search-limit" class="input">
+              <option value="20">20 itens</option>
+              <option value="50" selected>50 itens</option>
+            </select>
+          </div>
+
+          <!-- Sort -->
+          <div>
+            <label class="text-xs font-semibold text-slate-600 mb-1 block">Ordenação</label>
+            <select id="ml-search-sort" class="input">
+              <option value="relevance">Relevância</option>
+              <option value="price_asc">Menor preço</option>
+              <option value="price_desc">Maior preço</option>
+              <option value="sales_high">Mais vendidos</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="flex gap-3 mt-4">
+          <button onclick="mlSearchRun()" class="btn-primary flex items-center gap-2">
+            🔍 Buscar no ML
+          </button>
+          <button onclick="mlSearchDeals()" class="btn-secondary flex items-center gap-2">
+            🔥 Ofertas do Dia
+          </button>
+          <button onclick="mlSearchImportAll()" id="ml-import-all-btn"
+            class="hidden bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-all flex items-center gap-2">
+            💾 Importar Todos para D1
+          </button>
+        </div>
+      </div>
+
+      <!-- Resultado -->
+      <div id="ml-search-result"></div>
+      <div id="ml-search-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"></div>
+
+    </div>
+  `
+}
+
+async function mlSearchRun(offset = 0) {
+  const q      = document.getElementById('ml-search-q')?.value?.trim() || ''
+  const catId  = document.getElementById('ml-search-cat')?.value || ''
+  const limit  = document.getElementById('ml-search-limit')?.value || '50'
+  const sort   = document.getElementById('ml-search-sort')?.value  || 'relevance'
+
+  if (!q && !catId) {
+    toast('Informe um termo de busca ou selecione uma categoria', 'error')
+    return
+  }
+
+  const res    = document.getElementById('ml-search-result')
+  const grid   = document.getElementById('ml-search-grid')
+  const impBtn = document.getElementById('ml-import-all-btn')
+
+  if (res)  res.innerHTML  = '<div class="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-700">🔄 Buscando na API do Mercado Livre...</div>'
+  if (grid) grid.innerHTML = ''
+  if (impBtn) impBtn.classList.add('hidden')
+
+  MlSearchState.loading    = true
+  MlSearchState.lastQuery  = q
+  MlSearchState.lastCategory = catId
+
+  const params = new URLSearchParams({ limit, sort, offset: String(offset) })
+  if (q)     params.set('q', q)
+  if (catId) params.set('category', catId)
+
+  const data = await api('GET', `/api/ml/browse?${params}`)
+  MlSearchState.loading  = false
+
+  if (!data || data.error) {
+    if (res) res.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">❌ ${data?.error || 'Erro ao buscar'}</div>`
+    return
+  }
+
+  MlSearchState.results = data.results || []
+  const results = data.results || []
+  const total   = data.total   || 0
+
+  if (res) res.innerHTML = `
+    <div class="flex items-center justify-between bg-green-50 border border-green-200 rounded-xl px-4 py-3">
+      <div class="text-sm text-green-800">
+        ✅ <strong>${results.length}</strong> itens encontrados de <strong>${total.toLocaleString()}</strong> total
+        ${data.query ? ` para <em>"${data.query}"</em>` : ''}
+        — Links afiliados <span class="badge-green ml-1">auto-injetados</span>
+      </div>
+      <div class="flex gap-2">
+        ${total > results.length && offset + results.length < total ? `
+          <button onclick="mlSearchRun(${offset + results.length})"
+            class="btn-secondary text-xs">Próximos ${limit} →</button>
+        ` : ''}
+      </div>
+    </div>
+  `
+
+  if (impBtn) impBtn.classList.toggle('hidden', results.length === 0)
+
+  if (grid) {
+    grid.innerHTML = results.map((item, i) => `
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden hover:shadow-md transition-shadow">
+        <div class="relative">
+          <img src="${item.thumbnail || ''}" alt="${item.title?.slice(0,40)}"
+            class="w-full h-40 object-contain bg-slate-50 p-2"
+            onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📦</text></svg>'">
+          ${item.discount_pct > 0 ? `
+            <span class="absolute top-2 right-2 bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+              -${item.discount_pct}%
+            </span>
+          ` : ''}
+          ${item.free_shipping ? `
+            <span class="absolute top-2 left-2 bg-green-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+              Frete Grátis
+            </span>
+          ` : ''}
+        </div>
+        <div class="p-3">
+          <p class="text-xs font-semibold text-slate-700 line-clamp-2 mb-2 leading-tight">${item.title}</p>
+          <div class="flex items-end justify-between mb-3">
+            <div>
+              <p class="text-lg font-bold text-slate-900">R$ ${(item.price||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</p>
+              ${item.original_price ? `
+                <p class="text-xs text-slate-400 line-through">R$ ${item.original_price.toLocaleString('pt-BR',{minimumFractionDigits:2})}</p>
+              ` : ''}
+            </div>
+            <div class="text-xs text-slate-400">${item.sold_quantity > 0 ? `${item.sold_quantity.toLocaleString()} vendidos` : ''}</div>
+          </div>
+          <div class="flex gap-1.5">
+            <button onclick="mlSaveItem(${i})"
+              class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-1.5 rounded-lg transition-colors">
+              💾 Salvar
+            </button>
+            <a href="${item.affiliate_url || item.permalink}" target="_blank"
+              class="flex-1 bg-yellow-400 hover:bg-yellow-500 text-slate-900 text-xs font-semibold py-1.5 rounded-lg text-center transition-colors">
+              🛒 Ver
+            </a>
+          </div>
+        </div>
+      </div>
+    `).join('')
+  }
+}
+
+async function mlSearchDeals() {
+  const catId = document.getElementById('ml-search-cat')?.value || ''
+  const limit = document.getElementById('ml-search-limit')?.value || '20'
+
+  const res  = document.getElementById('ml-search-result')
+  const grid = document.getElementById('ml-search-grid')
+  const impBtn = document.getElementById('ml-import-all-btn')
+
+  if (res)  res.innerHTML  = '<div class="bg-orange-50 border border-orange-200 rounded-xl px-4 py-3 text-sm text-orange-700">🔥 Buscando Ofertas do Dia com maior desconto...</div>'
+  if (grid) grid.innerHTML = ''
+  if (impBtn) impBtn.classList.add('hidden')
+
+  const params = new URLSearchParams({ limit })
+  if (catId) params.set('category', catId)
+
+  const data = await api('GET', `/api/ml/deals?${params}`)
+
+  if (!data || data.error) {
+    if (res) res.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">❌ ${data?.error || 'Erro ao buscar'}</div>`
+    return
+  }
+
+  MlSearchState.results = data.results || []
+  const results = data.results || []
+
+  if (res) res.innerHTML = `
+    <div class="bg-orange-50 border border-orange-200 rounded-xl px-4 py-3 text-sm text-orange-800">
+      🔥 <strong>${results.length}</strong> ofertas com desconto encontradas
+      — Ordenadas por maior desconto
+      ${data.note ? `<p class="text-xs mt-1 text-orange-600">${data.note}</p>` : ''}
+    </div>
+  `
+
+  if (impBtn) impBtn.classList.toggle('hidden', results.length === 0)
+
+  if (grid) {
+    grid.innerHTML = results.map((item, i) => `
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden hover:shadow-md transition-shadow">
+        <div class="relative">
+          <img src="${item.thumbnail || ''}" alt="${item.title?.slice(0,40)}"
+            class="w-full h-40 object-contain bg-slate-50 p-2"
+            onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📦</text></svg>'">
+          <span class="absolute top-2 right-2 bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+            -${item.discount_pct}%
+          </span>
+          ${item.free_shipping ? `
+            <span class="absolute top-2 left-2 bg-green-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">Frete Grátis</span>
+          ` : ''}
+        </div>
+        <div class="p-3">
+          <p class="text-xs font-semibold text-slate-700 line-clamp-2 mb-2 leading-tight">${item.title}</p>
+          <div class="flex items-end justify-between mb-3">
+            <div>
+              <p class="text-lg font-bold text-green-700">R$ ${(item.price||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</p>
+              <p class="text-xs text-slate-400 line-through">R$ ${(item.original_price||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</p>
+            </div>
+            <div class="text-xs text-slate-400">${item.sold_quantity > 0 ? `${item.sold_quantity.toLocaleString()} vendidos` : ''}</div>
+          </div>
+          <div class="flex gap-1.5">
+            <button onclick="mlSaveItem(${i})"
+              class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-1.5 rounded-lg transition-colors">
+              💾 Salvar
+            </button>
+            <a href="${item.affiliate_url || item.permalink}" target="_blank"
+              class="flex-1 bg-yellow-400 hover:bg-yellow-500 text-slate-900 text-xs font-semibold py-1.5 rounded-lg text-center transition-colors">
+              🛒 Ver
+            </a>
+          </div>
+        </div>
+      </div>
+    `).join('')
+  }
+}
+
+async function mlSaveItem(index) {
+  const item = MlSearchState.results[index]
+  if (!item) return
+
+  const catId  = document.getElementById('ml-search-cat')?.value || ''
+  const result = await api('POST', '/admin/api/ml/import-by-category', {
+    category_id: catId || 'MLB1051',
+    slug: 'importado-ml',
+    limit: 1,
+    offset: 0,
+    save: true,
+    // Passa apenas o item em si via import-url
+  })
+
+  // Usa import-url para item único
+  const res = await api('POST', '/admin/api/ml/import-url', {
+    urls:     [item.permalink || `https://www.mercadolivre.com.br/p/${item.id}`],
+    names:    [item.title],
+    category: 'outros',
+  })
+
+  if (res?.ok) {
+    toast(`✅ "${item.title?.slice(0,40)}" salvo! (${res.message})`, 'success')
+    // Desabilita botão do card
+    const cards = document.querySelectorAll('#ml-search-grid > div')
+    const btn = cards[index]?.querySelector('button')
+    if (btn) { btn.disabled = true; btn.textContent = '✅ Salvo'; btn.className = btn.className.replace('bg-blue-600', 'bg-slate-300') }
+  } else {
+    toast(`❌ Erro: ${res?.message || res?.error || 'falha ao salvar'}`, 'error')
+  }
+}
+
+async function mlSearchImportAll() {
+  const results = MlSearchState.results
+  if (!results.length) return
+
+  const catId   = document.getElementById('ml-search-cat')?.value || ''
+  const catSlug = catId ? (document.getElementById('ml-search-cat')?.selectedOptions[0]?.text?.replace(/^[^a-z]+ /i, '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-') || 'outros') : 'outros'
+
+  const impBtn = document.getElementById('ml-import-all-btn')
+  if (impBtn) { impBtn.disabled = true; impBtn.textContent = '🔄 Importando...' }
+
+  const urls  = results.map(r => r.permalink || `https://www.mercadolivre.com.br/p/${r.id}`)
+  const names = results.map(r => r.title || '')
+
+  const res = await api('POST', '/admin/api/ml/import-url', { urls, names, category: catSlug })
+
+  if (impBtn) { impBtn.disabled = false; impBtn.textContent = '💾 Importar Todos para D1' }
+
+  if (res?.ok) {
+    toast(`✅ ${res.message}`, 'success')
+    const resEl = document.getElementById('ml-search-result')
+    if (resEl) {
+      const old = resEl.innerHTML
+      resEl.innerHTML = `
+        <div class="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-800 mb-2">
+          ✅ <strong>${res.message}</strong>
+          ${res.parse_errors?.length > 0 ? `<p class="text-xs mt-1 text-green-600">⚠ ${res.parse_errors.length} avisos</p>` : ''}
+        </div>
+      ` + old
+    }
+  } else {
+    toast(`❌ Erro: ${res?.error || 'falha'}`, 'error')
+  }
+}

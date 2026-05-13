@@ -1192,5 +1192,460 @@ ml.post('/import-item', async (c) => {
   })
 })
 
+// ════════════════════════════════════════════════════════════
+// NOVAS ROTAS — Roadmap API ML
+// ════════════════════════════════════════════════════════════
+
+// ── GET /api/ml/browse — Busca produtos por categoria com cache KV ──
+// Query params:
+//   category  = ID da categoria ML (ex: MLB1051) ou slug local (ex: smartphones)
+//   q         = termo de busca livre
+//   limit     = 1-50 (padrão 24)
+//   offset    = paginação (padrão 0)
+//   sort      = relevance | price_asc | price_desc | sales_high
+ml.get('/browse', async (c) => {
+  const { CACHE } = c.env
+  const categoryParam = c.req.query('category') || ''
+  const q             = (c.req.query('q') || '').trim()
+  const limit         = Math.min(50, Math.max(1, parseInt(c.req.query('limit') || '24')))
+  const offset        = Math.max(0, parseInt(c.req.query('offset') || '0'))
+  const sortParam     = c.req.query('sort') || 'relevance'
+
+  if (!categoryParam && !q) {
+    return c.json({ error: 'Informe category ou q' }, 400)
+  }
+
+  // Resolve categoria: slug local → mlId do ML_CATEGORIES
+  let mlCategoryId = categoryParam
+  if (ML_CATEGORIES[categoryParam]) {
+    mlCategoryId = ML_CATEGORIES[categoryParam].mlId
+  }
+
+  // Cache key: inclui todos os parâmetros
+  const cacheKey = `ml_browse:${mlCategoryId}:${q}:${limit}:${offset}:${sortParam}`
+  if (CACHE) {
+    const cached = await CACHE.get(cacheKey, 'json').catch(() => null)
+    if (cached) return c.json(cached as any)
+  }
+
+  const token = await getStoredToken(c.env)
+  if (!token) {
+    return c.json({ error: 'Token ML não disponível', auth_url: '/api/ml/auth' }, 503)
+  }
+
+  // Monta URL da API ML com parâmetros
+  const sortMap: Record<string, string> = {
+    relevance:  'relevance',
+    price_asc:  'price_asc',
+    price_desc: 'price_desc',
+    sales_high: 'sold_quantity_desc',
+  }
+  const mlSort = sortMap[sortParam] || 'relevance'
+
+  const params = new URLSearchParams({
+    limit:  String(limit),
+    offset: String(offset),
+    sort:   mlSort,
+  })
+  if (mlCategoryId) params.set('category', mlCategoryId)
+  if (q)            params.set('q', q)
+
+  try {
+    const res = await fetch(`${ML_API}/sites/MLB/search?${params}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept':        'application/json',
+        'User-Agent':    'KainowRadar/1.0',
+      },
+    })
+
+    if (!res.ok) {
+      const err: any = await res.json().catch(() => ({}))
+      return c.json({
+        error:   err.message || err.error || `ML API HTTP ${res.status}`,
+        status:  res.status,
+        details: err,
+      }, res.status as any)
+    }
+
+    const data: any = await res.json()
+    const items: any[] = data.results || []
+
+    // Injeta link afiliado em cada item
+    const results = items.map((item: any) => {
+      const permalink = item.permalink || ''
+      const affUrl    = permalink
+        ? `${permalink.split('?')[0]}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+        : ''
+      return {
+        id:             item.id,
+        title:          item.title,
+        price:          item.price,
+        original_price: item.original_price || null,
+        discount_pct:   item.original_price && item.price
+          ? Math.round((1 - item.price / item.original_price) * 100)
+          : null,
+        thumbnail:      (item.thumbnail || '').replace('-I.jpg', '-O.jpg'),
+        permalink,
+        affiliate_url:  affUrl,
+        free_shipping:  item.shipping?.free_shipping || false,
+        condition:      item.condition,
+        sold_quantity:  item.sold_quantity || 0,
+        category_id:    item.category_id || '',
+      }
+    })
+
+    const payload = {
+      query:       q || null,
+      category_id: mlCategoryId || null,
+      total:       data.paging?.total || results.length,
+      offset:      data.paging?.offset || offset,
+      limit:       data.paging?.limit  || limit,
+      sort:        sortParam,
+      results,
+    }
+
+    // Cache 6h no KV
+    if (CACHE && results.length > 0) {
+      await CACHE.put(cacheKey, JSON.stringify(payload), { expirationTtl: 21600 }).catch(() => {})
+    }
+
+    return c.json(payload)
+  } catch (e: any) {
+    return c.json({ error: e.message || 'Erro interno' }, 500)
+  }
+})
+
+// ── GET /api/ml/categories — Árvore de categorias do ML Brasil com cache ──
+// Busca /sites/MLB/categories e retorna lista enriquecida com slugs locais
+ml.get('/categories', async (c) => {
+  const { CACHE } = c.env
+  const cacheKey  = 'ml_categories_tree'
+
+  // Cache 24h — categorias mudam raramente
+  if (CACHE) {
+    const cached = await CACHE.get(cacheKey, 'json').catch(() => null)
+    if (cached) return c.json(cached as any)
+  }
+
+  const token = await getStoredToken(c.env)
+  const headers: Record<string, string> = {
+    'Accept':     'application/json',
+    'User-Agent': 'KainowRadar/1.0',
+  }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
+  try {
+    const res = await fetch(`${ML_API}/sites/MLB/categories`, { headers })
+    if (!res.ok) {
+      return c.json({ error: `ML API HTTP ${res.status}` }, res.status as any)
+    }
+    const mlCats: any[] = await res.json()
+
+    // Ícones por ID de categoria ML
+    const CAT_ICONS: Record<string, string> = {
+      MLB5672:  '📱', MLB1051:  '📱', MLB1648:  '💻', MLB1000:  '📺',
+      MLB1144:  '🎮', MLB1003:  '🎵', MLB1008:  '📷', MLB1574:  '🏠',
+      MLB1009:  '📟', MLB1649:  '🖥️', MLB1430:  '👗', MLB1499:  '🏋️',
+      MLB1500:  '🐾', MLB218519:'🧴', MLB1132:  '🚗', MLB1459:  '🧸',
+      MLB1540:  '🔧', MLB86:    '🏡', MLB1276:  '📚', MLB1367:  '⚽',
+      MLB407134:'🍔', MLB3937:  '🎵', MLB1953:  '✈️', MLB4357:  '💊',
+      MLB3633:  '🎨', MLB1743:  '💼',
+    }
+
+    // Mapa de slug local por ID ML
+    const LOCAL_SLUGS: Record<string, string> = Object.fromEntries(
+      Object.entries(ML_CATEGORIES).map(([slug, cat]) => [cat.mlId, slug])
+    )
+
+    const categories = mlCats.map((cat: any) => ({
+      id:          cat.id,
+      name:        cat.name,
+      slug:        LOCAL_SLUGS[cat.id] || cat.name.toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-'),
+      icon:        CAT_ICONS[cat.id] || '🛍️',
+      has_local:   !!LOCAL_SLUGS[cat.id],
+    }))
+
+    const payload = { categories, total: categories.length, source: 'mercadolibre_api' }
+
+    if (CACHE) {
+      await CACHE.put(cacheKey, JSON.stringify(payload), { expirationTtl: 86400 }).catch(() => {})
+    }
+
+    return c.json(payload)
+  } catch (e: any) {
+    return c.json({ error: e.message || 'Erro ao buscar categorias' }, 500)
+  }
+})
+
+// ── GET /api/ml/deals — Ofertas do dia (maior desconto) com cache ──
+// Query params:
+//   category = ID ML (ex: MLB1051) ou slug local
+//   limit    = 1-50 (padrão 20)
+ml.get('/deals', async (c) => {
+  const { CACHE }  = c.env
+  const catParam   = c.req.query('category') || ''
+  const limit      = Math.min(50, Math.max(1, parseInt(c.req.query('limit') || '20')))
+
+  let mlCategoryId = catParam
+  if (ML_CATEGORIES[catParam]) {
+    mlCategoryId = ML_CATEGORIES[catParam].mlId
+  }
+
+  const cacheKey = `ml_deals:${mlCategoryId}:${limit}`
+  if (CACHE) {
+    const cached = await CACHE.get(cacheKey, 'json').catch(() => null)
+    if (cached) return c.json(cached as any)
+  }
+
+  const token = await getStoredToken(c.env)
+  if (!token) {
+    return c.json({ error: 'Token ML não disponível' }, 503)
+  }
+
+  try {
+    // Busca com sort=price_desc primeiro (mais vendidos tendem a ter ofertas melhores)
+    // Depois filtra por desconto real
+    const params = new URLSearchParams({
+      limit: '50', // busca 50 para filtrar os que têm desconto
+      sort:  'relevance',
+    })
+    if (mlCategoryId) params.set('category', mlCategoryId)
+
+    const res = await fetch(`${ML_API}/sites/MLB/search?${params}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept':        'application/json',
+        'User-Agent':    'KainowRadar/1.0',
+      },
+    })
+
+    if (!res.ok) {
+      return c.json({ error: `ML API HTTP ${res.status}` }, res.status as any)
+    }
+
+    const data: any = await res.json()
+    const items: any[] = data.results || []
+
+    // Filtra apenas itens com desconto real, ordena por desconto desc
+    const withDiscount = items
+      .map((item: any) => {
+        const orig     = item.original_price || 0
+        const price    = item.price || 0
+        const discount = (orig > price && orig > 0)
+          ? Math.round((1 - price / orig) * 100)
+          : 0
+        const permalink = item.permalink || ''
+        const affUrl    = permalink
+          ? `${permalink.split('?')[0]}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+          : ''
+        return {
+          id:             item.id,
+          title:          item.title,
+          price,
+          original_price: orig || null,
+          discount_pct:   discount,
+          thumbnail:      (item.thumbnail || '').replace('-I.jpg', '-O.jpg'),
+          permalink,
+          affiliate_url:  affUrl,
+          free_shipping:  item.shipping?.free_shipping || false,
+          sold_quantity:  item.sold_quantity || 0,
+        }
+      })
+      .filter((item) => item.discount_pct > 0)
+      .sort((a, b) => b.discount_pct - a.discount_pct)
+      .slice(0, limit)
+
+    const payload = {
+      category_id: mlCategoryId || null,
+      total:       withDiscount.length,
+      results:     withDiscount,
+      note:        withDiscount.length === 0
+        ? 'Nenhum item com desconto encontrado nesta categoria'
+        : null,
+    }
+
+    // Cache 3h
+    if (CACHE && withDiscount.length > 0) {
+      await CACHE.put(cacheKey, JSON.stringify(payload), { expirationTtl: 10800 }).catch(() => {})
+    }
+
+    return c.json(payload)
+  } catch (e: any) {
+    return c.json({ error: e.message || 'Erro interno' }, 500)
+  }
+})
+
+// ── GET /api/ml/search — Busca livre na API ML com cache ──
+// Repassa a busca interna do site para a API do ML
+// Query params:
+//   q      = termo de busca (obrigatório)
+//   limit  = 1-50 (padrão 20)
+//   offset = paginação
+//   sort   = relevance | price_asc | price_desc | sales_high
+ml.get('/search', async (c) => {
+  const { CACHE } = c.env
+  const q         = (c.req.query('q') || '').trim()
+  const limit     = Math.min(50, Math.max(1, parseInt(c.req.query('limit') || '20')))
+  const offset    = Math.max(0, parseInt(c.req.query('offset') || '0'))
+  const sortParam = c.req.query('sort') || 'relevance'
+
+  if (!q || q.length < 2) {
+    return c.json({ error: 'Parâmetro q é obrigatório (mínimo 2 caracteres)' }, 400)
+  }
+
+  const cacheKey = `ml_search:${q.toLowerCase()}:${limit}:${offset}:${sortParam}`
+  if (CACHE) {
+    const cached = await CACHE.get(cacheKey, 'json').catch(() => null)
+    if (cached) return c.json(cached as any)
+  }
+
+  const token = await getStoredToken(c.env)
+  if (!token) {
+    return c.json({ error: 'Token ML não disponível', auth_url: '/api/ml/auth' }, 503)
+  }
+
+  const sortMap: Record<string, string> = {
+    relevance:  'relevance',
+    price_asc:  'price_asc',
+    price_desc: 'price_desc',
+    sales_high: 'sold_quantity_desc',
+  }
+
+  const params = new URLSearchParams({
+    q:      q,
+    limit:  String(limit),
+    offset: String(offset),
+    sort:   sortMap[sortParam] || 'relevance',
+  })
+
+  try {
+    const res = await fetch(`${ML_API}/sites/MLB/search?${params}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept':        'application/json',
+        'User-Agent':    'KainowRadar/1.0',
+      },
+    })
+
+    if (!res.ok) {
+      const err: any = await res.json().catch(() => ({}))
+      return c.json({
+        error:  err.message || err.error || `ML API HTTP ${res.status}`,
+        status: res.status,
+      }, res.status as any)
+    }
+
+    const data: any = await res.json()
+    const items: any[] = data.results || []
+
+    const results = items.map((item: any) => {
+      const orig      = item.original_price || 0
+      const price     = item.price || 0
+      const permalink = item.permalink || ''
+      const affUrl    = permalink
+        ? `${permalink.split('?')[0]}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+        : ''
+      return {
+        id:             item.id,
+        title:          item.title,
+        price,
+        original_price: orig || null,
+        discount_pct:   (orig > price && orig > 0) ? Math.round((1 - price / orig) * 100) : null,
+        thumbnail:      (item.thumbnail || '').replace('-I.jpg', '-O.jpg'),
+        permalink,
+        affiliate_url:  affUrl,
+        free_shipping:  item.shipping?.free_shipping || false,
+        condition:      item.condition,
+        sold_quantity:  item.sold_quantity || 0,
+        category_id:    item.category_id || '',
+      }
+    })
+
+    const payload = {
+      query:   q,
+      total:   data.paging?.total || results.length,
+      offset:  data.paging?.offset || offset,
+      limit:   data.paging?.limit  || limit,
+      sort:    sortParam,
+      results,
+    }
+
+    // Cache 2h para buscas frequentes
+    if (CACHE && results.length > 0) {
+      await CACHE.put(cacheKey, JSON.stringify(payload), { expirationTtl: 7200 }).catch(() => {})
+    }
+
+    return c.json(payload)
+  } catch (e: any) {
+    return c.json({ error: e.message || 'Erro interno' }, 500)
+  }
+})
+
+// ── GET /api/ml/item/:id — Detalhe de item único com link afiliado ──
+ml.get('/item/:id', async (c) => {
+  const { CACHE } = c.env
+  const itemId    = c.req.param('id').toUpperCase()
+
+  if (!itemId.startsWith('MLB')) {
+    return c.json({ error: 'ID inválido — deve começar com MLB' }, 400)
+  }
+
+  const cacheKey = `ml_item:${itemId}`
+  if (CACHE) {
+    const cached = await CACHE.get(cacheKey, 'json').catch(() => null)
+    if (cached) return c.json(cached as any)
+  }
+
+  const token = await getStoredToken(c.env)
+  if (!token) {
+    return c.json({ error: 'Token ML não disponível' }, 503)
+  }
+
+  try {
+    const item = await fetchMLItem(itemId, token)
+    if (!item) return c.json({ error: `Item ${itemId} não encontrado` }, 404)
+
+    const permalink = item.permalink || ''
+    const affUrl    = permalink
+      ? `${permalink.split('?')[0]}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+      : ''
+
+    const payload = {
+      id:             item.id,
+      title:          item.title,
+      price:          item.price,
+      original_price: item.original_price || null,
+      discount_pct:   (item.original_price && item.price)
+        ? Math.round((1 - item.price / item.original_price) * 100)
+        : null,
+      thumbnail:      (item.thumbnail || '').replace('-I.jpg', '-O.jpg'),
+      permalink,
+      affiliate_url:  affUrl,
+      free_shipping:  item.shipping?.free_shipping || false,
+      condition:      item.condition,
+      sold_quantity:  item.sold_quantity || 0,
+      category_id:    item.category_id || '',
+      status:         item.status || '',
+      attributes:     (item.attributes || []).slice(0, 10).map((a: any) => ({
+        id:   a.id,
+        name: a.name,
+        value: a.value_name,
+      })),
+    }
+
+    // Cache 1h para itens individuais
+    if (CACHE) {
+      await CACHE.put(cacheKey, JSON.stringify(payload), { expirationTtl: 3600 }).catch(() => {})
+    }
+
+    return c.json(payload)
+  } catch (e: any) {
+    return c.json({ error: e.message || 'Erro interno' }, 500)
+  }
+})
+
 export default ml
 export { ML_CATEGORIES, extractMLBId }

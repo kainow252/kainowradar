@@ -5692,6 +5692,268 @@ admin.post('/api/ml-linkbuilder/generate-all', async (c) => {
   })
 })
 
+// ══════════════════════════════════════════════════════════
+// ROADMAP API ML — Sync Categorias + Importação por Categoria
+// ══════════════════════════════════════════════════════════
+
+// POST /admin/api/ml/sync-categories
+// Busca /sites/MLB/categories → popula tabela categories do D1
+admin.post('/api/ml/sync-categories', async (c) => {
+  const { DB, CACHE } = c.env
+  const ML_API       = 'https://api.mercadolibre.com'
+  const token        = await getLBToken(c.env)
+  const headers: Record<string, string> = {
+    'Accept': 'application/json', 'User-Agent': 'KainowRadar/1.0',
+  }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
+  try {
+    const res = await fetch(`${ML_API}/sites/MLB/categories`, { headers })
+    if (!res.ok) return c.json({ error: `ML API HTTP ${res.status}` }, res.status as any)
+    const mlCats: any[] = await res.json()
+
+    const CAT_ICONS: Record<string, string> = {
+      MLB5672:'📱', MLB1051:'📱', MLB1648:'💻', MLB1000:'📺',
+      MLB1144:'🎮', MLB1003:'🎵', MLB1008:'📷', MLB1574:'🏠',
+      MLB1009:'📟', MLB1649:'🖥️', MLB1430:'👗', MLB1499:'🏋️',
+      MLB1500:'🐾', MLB218519:'🧴', MLB1132:'🚗', MLB1459:'🧸',
+      MLB1540:'🔧', MLB86:'🏡', MLB1276:'📚', MLB1367:'⚽',
+      MLB407134:'🍔', MLB3937:'🎵', MLB1953:'✈️', MLB4357:'💊',
+      MLB3633:'🎨', MLB1743:'💼',
+    }
+
+    function slugify(text: string): string {
+      return text.toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-').substring(0, 80)
+    }
+
+    let upserted = 0, skipped = 0
+    for (const cat of mlCats) {
+      const slug = slugify(cat.name)
+      const icon = CAT_ICONS[cat.id] || '🛍️'
+      try {
+        // Tenta INSERT; em conflito de slug faz UPDATE
+        const r = await DB.prepare(`
+          INSERT INTO categories (name, slug, icon, ml_category_id, is_active, product_count, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          ON CONFLICT(slug) DO UPDATE SET
+            name = excluded.name,
+            icon = excluded.icon,
+            ml_category_id = excluded.ml_category_id,
+            updated_at = CURRENT_TIMESTAMP
+        `).bind(cat.name, slug, icon, cat.id).run()
+        upserted++
+      } catch {
+        // Tenta upsert por ml_category_id
+        try {
+          await DB.prepare(`
+            UPDATE categories SET name=?, icon=?, updated_at=CURRENT_TIMESTAMP
+            WHERE ml_category_id=?
+          `).bind(cat.name, icon, cat.id).run()
+          upserted++
+        } catch { skipped++ }
+      }
+    }
+
+    // Invalida cache de categorias no KV
+    if (CACHE) {
+      await CACHE.delete('ml_categories_tree').catch(() => {})
+    }
+
+    return c.json({
+      ok: true, total: mlCats.length, upserted, skipped,
+      message: `${upserted} categorias sincronizadas com sucesso`,
+      categories: mlCats.map(c => ({ id: c.id, name: c.name })),
+    })
+  } catch (e: any) {
+    return c.json({ error: e.message || 'Erro ao sincronizar' }, 500)
+  }
+})
+
+// GET /admin/api/ml/sync-categories — Visualiza status atual das categorias
+admin.get('/api/ml/sync-categories', async (c) => {
+  const { DB } = c.env
+  try {
+    const { results } = await DB.prepare(`
+      SELECT id, name, slug, icon, ml_category_id, product_count, is_active, updated_at
+      FROM categories ORDER BY name ASC LIMIT 100
+    `).all()
+    const total = results.length
+    const withMlId  = results.filter((r: any) => r.ml_category_id).length
+    const withProds = results.filter((r: any) => (r as any).product_count > 0).length
+    return c.json({ total, with_ml_id: withMlId, with_products: withProds, categories: results })
+  } catch (e: any) {
+    return c.json({ error: e.message || 'Erro ao listar categorias' }, 500)
+  }
+})
+
+// POST /admin/api/ml/import-by-category — Importa produtos de uma categoria via /sites/MLB/search
+// Body: { category_id: "MLB1051", slug: "smartphones", limit: 50, offset: 0 }
+admin.post('/api/ml/import-by-category', async (c) => {
+  const { DB, CACHE }  = c.env
+  const ML_API         = 'https://api.mercadolibre.com'
+  const PUBLISHER_ID   = 'cfegdhabc31955'
+  const MATT_TOOL      = '38524122'
+
+  const body = await c.req.json().catch(() => ({}) as any)
+  const categoryId: string = body.category_id || ''
+  const categorySlug: string = body.slug || 'outros'
+  const limit    = Math.min(50, parseInt(body.limit || '50'))
+  const offset   = Math.max(0, parseInt(body.offset || '0'))
+  const saveDb   = body.save !== false // padrão: salva no banco
+
+  if (!categoryId) return c.json({ error: 'category_id obrigatório (ex: MLB1051)' }, 400)
+
+  const token = await getLBToken(c.env)
+  if (!token) return c.json({ error: 'Token ML não disponível' }, 503)
+
+  try {
+    const params = new URLSearchParams({
+      category: categoryId,
+      limit:    String(limit),
+      offset:   String(offset),
+      sort:     'relevance',
+    })
+
+    const res = await fetch(`${ML_API}/sites/MLB/search?${params}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/json',
+        'User-Agent': 'KainowRadar/1.0',
+      },
+    })
+
+    if (!res.ok) {
+      const err: any = await res.json().catch(() => ({}))
+      return c.json({ error: `ML API HTTP ${res.status}: ${err.message || err.error || ''}` }, res.status as any)
+    }
+
+    const data: any = await res.json()
+    const items: any[] = data.results || []
+
+    if (!saveDb) {
+      // Preview sem salvar
+      return c.json({
+        ok: true, preview: true,
+        total: data.paging?.total || items.length,
+        count: items.length,
+        items: items.slice(0, 10).map((item: any) => ({
+          id: item.id, title: item.title?.slice(0, 80),
+          price: item.price, thumbnail: item.thumbnail,
+        })),
+      })
+    }
+
+    let created = 0, updated = 0, skipped = 0
+    const details: any[] = []
+
+    for (const item of items) {
+      if (!item.id || !item.title) { skipped++; continue }
+
+      const mlId     = item.id
+      const name     = item.title.trim()
+      const price    = item.price || 0
+      const image    = (item.thumbnail || '').replace('-I.jpg', '-O.jpg')
+      const permalink = item.permalink || `https://www.mercadolivre.com.br/p/${mlId}`
+      const affUrl   = `${permalink.split('?')[0]}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+
+      const existing = await DB.prepare('SELECT id FROM products WHERE ml_item_id = ?').bind(mlId).first<any>()
+
+      if (existing) {
+        await DB.prepare(`
+          UPDATE products
+          SET best_price=?, affiliate_url=?, image_url=COALESCE(NULLIF(?,''), image_url),
+              affiliate_updated_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+          WHERE ml_item_id=?
+        `).bind(price, affUrl, image, mlId).run()
+        updated++
+        details.push({ ml_id: mlId, action: 'updated', name: name.slice(0, 60) })
+      } else {
+        // Slug único
+        function slugifyLocal(text: string): string {
+          return text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-').substring(0, 80)
+        }
+        const rawSlug = slugifyLocal(name)
+        const slugExists = await DB.prepare('SELECT id FROM products WHERE slug=?').bind(rawSlug).first()
+        const finalSlug  = slugExists ? `${rawSlug}-${mlId.toLowerCase()}` : rawSlug
+
+        try {
+          const ins = await DB.prepare(`
+            INSERT INTO products
+              (name, slug, ml_item_id, affiliate_url, affiliate_updated_at,
+               image_url, best_price, offer_count, is_active, source, category,
+               description, created_at, updated_at)
+            VALUES (?,?,?,?,CURRENT_TIMESTAMP,?,?,1,1,'mercadolivre',?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+          `).bind(
+            name, finalSlug, mlId, affUrl, image || null, price,
+            categorySlug,
+            `${name}. Encontrado no Mercado Livre.`,
+          ).run()
+
+          const newId = ins.meta?.last_row_id as number
+
+          // Offer placeholder
+          await DB.prepare(`
+            INSERT INTO offers (product_id, store_id, external_id, title, price, affiliate_url, is_active, in_stock, source, last_updated)
+            VALUES (?,3,?,?,?,?,1,1,'mercadolivre',CURRENT_TIMESTAMP)
+          `).bind(newId, mlId, name, price, affUrl).run()
+
+          await DB.prepare('UPDATE products SET offer_count=1, best_store_id=3 WHERE id=?').bind(newId).run()
+
+          created++
+          details.push({ ml_id: mlId, action: 'created', name: name.slice(0, 60), id: newId })
+        } catch (e: any) {
+          skipped++
+        }
+      }
+
+      await new Promise(r => setTimeout(r, 20)) // rate limit gentil
+    }
+
+    // Recalcula product_count na categoria
+    await DB.prepare(`
+      UPDATE categories SET
+        product_count = (SELECT COUNT(*) FROM products WHERE category=? AND is_active=1),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE slug=?
+    `).bind(categorySlug, categorySlug).run().catch(() => {})
+
+    return c.json({
+      ok: true, created, updated, skipped,
+      total_from_ml: data.paging?.total || items.length,
+      fetched: items.length,
+      message: `${created} criados, ${updated} atualizados, ${skipped} ignorados`,
+      details: details.slice(0, 20),
+    })
+  } catch (e: any) {
+    return c.json({ error: e.message || 'Erro interno' }, 500)
+  }
+})
+
+// ── Cache Management ──────────────────────────────────────
+// DELETE /admin/api/ml/cache — Limpa cache de busca/categorias no KV
+admin.delete('/api/ml/cache', async (c) => {
+  const { CACHE } = c.env
+  if (!CACHE) return c.json({ error: 'KV não disponível' }, 503)
+
+  const keys = [
+    'ml_categories_tree',
+  ]
+  let cleared = 0
+  for (const key of keys) {
+    await CACHE.delete(key).catch(() => {})
+    cleared++
+  }
+  // Limpa prefixos comuns de busca
+  const prefixes = ['ml_search:', 'ml_browse:', 'ml_deals:', 'ml_item:']
+  return c.json({
+    ok: true, cleared,
+    note: `Cache de categorias limpo. Prefixos ${prefixes.join(', ')} expiram naturalmente.`,
+  })
+})
+
 // PUT /admin/api/ml-linkbuilder/products/:id — salva link manualmente
 admin.put('/api/ml-linkbuilder/products/:id', async (c) => {
   const { DB } = c.env
@@ -5847,6 +6109,12 @@ function renderAdminSPA(): string {
       <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Integrações</div>
       <div onclick="showSection('ml-import')" class="sidebar-link" data-section="ml-import">
         <span class="text-lg">🟡</span> Importar do ML
+      </div>
+      <div onclick="showSection('ml-categories')" class="sidebar-link" data-section="ml-categories">
+        <span class="text-lg">🗂️</span> Categorias ML
+      </div>
+      <div onclick="showSection('ml-search')" class="sidebar-link" data-section="ml-search">
+        <span class="text-lg">🔍</span> Busca ML API
       </div>
       <div onclick="showSection('ml-linkbuilder')" class="sidebar-link" data-section="ml-linkbuilder">
         <span class="text-lg">🔗</span> ML LinkBuilder

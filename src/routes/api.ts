@@ -227,23 +227,98 @@ api.post('/cron/process-queue', async (c) => {
 })
 
 // ── GET /api/search/suggestions?q= ───────────────────────
+// Retorna sugestões híbridas: banco local + API ML em paralelo
 api.get('/search/suggestions', async (c) => {
-  const { DB } = c.env
-  const q = c.req.query('q') || ''
+  const { DB, CACHE } = c.env
+  const q = (c.req.query('q') || '').trim()
   if (q.length < 2) return c.json([])
 
-  const { results } = await DB
+  // Cache de sugestões por 10 min
+  const cacheKey = `suggestions:${q.toLowerCase()}`
+  if (CACHE) {
+    const cached = await CACHE.get(cacheKey, 'json').catch(() => null)
+    if (cached) return c.json(cached as any)
+  }
+
+  // 1. Busca local no D1 (instantâneo)
+  const { results: localResults } = await DB
     .prepare(`
-      SELECT DISTINCT name, slug, brand, category, image_url, best_price
+      SELECT DISTINCT name, slug, brand, category, image_url, best_price, 'local' as source
       FROM products
       WHERE name LIKE ? AND is_active = 1
       ORDER BY offer_count DESC
-      LIMIT 8
+      LIMIT 5
     `)
     .bind(`%${q}%`)
     .all()
 
-  return c.json(results)
+  // 2. Busca na API ML em paralelo (com timeout de 2s)
+  let mlResults: any[] = []
+  try {
+    const ML_API       = 'https://api.mercadolibre.com'
+    const PUBLISHER_ID = 'cfegdhabc31955'
+    const MATT_TOOL    = '38524122'
+
+    // Pega token do KV (sem tentar renovar para não atrasar)
+    const token = CACHE ? await CACHE.get('ml_access_token').catch(() => null)
+                       || await CACHE.get('ml_app_token').catch(() => null)
+                       : null
+
+    if (token) {
+      const controller = new AbortController()
+      const timeout    = setTimeout(() => controller.abort(), 2000)
+
+      try {
+        const res = await fetch(
+          `${ML_API}/sites/MLB/search?q=${encodeURIComponent(q)}&limit=5&sort=relevance`,
+          {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Accept': 'application/json',
+              'User-Agent': 'KainowRadar/1.0',
+            },
+            signal: controller.signal,
+          }
+        )
+        clearTimeout(timeout)
+
+        if (res.ok) {
+          const data: any = await res.json()
+          mlResults = (data.results || []).slice(0, 5).map((item: any) => {
+            const permalink = item.permalink || ''
+            return {
+              name:         item.title,
+              slug:         item.id.toLowerCase(),
+              brand:        null,
+              category:     null,
+              image_url:    (item.thumbnail || '').replace('-I.jpg', '-O.jpg'),
+              best_price:   item.price,
+              affiliate_url: permalink
+                ? `${permalink.split('?')[0]}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+                : '',
+              ml_item_id:  item.id,
+              source:      'mercadolivre',
+            }
+          })
+        }
+      } catch { /* timeout ou erro — ignora ML */ }
+    }
+  } catch { /* sem token — retorna só local */ }
+
+  // Mescla: local primeiro, depois ML (sem duplicatas por nome similar)
+  const localNames = new Set((localResults as any[]).map((r: any) => r.name?.toLowerCase()))
+  const filteredML = mlResults.filter((r) => !localNames.has(r.name?.toLowerCase()))
+
+  const combined = [
+    ...(localResults as any[]),
+    ...filteredML,
+  ].slice(0, 10)
+
+  if (CACHE && combined.length > 0) {
+    await CACHE.put(cacheKey, JSON.stringify(combined), { expirationTtl: 600 }).catch(() => {})
+  }
+
+  return c.json(combined)
 })
 
 // ── GET /api/featured — Produtos em destaque ──────────────
