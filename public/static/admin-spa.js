@@ -547,9 +547,10 @@ function _buildStoreCard(s) {
   const urlHint = s.checkout_pattern || s.deeplink_base || '—'
 
   // Botão "Importar Links Afiliados" só aparece no card do Mercado Livre
+  // event.stopPropagation() garante que não propague para o card pai
   const isMeli = s.affiliate_network === 'meli-api' || (s.name || '').toLowerCase().includes('mercado livre')
   const importBtn = isMeli
-    ? '<button onclick="openMlAffiliateImport()" class="w-full text-xs font-semibold py-2 px-3 rounded-xl border border-yellow-300 bg-yellow-50 text-yellow-800 hover:bg-yellow-100 transition-all mt-2">📥 Importar Links Afiliados</button>'
+    ? '<button onclick="event.stopPropagation();openMlAffiliateImport()" class="w-full text-xs font-semibold py-2 px-3 rounded-xl border border-yellow-300 bg-yellow-50 text-yellow-800 hover:bg-yellow-100 transition-all mt-2">📥 Importar Links Afiliados</button>'
     : ''
 
   return (
@@ -577,7 +578,7 @@ function _buildStoreCard(s) {
     +   '</div>'
     +   '<div class="flex items-center gap-2 mb-2">' + statusBadge + offersBadge + '</div>'
     +   '<div class="text-xs text-slate-400 truncate mb-3" title="' + urlHint + '">🔗 ' + urlHint + '</div>'
-    +   '<button onclick="openStoreModal(' + s.id + ')" class="w-full text-xs font-semibold py-2 px-3 rounded-xl border bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100 transition-all">✏️ Editar loja</button>'
+    +   '<button onclick="event.stopPropagation();openStoreModal(' + s.id + ')" class="w-full text-xs font-semibold py-2 px-3 rounded-xl border bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100 transition-all">✏️ Editar loja</button>'
     +   importBtn
     + '</div>'
     + '</div>'

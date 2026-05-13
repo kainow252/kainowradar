@@ -6729,15 +6729,7 @@ function renderAdminSPA(): string {
         <span class="text-lg">💰</span> Ofertas
       </div>
       <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Integrações</div>
-      <div onclick="showSection('ml-import')" class="sidebar-link" data-section="ml-import">
-        <span class="text-lg">🟡</span> Importar do ML
-      </div>
-      <div onclick="showSection('ml-categories')" class="sidebar-link" data-section="ml-categories">
-        <span class="text-lg">🗂️</span> Categorias ML
-      </div>
-      <div onclick="showSection('ml-search')" class="sidebar-link" data-section="ml-search">
-        <span class="text-lg">🔍</span> Busca ML API
-      </div>
+      <!-- ml-import, ml-categories, ml-search ocultos do menu -->
       <div onclick="showSection('ml-crawl')" class="sidebar-link" data-section="ml-crawl">
         <span class="text-lg">🕷️</span> Crawl em Massa
       </div>
