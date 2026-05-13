@@ -707,11 +707,66 @@ function siTab(tab, storeId) {
   if (tab === 'history' && storeId) siLoadHistory(storeId)
 }
 
+// Detecta se uma URL é link afiliado /social/ do ML
+function siIsSocialUrl(u) {
+  return /\/social\/[a-z0-9]+/i.test(u)
+}
+// Detecta se uma URL é link de produto do ML (não /social/)
+function siIsProductUrl(u) {
+  return /mercadolivre\.com\.br|meli\.la/i.test(u) && !siIsSocialUrl(u)
+}
+
+// Parseia o texto da textarea em itens: cada item é { url1, url2? }
+// Regra: se numa linha aparecerem 2 URLs e uma for /social/ + outra for produto → par
+// Caso contrário cada URL é um item individual
+function siParseTextarea(val) {
+  const items = []
+  const seen  = new Set()
+  const lines = val.split(/\n/)
+  for (const line of lines) {
+    const raw = (line.match(/https?:\/\/[^\s]+/g) || [])
+      .map(u => u.replace(/[.,;)>\]]+$/, '').trim())
+      .filter(Boolean)
+    if (!raw.length) continue
+    if (raw.length >= 2) {
+      // Tenta achar par produto+social dentro da mesma linha
+      const socialIdx  = raw.findIndex(u => siIsSocialUrl(u))
+      const productIdx = raw.findIndex(u => siIsProductUrl(u))
+      if (socialIdx !== -1 && productIdx !== -1 && socialIdx !== productIdx) {
+        const key = raw[productIdx] + '|' + raw[socialIdx]
+        if (!seen.has(key)) {
+          seen.add(key)
+          items.push({ url1: raw[productIdx], url2: raw[socialIdx] })
+        }
+        // Adiciona demais URLs da linha como itens individuais
+        raw.forEach((u, i) => {
+          if (i !== socialIdx && i !== productIdx && !seen.has(u)) {
+            seen.add(u); items.push({ url1: u })
+          }
+        })
+        continue
+      }
+    }
+    // Linha com 1 URL (ou sem par detectável) → itens individuais
+    for (const u of raw) {
+      if (!seen.has(u)) { seen.add(u); items.push({ url1: u }) }
+    }
+  }
+  return items
+}
+
 function siCountLinks() {
   const val   = document.getElementById('si-textarea')?.value || ''
-  const count = (val.match(/https?:\/\/[^\s]+/g) || []).length
+  const items = siParseTextarea(val)
+  const pairs = items.filter(i => i.url2).length
+  const solo  = items.filter(i => !i.url2).length
   const el    = document.getElementById('si-count')
-  if (el) el.textContent = count + (count === 1 ? ' link detectado' : ' links detectados')
+  if (!el) return
+  if (!items.length) { el.textContent = '0 links detectados'; return }
+  const parts = []
+  if (pairs) parts.push(pairs + (pairs === 1 ? ' par produto+afiliado' : ' pares produto+afiliado'))
+  if (solo)  parts.push(solo  + (solo  === 1 ? ' link'                  : ' links'))
+  el.textContent = parts.join(' + ') + ' detectado' + (items.length === 1 ? '' : 's')
 }
 
 // ── IMPORTAÇÃO AUTOMÁTICA COMPLETA ───────────────────────────────
@@ -864,12 +919,18 @@ async function siImportAuto(storeId) {
     return siImportDual(storeId, pairs)
   }
 
-  // Modo simples: comportamento original
-  const val  = document.getElementById('si-textarea')?.value || ''
-  const urls = (val.match(/https?:\/\/[^\s,|]+/g) || [])
-    .map(u => u.replace(/[.,;)>\]]+$/, '').trim())
-    .filter(Boolean)
-    .filter((u, i, a) => a.indexOf(u) === i)
+  // Modo simples: detecta pares produto+afiliado automaticamente
+  const val   = document.getElementById('si-textarea')?.value || ''
+  const items = siParseTextarea(val)   // [{url1, url2?}, ...]
+
+  // Se há pares detectados → delega ao siImportDual (já suporta url2)
+  const hasPairs = items.some(i => i.url2)
+  if (hasPairs) {
+    return siImportDual(storeId, items)
+  }
+
+  // Sem pares → fluxo original (só url1)
+  const urls = items.map(i => i.url1)
 
   if (!urls.length) { toast('Cole pelo menos um link antes de importar', 'warning'); return }
 
@@ -990,7 +1051,7 @@ async function siImportAuto(storeId) {
 //   2) Browser busca HTML da página ML (sem bloqueio de IP) e envia para extract-ml-price
 //   3) API ML direto do browser como fallback (só funciona para Item IDs)
 // Para outros links: allorigins.win como fallback
-// ── siImportDual: importa pares url1+url2 ─────────────────────────
+// ── siImportDual: importa pares url1+url2 (também usado pelo modo simples quando detecta pares) ──
 async function siImportDual(storeId, pairs) {
   const live = document.getElementById('si-live-area')
   const btn  = document.getElementById('si-main-btn')
@@ -1000,35 +1061,101 @@ async function siImportDual(storeId, pairs) {
     btn.className = 'w-full py-3 rounded-xl bg-indigo-400 text-white text-sm font-bold cursor-not-allowed'
     btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> ' + msg
   }
+
+  // Monta skeleton cards com badge "par" para itens que têm url2
+  const skeletonCards = '<div id="si-cards-wrap" class="flex flex-col gap-2 mb-3">' +
+    pairs.map(function(p, i) {
+      const label = p.url2
+        ? '<span class="text-[9px] font-bold bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full mr-1">par</span>'
+        : ''
+      const short = (p.url1 || '').length > 50 ? p.url1.slice(0, 50) + '…' : (p.url1 || '')
+      return '<div id="si-card-' + i + '" class="flex items-center gap-3 p-2.5 rounded-xl border border-slate-200 bg-slate-50">' +
+        '<div class="w-10 h-10 rounded-lg bg-slate-200 animate-pulse flex-shrink-0"></div>' +
+        '<div class="flex-1 min-w-0">' +
+          '<div class="h-3 bg-slate-200 rounded animate-pulse mb-1.5 w-3/4"></div>' +
+          '<div class="text-[10px] text-slate-400 truncate">' + label + short + '</div>' +
+        '</div>' +
+        '<div class="text-xs text-slate-400 animate-pulse">⏳</div>' +
+      '</div>'
+    }).join('') +
+  '</div>'
+
   try {
     setBtnLoading('Buscando dados...')
-    live.innerHTML = '<div class="text-xs text-slate-500 text-center py-4">&#128269; Buscando dados dos produtos...</div>'
+    live.innerHTML = skeletonCards +
+      '<div id="si-prog-wrap" class="mb-3">' +
+        '<div class="flex justify-between text-xs text-slate-500 mb-1">' +
+          '<span id="si-prog-txt">Buscando informações dos produtos...</span>' +
+          '<span id="si-prog-n" class="font-bold text-indigo-600">0/' + pairs.length + '</span>' +
+        '</div>' +
+        '<div class="h-2 bg-slate-100 rounded-full overflow-hidden">' +
+          '<div id="si-prog-bar" class="h-full bg-indigo-500 rounded-full transition-all duration-300" style="width:0%"></div>' +
+        '</div>' +
+      '</div>' +
+      '<div id="si-result-area"></div>'
 
-    const metaMap = {}
-    const results = await Promise.all(pairs.map(p => siFetchMetaClientSide(p.url1, p.url2)))
+    // Processa em lotes de 3 com feedback visual em tempo real
+    const metaArr = new Array(pairs.length).fill(null)
+    const BATCH = 3
+    let done = 0
+    for (let s = 0; s < pairs.length; s += BATCH) {
+      const batch = pairs.slice(s, s + BATCH)
+      const results = await Promise.all(batch.map(p => siFetchMetaClientSide(p.url1, p.url2)))
+      results.forEach((m, bi) => {
+        const idx = s + bi
+        metaArr[idx] = m
+        done++
+        siUpdateCard(idx, pairs[idx].url1, m)
+        const pct = Math.round((done / pairs.length) * 100)
+        const bar = document.getElementById('si-prog-bar')
+        const nEl = document.getElementById('si-prog-n')
+        const tEl = document.getElementById('si-prog-txt')
+        if (bar) bar.style.width = pct + '%'
+        if (nEl) nEl.textContent = done + '/' + pairs.length
+        if (tEl) tEl.textContent = pct < 100 ? 'Buscando...' : '✓ Pronto!'
+      })
+    }
+
     const lines = []
-    results.forEach((m, i) => {
-      const u = pairs[i].url1
+    metaArr.forEach((m, i) => {
       if (!m || !m.name) return
+      const u = pairs[i].url1
       let line = u + ' | ' + m.name
       if (m.price) line += ' | ' + m.price
       if (m.image) line += ' | ' + m.image
       lines.push(line)
-      metaMap[u] = m
     })
 
-    live.innerHTML = lines.length
-      ? '<div class="text-xs text-green-600 font-semibold text-center py-2">&#10003; ' + lines.length + ' produto(s) prontos — salvando...</div>'
-      : '<div class="text-xs text-red-500 font-semibold text-center py-2">&#9888; Nenhum produto com nome encontrado. Verifique os links.</div>'
-
-    if (!lines.length) { siBtnReset(btn, storeId); return }
+    const semNome = pairs.length - lines.length
+    const progWrap = document.getElementById('si-prog-wrap')
+    if (!lines.length) {
+      if (progWrap) progWrap.innerHTML = '<p class="text-xs text-red-500 font-semibold text-center py-1">⚠ Nenhum produto com nome encontrado. Verifique os links.</p>'
+      siBtnReset(btn, storeId, '⚠ Tentar novamente')
+      return
+    }
+    if (progWrap) {
+      const aviso = semNome > 0 ? ` (${semNome} sem nome, ignorados)` : ''
+      progWrap.innerHTML = '<p class="text-xs text-green-600 font-semibold text-center py-1">✓ ' + lines.length + ' produto(s) prontos' + aviso + ' — salvando...</p>'
+    }
 
     setBtnLoading('Salvando no banco...')
     const data = await api('POST', '/admin/api/stores/' + storeId + '/import-links', { links: lines.join('\n') }, 30000)
+    const resEl = document.getElementById('si-result-area')
+    if (resEl && data) siRenderResult(data, resEl)
+
     if (data?.ok) {
-      toast('\u2713 ' + data.imported + ' produto(s) importados!', 'success')
-      live.innerHTML = '<div class="text-xs text-green-600 font-semibold text-center py-2">&#10003; ' + data.imported + ' produto(s) salvos com sucesso!</div>'
-      if (btn) { btn.disabled = false; btn.className = 'w-full py-3 rounded-xl bg-green-600 text-white text-sm font-bold'; btn.innerHTML = '\u2713 ' + data.imported + ' produto(s) salvos! Importar mais'; btn.onclick = () => siImportAuto(storeId) }
+      toast('✓ ' + data.imported + ' produto(s) importados!', 'success')
+      if (btn) {
+        btn.disabled = false
+        btn.className = 'w-full py-3 rounded-xl bg-green-600 text-white text-sm font-bold'
+        btn.innerHTML = '✓ ' + data.imported + ' produto(s) salvos! Importar mais'
+        btn.onclick = function() {
+          document.getElementById('si-textarea').value = ''
+          siCountLinks()
+          document.getElementById('si-live-area').innerHTML = ''
+          siBtnReset(btn, storeId)
+        }
+      }
     } else {
       toast('Erro ao salvar: ' + (data?.error || '?'), 'error')
       siBtnReset(btn, storeId)
