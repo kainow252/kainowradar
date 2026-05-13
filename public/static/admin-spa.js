@@ -582,11 +582,15 @@ function _buildStoreCard(s) {
 }
 
 // ── IMPORTAR LINKS — universal por loja ─────────────────────────
+// ── IMPORTAR LINKS — modal automático ───────────────────────────
+// Fluxo: colar links → clicar Importar → sistema busca nome/preço/imagem → salva tudo
 function openStoreImport(storeId, storeName) {
   const modal = document.getElementById('modal-container')
   modal.innerHTML = `
     <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
-      <div class="modal" style="max-width:680px;width:96vw;max-height:90vh;overflow-y:auto">
+      <div class="modal" style="max-width:660px;width:96vw;max-height:92vh;overflow-y:auto">
+
+        <!-- Header -->
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-3">
             <div class="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center text-xl">&#128229;</div>
@@ -600,34 +604,40 @@ function openStoreImport(storeId, storeName) {
 
         <!-- Tabs -->
         <div class="flex gap-1 bg-slate-100 rounded-xl p-1 mb-4">
-          <button id="si-tab-paste" onclick="siTab('paste')" class="flex-1 text-xs font-semibold py-2 rounded-lg bg-white shadow-sm text-slate-800 transition-all">&#128203; Colar Links</button>
-          <button id="si-tab-csv"   onclick="siTab('csv')"   class="flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700 transition-all">&#128196; CSV</button>
+          <button id="si-tab-paste"   onclick="siTab('paste')"           class="flex-1 text-xs font-semibold py-2 rounded-lg bg-white shadow-sm text-slate-800 transition-all">&#128203; Colar Links</button>
+          <button id="si-tab-csv"     onclick="siTab('csv')"             class="flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700 transition-all">&#128196; CSV</button>
           <button id="si-tab-history" onclick="siTab('history',${storeId})" class="flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700 transition-all">&#128339; Hist&oacute;rico</button>
         </div>
 
         <!-- PAINEL: Colar Links -->
         <div id="si-panel-paste">
-          <p class="text-xs text-slate-500 mb-2">Cole um link por linha. Aperte <strong>Analisar</strong> para preencher nome, pre&ccedil;o e imagem antes de salvar.</p>
-          <textarea id="si-textarea" rows="5"
+          <p class="text-xs text-slate-500 mb-2">Cole um ou mais links (um por linha). O sistema busca <strong>nome, pre&ccedil;o e imagem automaticamente</strong>.</p>
+          <textarea id="si-textarea" rows="6"
             class="w-full rounded-xl border border-slate-200 bg-slate-50 text-sm font-mono p-3 resize-none focus:outline-none focus:border-indigo-400 focus:bg-white transition-all"
             placeholder="https://meli.la/1guaPXV&#10;https://meli.la/1vTGDBn&#10;https://meli.la/1piMeCE"
             oninput="siCountLinks()"></textarea>
           <div class="flex items-center justify-between mt-1 mb-3">
             <span id="si-count" class="text-xs text-slate-400">0 links detectados</span>
-            <button onclick="document.getElementById('si-textarea').value='';siCountLinks();document.getElementById('si-form-area').innerHTML=''" class="text-xs text-slate-400 hover:text-red-500">&#10005; Limpar</button>
+            <button onclick="document.getElementById('si-textarea').value='';siCountLinks();document.getElementById('si-live-area').innerHTML=''" class="text-xs text-slate-400 hover:text-red-500">&#10005; Limpar</button>
           </div>
-          <button onclick="siParseLinks(${storeId})" class="w-full py-2 rounded-xl bg-slate-700 text-white text-sm font-bold hover:bg-slate-900 transition-all mb-4">&#128269; Analisar Links</button>
-          <div id="si-form-area"></div>
+          <!-- Botão principal -->
+          <button id="si-main-btn" onclick="siImportAuto(${storeId})"
+            class="w-full py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 active:scale-95 transition-all flex items-center justify-center gap-2">
+            <span>&#128640;</span> Importar Automaticamente
+          </button>
+          <!-- Área de progresso e resultado ao vivo -->
+          <div id="si-live-area" class="mt-4"></div>
         </div>
 
         <!-- PAINEL: CSV -->
         <div id="si-panel-csv" class="hidden">
           <div class="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-800 mb-3">
-            <p class="font-bold mb-1">&#128196; Formato CSV:</p>
+            <p class="font-bold mb-1">&#128196; Formato CSV aceito:</p>
             <div class="font-mono space-y-0.5">
               <div class="text-amber-600">url,name,price,image_url</div>
               <div>https://meli.la/1guaPXV,T&ecirc;nis Adidas,299.90,https://img...</div>
             </div>
+            <p class="mt-2 text-amber-700">Se name/price/image estiverem vazios, o sistema busca automaticamente.</p>
           </div>
           <div class="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 transition-all" onclick="document.getElementById('si-csv-input').click()">
             <div class="text-3xl mb-2">&#128194;</div>
@@ -635,10 +645,10 @@ function openStoreImport(storeId, storeName) {
             <p class="text-xs text-slate-400 mt-1" id="si-csv-name">Nenhum arquivo selecionado</p>
           </div>
           <input type="file" id="si-csv-input" accept=".csv,.txt" class="hidden" onchange="siReadCsv(this,${storeId})">
-          <div id="si-csv-form-area" class="mt-3"></div>
+          <div id="si-csv-live-area" class="mt-3"></div>
         </div>
 
-        <!-- PAINEL: Historico -->
+        <!-- PAINEL: Histórico -->
         <div id="si-panel-history" class="hidden">
           <div id="si-history-content"><div class="text-center py-10 text-slate-400 text-sm">&#128260; Carregando...</div></div>
         </div>
@@ -670,226 +680,196 @@ function siCountLinks() {
   if (el) el.textContent = count + (count === 1 ? ' link detectado' : ' links detectados')
 }
 
-// Auto-fetch metadados de um link via backend scraper
-async function siFetchMeta(url) {
-  try {
-    const r = await fetch('/admin/api/fetch-product-meta?url=' + encodeURIComponent(url))
-    if (!r.ok) return null
-    const d = await r.json()
-    return d?.ok ? d : null
-  } catch { return null }
-}
-
-// Analisa links e auto-fetcha metadados em paralelo (lote de 5)
-async function siParseLinks(storeId) {
+// ── IMPORTAÇÃO AUTOMÁTICA COMPLETA ───────────────────────────────
+// 1) Extrai URLs do textarea
+// 2) Para cada URL: faz GET /admin/api/fetch-product-meta (segue redirect, scrapa nome/preço/imagem)
+// 3) Monta payload com os dados e salva no banco em lote
+async function siImportAuto(storeId) {
   const val  = document.getElementById('si-textarea')?.value || ''
   const urls = (val.match(/https?:\/\/[^\s,|]+/g) || [])
     .map(u => u.replace(/[.,;)>\]]+$/, '').trim())
     .filter(Boolean)
-    .filter((u, i, a) => a.indexOf(u) === i) // dedup
-  if (!urls.length) { toast('Cole pelo menos um link antes de analisar', 'warning'); return }
+    .filter((u, i, a) => a.indexOf(u) === i)
 
-  // Renderiza esqueleto de loading imediatamente
-  siRenderSkeleton(urls, storeId)
+  if (!urls.length) { toast('Cole pelo menos um link antes de importar', 'warning'); return }
 
-  // Busca metadados em paralelo em lotes de 5
-  const BATCH = 5
-  for (let start = 0; start < urls.length; start += BATCH) {
-    const batch = urls.slice(start, start + BATCH)
-    const metas = await Promise.all(batch.map(u => siFetchMeta(u)))
-    batch.forEach((url, bi) => {
-      const i = start + bi
-      const m = metas[bi]
-      siPopulateCard(i, url, m)
+  const live = document.getElementById('si-live-area')
+  const btn  = document.getElementById('si-main-btn')
+  if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> Buscando dados...' }
+
+  // Renderiza lista de cards em estado "buscando"
+  live.innerHTML = siLiveCards(urls) +
+    '<div id="si-prog-wrap" class="mb-3">' +
+      '<div class="flex justify-between text-xs text-slate-500 mb-1">' +
+        '<span id="si-prog-txt">Buscando informa\u00e7\u00f5es dos produtos...</span>' +
+        '<span id="si-prog-n" class="font-bold text-indigo-600">0/' + urls.length + '</span>' +
+      '</div>' +
+      '<div class="h-2 bg-slate-100 rounded-full overflow-hidden">' +
+        '<div id="si-prog-bar" class="h-full bg-indigo-500 rounded-full transition-all duration-300" style="width:0%"></div>' +
+      '</div>' +
+    '</div>' +
+    '<div id="si-result-area"></div>' +
+    '<button id="si-save-btn" disabled class="w-full py-3 rounded-xl bg-slate-200 text-slate-400 text-sm font-bold cursor-not-allowed mt-2">Aguarde...</button>'
+
+  // Busca metadados em paralelo (lotes de 6)
+  const metaMap = {}
+  const BATCH = 6
+  let done = 0
+
+  for (let s = 0; s < urls.length; s += BATCH) {
+    const batch = urls.slice(s, s + BATCH)
+    const results = await Promise.all(batch.map(async u => {
+      try {
+        const d = await api('GET', '/admin/api/fetch-product-meta?url=' + encodeURIComponent(u))
+        return d?.ok ? d : null
+      } catch { return null }
+    }))
+    batch.forEach((u, bi) => {
+      metaMap[u] = results[bi]
+      done++
+      siUpdateCard(s + bi, u, results[bi])
+      // Progresso
+      const pct = Math.round((done / urls.length) * 100)
+      const bar = document.getElementById('si-prog-bar')
+      const nEl = document.getElementById('si-prog-n')
+      const tEl = document.getElementById('si-prog-txt')
+      if (bar) bar.style.width = pct + '%'
+      if (nEl) nEl.textContent = done + '/' + urls.length
+      if (tEl) tEl.textContent = pct < 100 ? 'Buscando informa\u00e7\u00f5es...' : '\u2713 Dados carregados!'
     })
   }
 
-  // Atualiza botão de salvar após preencher tudo
-  siRefreshSaveButton(urls, storeId)
-}
+  // Esconde barra de progresso, habilita botão Salvar
+  const progWrap = document.getElementById('si-prog-wrap')
+  if (progWrap) progWrap.innerHTML = '<p class="text-xs text-green-600 font-semibold text-center py-1">\u2713 Informa\u00e7\u00f5es carregadas \u2014 salvando no banco...</p>'
 
-// Renderiza cards de loading (skeleton) para cada URL
-function siRenderSkeleton(urls, storeId) {
-  const area = document.getElementById('si-form-area')
-  if (!area) return
-  area.innerHTML =
-    '<div class="space-y-3 mb-4" id="si-cards-list">' +
-    urls.map(function(url, i) {
-      return '<div id="si-card-' + i + '" class="border border-slate-200 rounded-xl p-3 bg-white">' +
-        '<div class="flex items-center gap-2 mb-2">' +
-          '<div id="si-card-img-wrap-' + i + '" class="w-12 h-12 rounded-xl bg-slate-100 flex-shrink-0 flex items-center justify-center text-slate-300 overflow-hidden">' +
-            '<svg class="w-6 h-6 animate-spin text-indigo-300" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>' +
-          '</div>' +
-          '<div class="flex-1 min-w-0">' +
-            '<div class="h-3 bg-slate-100 rounded animate-pulse mb-1 w-3/4"></div>' +
-            '<div class="text-xs font-mono text-slate-400 truncate">' + url + '</div>' +
-          '</div>' +
-          '<div id="si-card-status-' + i + '" class="text-xs text-slate-400 flex-shrink-0">buscando...</div>' +
-        '</div>' +
-        '<div class="grid grid-cols-1 gap-2">' +
-          '<input type="text" id="si-name-' + i + '" placeholder="Nome do produto (obrigatorio)" ' +
-            'class="input text-sm" oninput="siUpdatePreview(' + i + ')" disabled>' +
-          '<div class="grid grid-cols-2 gap-2">' +
-            '<input type="number" id="si-price-' + i + '" placeholder="Preco R$" step="0.01" min="0" ' +
-              'class="input text-sm" disabled>' +
-            '<input type="url" id="si-img-' + i + '" placeholder="URL da imagem" ' +
-              'class="input text-sm" oninput="siUpdatePreview(' + i + ')" disabled>' +
-          '</div>' +
-        '</div>' +
-      '</div>'
-    }).join('') +
-    '</div>' +
-    '<div id="si-fetch-progress" class="mb-3">' +
-      '<div class="flex items-center justify-between mb-1">' +
-        '<span class="text-xs text-slate-500" id="si-fetch-txt">Buscando informacoes dos produtos...</span>' +
-        '<span class="text-xs text-indigo-600 font-bold" id="si-fetch-pct">0/' + urls.length + '</span>' +
-      '</div>' +
-      '<div class="h-1.5 bg-slate-100 rounded-full overflow-hidden">' +
-        '<div id="si-fetch-bar" class="h-full bg-indigo-500 rounded-full transition-all duration-300" style="width:0%"></div>' +
-      '</div>' +
-    '</div>' +
-    '<div id="si-import-progress" class="hidden mb-3">' +
-      '<div class="h-2 bg-slate-100 rounded-full overflow-hidden">' +
-        '<div id="si-import-bar" class="h-full bg-green-500 rounded-full transition-all" style="width:0%"></div>' +
-      '</div>' +
-      '<div id="si-import-txt" class="text-xs text-slate-500 mt-1 text-center">Salvando...</div>' +
-    '</div>' +
-    '<div id="si-import-result" class="hidden mb-3"></div>' +
-    '<button id="si-save-btn" disabled ' +
-      'class="w-full py-2.5 rounded-xl bg-slate-300 text-slate-500 text-sm font-bold cursor-not-allowed transition-all">' +
-      '&#9889; Aguarde — buscando dados...' +
-    '</button>'
-  // Janela de URLs para o submit
-  area._siUrls    = urls
-  area._siStoreId = storeId
-}
-
-// Preenche um card com os metadados retornados pelo scraper
-function siPopulateCard(i, url, meta) {
-  const nameEl  = document.getElementById('si-name-'  + i)
-  const priceEl = document.getElementById('si-price-' + i)
-  const imgEl   = document.getElementById('si-img-'   + i)
-  const wrap    = document.getElementById('si-card-img-wrap-' + i)
-  const status  = document.getElementById('si-card-status-'  + i)
-
-  // Habilita inputs
-  if (nameEl)  nameEl.disabled  = false
-  if (priceEl) priceEl.disabled = false
-  if (imgEl)   imgEl.disabled   = false
-
-  if (meta && meta.name) {
-    // Preenche com dados do scraper
-    if (nameEl)  nameEl.value  = meta.name  || ''
-    if (priceEl && meta.price) priceEl.value = parseFloat(meta.price).toFixed(2)
-    if (imgEl   && meta.image) imgEl.value   = meta.image
-
-    // Preview da imagem no card
-    if (wrap) {
-      if (meta.image) {
-        wrap.innerHTML = '<img src="' + meta.image + '" class="w-12 h-12 object-cover rounded-xl" ' +
-          'onerror="this.parentElement.innerHTML=\'&#128722;\'">'
-      } else {
-        wrap.innerHTML = '<span class="text-xl">&#128722;</span>'
-      }
-    }
-    if (status) {
-      status.innerHTML = '<span class="text-green-600 font-semibold">&#10003; ok</span>'
-    }
-  } else {
-    // Falhou — deixa vazio para preenchimento manual
-    if (wrap)   wrap.innerHTML   = '<span class="text-xl text-slate-300">&#10067;</span>'
-    if (status) status.innerHTML = '<span class="text-amber-500">manual</span>'
-    if (nameEl) nameEl.placeholder = 'Nome nao encontrado — preencha manualmente'
-  }
-
-  // Atualiza barra de progresso do fetch
-  const done  = document.querySelectorAll('[id^="si-card-status-"]')
-  const total = done.length
-  const ready = Array.from(done).filter(el => !el.textContent.includes('buscando')).length
-  const pct   = total ? Math.round((ready / total) * 100) : 0
-  const bar   = document.getElementById('si-fetch-bar')
-  const pctEl = document.getElementById('si-fetch-pct')
-  const txt   = document.getElementById('si-fetch-txt')
-  if (bar)   bar.style.width = pct + '%'
-  if (pctEl) pctEl.textContent = ready + '/' + total
-  if (txt)   txt.textContent  = pct < 100 ? 'Buscando informacoes...' : '&#10003; Metadados carregados!'
-
-  siUpdatePreview(i)
-}
-
-// Habilita o botao Salvar e define a acao depois que todos os cards estao prontos
-function siRefreshSaveButton(urls, storeId) {
-  const btn = document.getElementById('si-save-btn')
-  if (!btn) return
-  btn.disabled = false
-  btn.className = 'w-full py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 transition-all'
-  btn.innerHTML = '&#9889; Salvar ' + urls.length + ' Produto' + (urls.length > 1 ? 's' : '') + ' no Banco'
-  btn.onclick = function() { siSubmitForm(urls, storeId) }
-
-  // Esconde barra de fetch
-  const fetchProg = document.getElementById('si-fetch-progress')
-  if (fetchProg) {
-    fetchProg.innerHTML = '<div class="text-xs text-green-600 font-semibold text-center py-1">&#10003; Dados carregados — revise e salve!</div>'
-  }
-}
-
-function siUpdatePreview(i) {
-  const name = document.getElementById('si-name-' + i)?.value.trim() || ''
-  const img  = document.getElementById('si-img-'  + i)?.value.trim() || ''
-  const wrap = document.getElementById('si-card-img-wrap-' + i)
-  if (wrap && img) {
-    const cur = wrap.querySelector('img')
-    if (cur) cur.src = img
-    else wrap.innerHTML = '<img src="' + img + '" class="w-12 h-12 object-cover rounded-xl" onerror="this.parentElement.innerHTML=\'&#128722;\'">'
-  }
-}
-
-async function siSubmitForm(urls, storeId) {
-  const lines = urls.map(function(url, i) {
-    const name  = document.getElementById('si-name-'  + i)?.value.trim() || ''
-    const price = document.getElementById('si-price-' + i)?.value.trim() || ''
-    const img   = document.getElementById('si-img-'   + i)?.value.trim() || ''
-    if (!name) {
-      document.getElementById('si-name-' + i)?.focus()
-      document.getElementById('si-name-' + i)?.classList.add('border-red-400','bg-red-50')
-      return null
-    }
-    return url + ' | ' + name + (price ? ' | ' + price : '') + (img ? ' | ' + img : '')
+  // Monta linhas para o backend: "url | nome | preco | imagem"
+  const lines = urls.map(u => {
+    const m = metaMap[u]
+    let line = u
+    if (m?.name)  line += ' | ' + m.name
+    if (m?.price) line += ' | ' + m.price
+    if (m?.image) line += ' | ' + m.image
+    return line
   })
 
-  const missing = lines.filter(function(l) { return l === null }).length
-  if (missing > 0) { toast('Preencha o nome dos ' + missing + ' produto(s) marcados em vermelho', 'warning'); return }
-
-  const prog = document.getElementById('si-import-progress')
-  const bar  = document.getElementById('si-import-bar')
-  const txt  = document.getElementById('si-import-txt')
-  const btn  = document.getElementById('si-save-btn')
-  if (prog) prog.classList.remove('hidden')
-  if (btn)  { btn.disabled = true; btn.textContent = 'Salvando...' }
-
-  let pct = 0
-  const tick = setInterval(function() {
-    pct = Math.min(pct + 12, 88)
-    if (bar) bar.style.width = pct + '%'
-  }, 200)
+  // Salva tudo no banco
+  if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> Salvando no banco...' }
 
   const data = await api('POST', '/admin/api/stores/' + storeId + '/import-links', { links: lines.join('\n') })
 
-  clearInterval(tick)
-  if (bar) bar.style.width = '100%'
-  if (txt) txt.textContent = data?.ok ? 'Concluido!' : 'Erro'
-  setTimeout(function() { if (prog) prog.classList.add('hidden') }, 1200)
-
-  const resEl = document.getElementById('si-import-result')
-  if (resEl && data) { resEl.classList.remove('hidden'); siRenderResult(data, resEl) }
+  // Resultado
+  const resEl = document.getElementById('si-result-area')
+  if (resEl && data) siRenderResult(data, resEl)
 
   if (data?.ok) {
-    toast('\u2713 ' + data.imported + ' produto(s) salvos em ' + data.store_name + '!', 'success')
-    if (btn) { btn.textContent = '\u2713 Salvo!'; btn.className = 'w-full py-2.5 rounded-xl bg-green-600 text-white text-sm font-bold' }
+    toast('\u2713 ' + data.imported + ' produto(s) importados em ' + data.store_name + '!', 'success')
+    if (btn) {
+      btn.disabled = false
+      btn.className = 'w-full py-3 rounded-xl bg-green-600 text-white text-sm font-bold mt-2'
+      btn.innerHTML = '\u2713 ' + data.imported + ' produto(s) salvos! Importar mais'
+      btn.onclick = function() { document.getElementById('si-textarea').value=''; siCountLinks(); siLiveArea(); btn.innerHTML='&#128640; Importar Automaticamente'; btn.onclick=function(){siImportAuto(storeId)} }
+    }
   } else {
-    toast(data?.error || 'Erro ao importar', 'error')
-    if (btn) { btn.disabled = false; btn.textContent = 'Tentar Novamente' }
+    toast(data?.error || 'Erro ao salvar', 'error')
+    if (btn) {
+      btn.disabled = false
+      btn.className = 'w-full py-3 rounded-xl bg-red-600 text-white text-sm font-bold mt-2'
+      btn.innerHTML = '&#9888; Erro \u2014 Tentar novamente'
+      btn.onclick = function() { siImportAuto(storeId) }
+    }
   }
+}
+
+// Renderiza cards skeleton para cada URL
+function siLiveCards(urls) {
+  return '<div class="space-y-2 mb-3" id="si-cards-wrap">' +
+    urls.map(function(url, i) {
+      return '<div id="si-card-' + i + '" class="flex items-center gap-3 p-2.5 rounded-xl border border-slate-100 bg-white">' +
+        '<div id="si-card-img-' + i + '" class="w-11 h-11 rounded-lg bg-slate-100 flex-shrink-0 flex items-center justify-center overflow-hidden">' +
+          '<svg class="w-5 h-5 animate-spin text-indigo-300" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>' +
+        '</div>' +
+        '<div class="flex-1 min-w-0">' +
+          '<div id="si-card-name-' + i + '" class="h-3 bg-slate-100 rounded animate-pulse w-3/4 mb-1"></div>' +
+          '<div class="text-xs font-mono text-slate-400 truncate">' + url + '</div>' +
+        '</div>' +
+        '<div id="si-card-price-' + i + '" class="text-xs text-slate-300 flex-shrink-0">...</div>' +
+      '</div>'
+    }).join('') +
+  '</div>'
+}
+
+// Atualiza um card com os dados retornados pelo scraper
+function siUpdateCard(i, url, meta) {
+  const imgEl   = document.getElementById('si-card-img-'   + i)
+  const nameEl  = document.getElementById('si-card-name-'  + i)
+  const priceEl = document.getElementById('si-card-price-' + i)
+
+  if (meta && meta.name) {
+    if (imgEl) {
+      imgEl.innerHTML = meta.image
+        ? '<img src="' + meta.image + '" class="w-11 h-11 object-cover rounded-lg" onerror="this.parentElement.innerHTML=\'&#128722;\'">'
+        : '<span class="text-xl">&#128722;</span>'
+    }
+    if (nameEl) {
+      nameEl.className = 'text-xs font-semibold text-slate-700 truncate'
+      nameEl.textContent = meta.name
+    }
+    if (priceEl) {
+      priceEl.className = meta.price ? 'text-xs font-bold text-green-700 flex-shrink-0' : 'text-xs text-slate-400 flex-shrink-0'
+      priceEl.textContent = meta.price ? 'R$ ' + parseFloat(meta.price).toFixed(2).replace('.',',') : 'sem pre\u00e7o'
+    }
+    // Borda verde no card
+    const card = document.getElementById('si-card-' + i)
+    if (card) card.className = 'flex items-center gap-3 p-2.5 rounded-xl border border-green-200 bg-green-50'
+  } else {
+    // Falhou — avisa usuário
+    if (imgEl)   imgEl.innerHTML   = '<span class="text-lg">&#10067;</span>'
+    if (nameEl)  { nameEl.className = 'text-xs text-amber-600 font-semibold'; nameEl.textContent = 'N\u00e3o encontrado automaticamente' }
+    if (priceEl) { priceEl.className = 'text-xs text-amber-500 flex-shrink-0'; priceEl.textContent = 'manual' }
+    const card = document.getElementById('si-card-' + i)
+    if (card) card.className = 'flex items-center gap-3 p-2.5 rounded-xl border border-amber-200 bg-amber-50'
+  }
+}
+
+function siLiveArea() {
+  const el = document.getElementById('si-live-area')
+  if (el) el.innerHTML = ''
+}
+
+function siRenderResult(data, container) {
+  if (!data) return
+  const ok   = data.imported || 0
+  const skip = data.skipped  || 0
+  const err  = data.errors   || 0
+  let html = '<div class="grid grid-cols-3 gap-2 mb-3 mt-2">' +
+    '<div class="bg-green-50 border border-green-100 rounded-xl p-3 text-center">' +
+      '<div class="text-2xl font-black text-green-700">' + ok + '</div>' +
+      '<div class="text-xs text-green-600 mt-0.5 font-medium">Importados</div></div>' +
+    '<div class="bg-blue-50 border border-blue-100 rounded-xl p-3 text-center">' +
+      '<div class="text-2xl font-black text-blue-700">' + skip + '</div>' +
+      '<div class="text-xs text-blue-600 mt-0.5 font-medium">Atualizados</div></div>' +
+    '<div class="bg-red-50 border border-red-100 rounded-xl p-3 text-center">' +
+      '<div class="text-2xl font-black text-red-700">' + err + '</div>' +
+      '<div class="text-xs text-red-600 mt-0.5 font-medium">Erros</div></div>' +
+  '</div>'
+  ;(data.results || []).slice(0, 20).forEach(function(r) {
+    const icon  = r.status==='importado' ? '\u2713' : r.status==='atualizado' ? '\u21bb' : '\u2717'
+    const color = r.status==='importado' ? 'text-green-600' : r.status==='atualizado' ? 'text-blue-500' : 'text-red-500'
+    const thumb = r.image_url
+      ? '<img src="'+r.image_url+'" class="w-8 h-8 rounded-lg object-cover flex-shrink-0 border border-slate-100" onerror="this.style.display=\'none\'">'
+      : '<div class="w-8 h-8 rounded-lg bg-slate-100 flex-shrink-0 flex items-center justify-center text-sm">&#128722;</div>'
+    html += '<div class="flex items-center gap-2 py-1.5 border-b border-slate-50 text-xs">' +
+      thumb +
+      '<span class="' + color + ' text-base font-bold flex-shrink-0">' + icon + '</span>' +
+      '<div class="flex-1 min-w-0">' +
+        '<div class="font-medium text-slate-700 truncate">' + (r.name || r.url || '') + '</div>' +
+        (r.price > 0 ? '<div class="text-green-700 font-bold">R$ ' + parseFloat(r.price).toFixed(2).replace('.',',') + '</div>' : '') +
+      '</div>' +
+    '</div>'
+  })
+  if ((data.results||[]).length > 20) html += '<div class="text-xs text-slate-400 text-center pt-2">+ ' + ((data.results.length)-20) + ' mais...</div>'
+  container.innerHTML = html
 }
 
 function siReadCsv(input, storeId) {
@@ -906,59 +886,14 @@ function siReadCsv(input, storeId) {
       return l.split(sep)[0].replace(/^["']|["']$/g,'').trim()
     }).filter(function(u) { return u.startsWith('http') })
     if (!urls.length) { toast('Nenhuma URL encontrada no arquivo', 'warning'); return }
+    // Leva para aba paste e importa automaticamente
     const ta = document.getElementById('si-textarea')
     if (ta) ta.value = urls.join('\n')
     siTab('paste')
     siCountLinks()
-    siParseLinks(storeId)
-    // Pre-preenche nome/preco/img do CSV apos render (espera fetch terminar)
-    setTimeout(function() {
-      data.forEach(function(l, i) {
-        const sep   = l.includes(';') ? ';' : ','
-        const parts = l.split(sep).map(function(p) { return p.replace(/^["']|["']$/g,'').trim() })
-        const nEl = document.getElementById('si-name-'  + i)
-        const pEl = document.getElementById('si-price-' + i)
-        const iEl = document.getElementById('si-img-'   + i)
-        if (parts[1] && nEl && !nEl.value) nEl.value = parts[1]
-        if (parts[2] && pEl && !pEl.value) pEl.value = parts[2].replace(/[^0-9.]/g,'')
-        if (parts[3] && iEl && !iEl.value) iEl.value = parts[3]
-        siUpdatePreview(i)
-      })
-    }, 3000)
+    siImportAuto(storeId)
   }
   reader.readAsText(file)
-}
-
-function siRenderResult(data, container) {
-  if (!data) return
-  const ok   = data.imported || 0
-  const skip = data.skipped  || 0
-  const err  = data.errors   || 0
-  var html = '<div class="grid grid-cols-3 gap-2 mb-3">' +
-    '<div class="bg-green-50 rounded-xl p-3 text-center">' +
-      '<div class="text-2xl font-black text-green-700">' + ok + '</div>' +
-      '<div class="text-xs text-green-600 mt-0.5">Importados</div></div>' +
-    '<div class="bg-blue-50 rounded-xl p-3 text-center">' +
-      '<div class="text-2xl font-black text-blue-700">' + skip + '</div>' +
-      '<div class="text-xs text-blue-600 mt-0.5">Atualizados</div></div>' +
-    '<div class="bg-red-50 rounded-xl p-3 text-center">' +
-      '<div class="text-2xl font-black text-red-700">' + err + '</div>' +
-      '<div class="text-xs text-red-600 mt-0.5">Erros</div></div>' +
-  '</div>'
-  ;(data.results || []).forEach(function(r) {
-    var icon  = r.status==='importado' ? '&#10003;' : r.status==='atualizado' ? '&#8635;' : '&#10007;'
-    var color = r.status==='importado' ? 'text-green-600' : r.status==='atualizado' ? 'text-blue-500' : 'text-red-500'
-    var thumb = r.image_url ? '<img src="'+r.image_url+'" class="w-8 h-8 rounded-lg object-cover flex-shrink-0 border border-slate-100">' : '<div class="w-8 h-8 rounded-lg bg-slate-100 flex-shrink-0"></div>'
-    html += '<div class="flex items-center gap-2 py-1.5 border-b border-slate-50 text-xs">' +
-      thumb +
-      '<span class="' + color + ' text-base font-bold">' + icon + '</span>' +
-      '<div class="flex-1 min-w-0">' +
-        '<div class="font-medium text-slate-700 truncate">' + (r.name || r.url) + '</div>' +
-        (r.price ? '<div class="text-green-700 font-bold">R$ ' + parseFloat(r.price).toFixed(2).replace('.',',') + '</div>' : '') +
-      '</div>' +
-    '</div>'
-  })
-  container.innerHTML = html
 }
 
 async function siLoadHistory(storeId) {
@@ -970,23 +905,22 @@ async function siLoadHistory(storeId) {
     el.innerHTML = '<div class="text-center py-10 text-slate-400 text-sm">&#128237; Nenhum link importado ainda nesta loja</div>'
     return
   }
-  var html = '<div class="text-xs text-slate-500 mb-2">' + rows.length + ' produto(s) importado(s) manualmente</div>' +
-    '<div class="space-y-2 max-h-96 overflow-y-auto">'
+  let html = '<div class="text-xs text-slate-500 mb-2">' + rows.length + ' produto(s) importado(s)</div>' +
+    '<div class="space-y-2 max-h-[420px] overflow-y-auto">'
   rows.forEach(function(r) {
-    var thumb = r.image_url
+    const thumb = r.image_url
       ? '<img src="'+r.image_url+'" class="w-12 h-12 rounded-xl object-cover flex-shrink-0 border border-slate-100" onerror="this.style.display=\'none\'">'
       : '<div class="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center flex-shrink-0 text-xl">&#128722;</div>'
-    var priceHtml = r.price > 0
-      ? '<div class="font-bold text-green-700 text-sm">R$ ' + parseFloat(r.price).toFixed(2).replace('.',',') + '</div>'
-      : '<div class="text-slate-400 text-xs">sem preco</div>'
-    html += '<div class="flex items-center gap-3 py-2 border-b border-slate-50 text-xs">' +
+    html += '<div class="flex items-center gap-3 py-2 border-b border-slate-100 text-xs">' +
       thumb +
       '<div class="flex-1 min-w-0">' +
         '<div class="font-semibold text-slate-700 truncate">' + (r.title || '&mdash;') + '</div>' +
         '<a href="' + r.affiliate_url + '" target="_blank" class="text-indigo-500 hover:underline truncate block">' + r.affiliate_url + '</a>' +
         '<div class="text-slate-400">' + fDate(r.created_at) + '</div>' +
       '</div>' +
-      '<div class="text-right flex-shrink-0">' + priceHtml + '</div>' +
+      '<div class="text-right flex-shrink-0">' +
+        (r.price > 0 ? '<div class="font-bold text-green-700">R$ ' + parseFloat(r.price).toFixed(2).replace('.',',') + '</div>' : '<div class="text-slate-400">sem pre\u00e7o</div>') +
+      '</div>' +
     '</div>'
   })
   html += '</div>'
