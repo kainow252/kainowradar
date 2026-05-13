@@ -4720,9 +4720,12 @@ admin.get('/api/awin/stats', async (c) => {
 })
 
 // ════════════════════════════════════════════════════════════════════════════
-// ██  PRICE SYNC BOT — Busca preços reais via ML API (client_credentials)
+// ██  PRICE SYNC BOT — Busca preços reais via ML API (OAuth refresh_token)
 // ════════════════════════════════════════════════════════════════════════════
-// Funciona 100% automático com os secrets ML_APP_ID + ML_SECRET do Cloudflare.
+// Estratégia de token (prioridade):
+//   1. ml_app_token no KV (access_token cacheado, dura 6h — evita refresh desnecessário)
+//   2. refresh_token no KV → gera novo access_token + salva novo refresh_token no KV
+//   3. client_credentials como último fallback (acesso público limitado)
 // Usa multi-get do ML: até 20 IDs por chamada → muito rápido.
 // Atualiza: best_price, image_url, offer (price + in_stock), offer_count.
 // Auto-triggered pela homepage a cada 6h via waitUntil (sem cron externo).
@@ -4733,18 +4736,49 @@ const PRICE_SYNC_PUB_ID    = 'cfegdhabc31955'
 const PRICE_SYNC_MATT_TOOL = '38524122'
 const PRICE_SYNC_STORE_ID  = 3   // Mercado Livre store_id no banco
 
-// Helper interno: obtém token ML via client_credentials (cacheado no KV por 5h)
+// Helper interno: obtém token ML válido — prioriza refresh_token OAuth do usuário
 async function getPriceSyncToken(env: any): Promise<string | null> {
   const CACHE  = env.CACHE as KVNamespace | undefined
   const appId  = (env.ML_APP_ID  as string) || '3098423019766450'
   const secret = (env.ML_SECRET  as string) || ''
   if (!secret) return null
 
-  // 1. Tenta cache KV
+  // 1. Tenta access_token cacheado no KV (evita refresh desnecessário)
   const cached = await CACHE?.get('ml_app_token').catch(() => null)
   if (cached) return cached
 
-  // 2. Gera novo token via client_credentials
+  // 2. Tenta refresh_token OAuth do usuário (armazenado no KV pela rota /ml/callback)
+  const refreshToken = await CACHE?.get('ml_refresh_token').catch(() => null)
+  if (refreshToken) {
+    try {
+      const res = await fetch(`${PRICE_SYNC_ML_API}/oauth/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type:    'refresh_token',
+          client_id:     appId,
+          client_secret: secret,
+          refresh_token: refreshToken,
+        }),
+      })
+      if (res.ok) {
+        const td: any = await res.json()
+        if (td.access_token) {
+          // Cacheia access_token por 5h (token dura 6h no ML)
+          await CACHE?.put('ml_app_token', td.access_token, { expirationTtl: 18000 }).catch(() => {})
+          // Salva novo refresh_token se vier na resposta (rotação automática)
+          if (td.refresh_token) {
+            await CACHE?.put('ml_refresh_token', td.refresh_token, { expirationTtl: 15552000 }).catch(() => {})
+          }
+          return td.access_token
+        }
+      }
+    } catch {
+      // fallback para client_credentials abaixo
+    }
+  }
+
+  // 3. Fallback: client_credentials (acesso público — menos permissões)
   try {
     const res = await fetch(`${PRICE_SYNC_ML_API}/oauth/token`, {
       method: 'POST',
@@ -4758,7 +4792,7 @@ async function getPriceSyncToken(env: any): Promise<string | null> {
     if (!res.ok) return null
     const td: any = await res.json()
     if (!td.access_token) return null
-    // Cacheia por 5h (token dura 6h no ML)
+    // Cacheia por 5h
     await CACHE?.put('ml_app_token', td.access_token, { expirationTtl: 18000 }).catch(() => {})
     return td.access_token
   } catch {
@@ -4766,16 +4800,45 @@ async function getPriceSyncToken(env: any): Promise<string | null> {
   }
 }
 
+// GET /admin/api/price-sync/diagnose
+// Testa a chamada ML direto do Worker (para debug de 403 por IP/região)
+admin.get('/api/price-sync/diagnose', async (c) => {
+  const token = await getPriceSyncToken(c.env)
+  if (!token) return c.json({ ok: false, error: 'Sem token' }, 400)
+
+  const headers = { 'Authorization': `Bearer ${token}` }
+
+  // Teste 1: item individual
+  const r1 = await fetch('https://api.mercadolibre.com/items/MLB2766771378?attributes=id,title,price,status', { headers })
+  const d1: any = await r1.json()
+
+  // Teste 2: multi-get
+  const r2 = await fetch('https://api.mercadolibre.com/items?ids=MLB2766771378,MLB4051868977&attributes=id,title,price,status', { headers })
+  const d2: any = await r2.json()
+
+  // Teste 3: search público
+  const r3 = await fetch('https://api.mercadolibre.com/sites/MLB/search?q=creatina+1kg&limit=2', { headers })
+  const d3: any = await r3.json()
+
+  return c.json({
+    token_prefix: token.substring(0, 30) + '...',
+    test1_individual: { status: r1.status, id: d1?.id, price: d1?.price, error: d1?.error },
+    test2_multiget:   { status: r2.status, is_array: Array.isArray(d2), first_code: Array.isArray(d2) ? d2[0]?.code : null, error: d2?.error },
+    test3_search:     { status: r3.status, total: d3?.paging?.total, error: d3?.error, first_id: d3?.results?.[0]?.id },
+  })
+})
+
 // POST /admin/api/price-sync/run
-// Busca preços reais de todos os produtos ML e atualiza o banco
+// Busca preços via /products/{id}/items — funciona de IPs externos (não usa /items bloqueado)
+// Fluxo: ml_item_id → /products/search por item_id → /products/{prod_id}/items → preço mínimo
 // Parâmetros body: { limit?: number (default 60), force?: bool }
 admin.post('/api/price-sync/run', async (c) => {
   const { DB, CACHE } = c.env
   const body: any = await c.req.json().catch(() => ({}))
   const LIMIT = Math.min(Math.max(parseInt(body.limit) || 60, 1), 200)
-  const FORCE = !!body.force  // força mesmo que synced recentemente
+  const FORCE = !!body.force
 
-  // Throttle: só roda se último sync foi há mais de 10min (evita spam)
+  // Throttle: só roda se último sync foi há mais de 10min
   if (!FORCE) {
     const lastRun = await (CACHE as KVNamespace | undefined)?.get('price_sync_last_run').catch(() => null)
     if (lastRun) {
@@ -4791,8 +4854,7 @@ admin.post('/api/price-sync/run', async (c) => {
     return c.json({ ok: false, error: 'Sem token ML. Configure ML_APP_ID e ML_SECRET no Cloudflare.' }, 400)
   }
 
-  // Busca produtos com ml_item_id — inclui TODOS (ativos e inativos)
-  // para que produtos desativados indevidamente possam ser reativados
+  // Busca produtos com ml_item_id — inclui TODOS (ativos e inativos) para reativar os indevidos
   const { results: products } = await DB.prepare(`
     SELECT id, name, ml_item_id, best_price, image_url, affiliate_url, is_active
     FROM products
@@ -4805,129 +4867,171 @@ admin.post('/api/price-sync/run', async (c) => {
     return c.json({ ok: true, updated: 0, errors: 0, message: 'Nenhum produto com ml_item_id encontrado.' })
   }
 
-  const headers = {
-    'Authorization': `Bearer ${token}`,
-    'User-Agent': 'KainowRadar/1.0',
-  }
+  const headers = { 'Authorization': `Bearer ${token}` }
 
   let updated = 0, unchanged = 0, errors = 0, inactived = 0
   const errorList: string[] = []
 
-  // Processa em lotes de 20 (limite do multi-get do ML)
-  const BATCH = 20
+  // Processa em paralelo (lotes de 10 para não sobrecarregar)
+  const BATCH = 10
   for (let i = 0; i < products.length; i += BATCH) {
     const batch = products.slice(i, i + BATCH)
-    const ids   = batch.map((p: any) => p.ml_item_id).join(',')
 
-    try {
-      const res = await fetch(
-        `${PRICE_SYNC_ML_API}/items?ids=${ids}&attributes=id,title,price,thumbnail,permalink,status,available_quantity,condition`,
-        { headers, signal: AbortSignal.timeout(15000) }
-      )
-      if (!res.ok) {
-        errors += batch.length
-        errorList.push(`Batch ${i/BATCH+1}: HTTP ${res.status}`)
+    const batchResults = await Promise.allSettled(
+      batch.map(async (product: any) => {
+        const mlItemId = product.ml_item_id  // ex: "MLB4311056809"
+
+        // Estratégia: busca o catalog_product_id via /items/{id}
+        // Se /items retornar 403 (bloqueio geo), tenta via /products?item_id=
+        // Se também falhar, usa /products/{mlItemId}/items diretamente como fallback
+        //
+        // NOTA: ml_item_id pode ser um item (MLB123...) OU um product (MLB123... sem variações)
+        // /products/{id}/items funciona para PRODUCT IDs — tenta direto primeiro
+
+        let price: number | null = null
+        let image: string | null = product.image_url
+        let affUrl: string | null = product.affiliate_url
+        let itemIdForOffer = mlItemId
+
+        // Tenta /products/{mlItemId}/items — funciona se ml_item_id é um catalog product id
+        try {
+          const prodItemsRes = await fetch(
+            `${PRICE_SYNC_ML_API}/products/${mlItemId}/items?limit=5`,
+            { headers, signal: AbortSignal.timeout(8000) }
+          )
+          if (prodItemsRes.ok) {
+            const prodItemsData: any = await prodItemsRes.json()
+            const items = (prodItemsData.results || []).filter((it: any) => it.price && it.price > 0)
+            if (items.length) {
+              // Menor preço
+              const best = items.reduce((a: any, b: any) => (a.price <= b.price ? a : b))
+              price = best.price
+              itemIdForOffer = best.item_id || mlItemId
+              // Monta link afiliado com o item_id real
+              affUrl = `https://produto.mercadolivre.com.br/${itemIdForOffer.replace('MLB', 'MLB-')}?matt_word=${PRICE_SYNC_PUB_ID}&matt_tool=${PRICE_SYNC_MATT_TOOL}&forceInApp=true`
+            }
+          }
+        } catch { /* ignora, tenta próximo fluxo */ }
+
+        // Se não obteve preço ainda, tenta /items/{mlItemId} (pode funcionar para itens específicos)
+        if (price === null) {
+          try {
+            const itemRes = await fetch(
+              `${PRICE_SYNC_ML_API}/items/${mlItemId}?attributes=id,price,thumbnail,permalink,status,available_quantity`,
+              { headers, signal: AbortSignal.timeout(8000) }
+            )
+            if (itemRes.ok) {
+              const item: any = await itemRes.json()
+              if (item?.status === 'closed') {
+                // Item encerrado — desativa
+                return { action: 'inactivate', product }
+              }
+              if (item?.price) {
+                price = item.price
+                image = item.thumbnail || image
+                const plink = item.permalink
+                affUrl = plink
+                  ? `${plink}?matt_word=${PRICE_SYNC_PUB_ID}&matt_tool=${PRICE_SYNC_MATT_TOOL}&forceInApp=true`
+                  : affUrl
+              }
+            }
+          } catch { /* ignora */ }
+        }
+
+        if (price === null) {
+          return { action: 'error', product, reason: 'sem preço nos endpoints disponíveis' }
+        }
+
+        return { action: 'update', product, price, image, affUrl, itemIdForOffer }
+      })
+    )
+
+    // Aplica resultados no banco
+    for (const result of batchResults) {
+      if (result.status === 'rejected') {
+        errors++
+        errorList.push(`${result.reason}`)
+        continue
+      }
+      const { action, product, price, image, affUrl, itemIdForOffer, reason } = result.value as any
+
+      if (action === 'inactivate') {
+        await DB.prepare(`UPDATE products SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+          .bind(product.id).run()
+        inactived++
         continue
       }
 
-      const data: any[] = await res.json()
-
-      for (const entry of data) {
-        // Verifica se a entrada do multi-get foi bem-sucedida (código HTTP 200)
-        const entryCode = entry.code ?? entry.status_code ?? 200
-        const item      = entry.body
-        const mlId      = item?.id
-        const product   = batch.find((p: any) => p.ml_item_id === mlId)
-        if (!product) continue
-
-        // Só desativa se a API confirmar EXPLICITAMENTE que o item foi encerrado
-        // (status 'closed') E com HTTP 200. Qualquer outro caso (erro HTTP, status
-        // desconhecido, ausência de status) NÃO desativa para evitar perdas em massa.
-        const CLOSED_STATUSES = ['closed']
-        if (entryCode === 200 && item?.status && CLOSED_STATUSES.includes(item.status)) {
-          await DB.prepare(`UPDATE products SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-            .bind(product.id).run()
-          inactived++
-          continue
-        }
-
-        // Se a entrada retornou erro HTTP ou item sem preço — conta como erro, não desativa
-        if (entryCode !== 200 || !item?.id) {
-          errors++
-          errorList.push(`${product.ml_item_id}: HTTP ${entryCode} na entrada`)
-          continue
-        }
-
-        const price     = item.price        ?? null
-        const inStock   = (item.available_quantity ?? 0) > 0 ? 1 : 0
-        const image     = item.thumbnail    || product.image_url || null
-        const permalink = item.permalink    || null
-        const affUrl    = permalink
-          ? `${permalink}?matt_word=${PRICE_SYNC_PUB_ID}&matt_tool=${PRICE_SYNC_MATT_TOOL}&forceInApp=true`
-          : product.affiliate_url
-
-        if (price === null) {
-          errors++
-          errorList.push(`${mlId}: sem preço na resposta`)
-          continue
-        }
-
-        // Atualiza produto — também REATIVA se estava desativado indevidamente
-        await DB.prepare(`
-          UPDATE products SET
-            best_price          = ?,
-            best_store_id       = ${PRICE_SYNC_STORE_ID},
-            image_url           = COALESCE(?, image_url),
-            affiliate_url       = COALESCE(?, affiliate_url),
-            affiliate_updated_at = CURRENT_TIMESTAMP,
-            updated_at          = CURRENT_TIMESTAMP,
-            is_active           = 1
-          WHERE id = ?
-        `).bind(price, image, affUrl, product.id).run()
-
-        // Upsert offer
-        const existingOffer = await DB.prepare(
-          `SELECT id FROM offers WHERE product_id = ? AND store_id = ${PRICE_SYNC_STORE_ID} LIMIT 1`
-        ).bind(product.id).first<{ id: number }>()
-
-        if (existingOffer) {
-          await DB.prepare(`
-            UPDATE offers SET
-              price        = ?,
-              in_stock     = ?,
-              image_url    = COALESCE(?, image_url),
-              affiliate_url = COALESCE(?, affiliate_url),
-              last_updated = CURRENT_TIMESTAMP,
-              is_active    = 1
-            WHERE id = ?
-          `).bind(price, inStock, image, affUrl, existingOffer.id).run()
-        } else {
-          await DB.prepare(`
-            INSERT INTO offers
-              (product_id, store_id, external_id, title, price, in_stock,
-               image_url, affiliate_url, source, is_active, last_updated)
-            VALUES (?, ${PRICE_SYNC_STORE_ID}, ?, ?, ?, ?, ?, ?, 'mercadolivre', 1, CURRENT_TIMESTAMP)
-          `).bind(product.id, mlId, product.name, price, inStock, image, affUrl).run()
-        }
-
-        // Atualiza offer_count
-        await DB.prepare(`
-          UPDATE products SET
-            offer_count = (SELECT COUNT(*) FROM offers WHERE product_id = ? AND is_active = 1),
-            best_price  = (SELECT MIN(price) FROM offers WHERE product_id = ? AND is_active = 1 AND in_stock = 1 AND price > 0)
-          WHERE id = ?
-        `).bind(product.id, product.id, product.id).run()
-
-        updated++
+      if (action === 'error') {
+        errors++
+        errorList.push(`${product.ml_item_id}: ${reason}`)
+        continue
       }
-    } catch (e: any) {
-      errors += batch.length
-      errorList.push(`Batch ${i/BATCH+1}: ${e.message}`)
+
+      // action === 'update'
+      // Verifica se preço mudou
+      if (product.best_price === price && product.is_active === 1) {
+        unchanged++
+        // Mesmo sem mudar o preço, garante que o link afiliado está atualizado
+        if (affUrl && affUrl !== product.affiliate_url) {
+          await DB.prepare(`UPDATE products SET affiliate_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+            .bind(affUrl, product.id).run()
+        }
+        continue
+      }
+
+      // Atualiza produto — também REATIVA se estava desativado indevidamente
+      await DB.prepare(`
+        UPDATE products SET
+          best_price           = ?,
+          best_store_id        = ${PRICE_SYNC_STORE_ID},
+          image_url            = COALESCE(?, image_url),
+          affiliate_url        = COALESCE(?, affiliate_url),
+          affiliate_updated_at = CURRENT_TIMESTAMP,
+          updated_at           = CURRENT_TIMESTAMP,
+          is_active            = 1
+        WHERE id = ?
+      `).bind(price, image, affUrl, product.id).run()
+
+      // Upsert offer
+      const existingOffer = await DB.prepare(
+        `SELECT id FROM offers WHERE product_id = ? AND store_id = ${PRICE_SYNC_STORE_ID} LIMIT 1`
+      ).bind(product.id).first<{ id: number }>()
+
+      if (existingOffer) {
+        await DB.prepare(`
+          UPDATE offers SET
+            price         = ?,
+            in_stock      = 1,
+            image_url     = COALESCE(?, image_url),
+            affiliate_url = COALESCE(?, affiliate_url),
+            last_updated  = CURRENT_TIMESTAMP,
+            is_active     = 1
+          WHERE id = ?
+        `).bind(price, image, affUrl, existingOffer.id).run()
+      } else {
+        await DB.prepare(`
+          INSERT INTO offers
+            (product_id, store_id, external_id, title, price, in_stock,
+             image_url, affiliate_url, source, is_active, last_updated)
+          VALUES (?, ${PRICE_SYNC_STORE_ID}, ?, ?, ?, 1, ?, ?, 'mercadolivre', 1, CURRENT_TIMESTAMP)
+        `).bind(product.id, itemIdForOffer, product.name, price, image, affUrl).run()
+      }
+
+      // Atualiza offer_count e best_price real
+      await DB.prepare(`
+        UPDATE products SET
+          offer_count = (SELECT COUNT(*) FROM offers WHERE product_id = ? AND is_active = 1),
+          best_price  = (SELECT MIN(price) FROM offers WHERE product_id = ? AND is_active = 1 AND in_stock = 1 AND price > 0)
+        WHERE id = ?
+      `).bind(product.id, product.id, product.id).run()
+
+      updated++
     }
 
-    // Pausa entre lotes para não sobrecarregar a API
+    // Pausa entre lotes
     if (i + BATCH < products.length) {
-      await new Promise(r => setTimeout(r, 300))
+      await new Promise(r => setTimeout(r, 500))
     }
   }
 
@@ -4952,9 +5056,8 @@ admin.post('/api/price-sync/run', async (c) => {
     unchanged,
     inactived,
     errors,
-    errors_detail: errorList.slice(0, 10),
-    token_source:  token ? 'client_credentials' : 'none',
-    message: `✅ ${updated} preços atualizados · ${inactived} desativados · ${errors} erros`,
+    errors_detail: errorList.slice(0, 15),
+    message: `✅ ${updated} preços atualizados · ${unchanged} sem mudança · ${inactived} desativados · ${errors} erros`,
   })
 })
 
@@ -5007,6 +5110,259 @@ admin.get('/api/price-sync/status', async (c) => {
   })
 })
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ML HIGHLIGHTS IMPORT — importa best-sellers do ML por categoria
+// Fluxo: /highlights → /products/{id} (nome+thumb) → /products/{id}/items (preço)
+// Funciona de IPs externos (não usa /items nem /sites/MLB/search — ambos bloqueados)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Categorias ML Brasil mais relevantes para comparação de preços
+const ML_CATEGORIES: Record<string, string> = {
+  MLB1051:  'Celulares e Smartphones',
+  MLB1648:  'Computadores e Acessórios',
+  MLB1039:  'Eletrônicos',
+  MLB1000:  'Eletrônicos, Áudio e Vídeo',
+  MLB1276:  'Esporte e Lazer',
+  MLB1430:  'Moda',
+  MLB1499:  'Saúde e Beleza',
+  MLB1574:  'Bebês',
+  MLB1384:  'Ferramentas',
+  MLB1367:  'Casa, Móveis e Decoração',
+  MLB1459:  'Eletrodomésticos',
+  MLB3937:  'Games',
+  MLB1953:  'Suplementos e Vitaminas',
+  MLB1196:  'Livros, Revistas e Comics',
+  MLB1182:  'Brinquedos e Hobbies',
+}
+
+// GET /admin/api/ml-highlights/categories
+// Lista categorias disponíveis para importação
+admin.get('/api/ml-highlights/categories', async (c) => {
+  return c.json({
+    ok: true,
+    categories: Object.entries(ML_CATEGORIES).map(([id, name]) => ({ id, name })),
+  })
+})
+
+// POST /admin/api/ml-highlights/import
+// Importa best-sellers de uma ou mais categorias ML e salva no banco com link afiliado
+// Body: { categories?: string[] (default: todas), limit_per_category?: number (default: 20), dry_run?: bool }
+admin.post('/api/ml-highlights/import', async (c) => {
+  const { DB } = c.env
+  const body: any = await c.req.json().catch(() => ({}))
+
+  const categoriesToImport: string[] = (body.categories && body.categories.length)
+    ? body.categories
+    : Object.keys(ML_CATEGORIES)
+  const LIMIT_PER_CAT = Math.min(Math.max(parseInt(body.limit_per_category) || 20, 1), 50)
+  const DRY_RUN = !!body.dry_run
+
+  // Obtém token ML
+  const token = await getPriceSyncToken(c.env)
+  if (!token) {
+    return c.json({ ok: false, error: 'Sem token ML. Configure ML_APP_ID e ML_SECRET.' }, 400)
+  }
+
+  const headers = { 'Authorization': `Bearer ${token}` }
+
+  const stats = {
+    categories_processed: 0,
+    products_found: 0,
+    products_inserted: 0,
+    products_updated: 0,
+    products_skipped: 0,
+    errors: 0,
+    error_list: [] as string[],
+    imported: [] as any[],
+  }
+
+  for (const catId of categoriesToImport) {
+    const catName = ML_CATEGORIES[catId] || catId
+    try {
+      // 1. Busca highlights (best-sellers) da categoria
+      const hlRes = await fetch(
+        `${PRICE_SYNC_ML_API}/highlights/MLB/category/${catId}`,
+        { headers, signal: AbortSignal.timeout(10000) }
+      )
+      if (!hlRes.ok) {
+        stats.errors++
+        stats.error_list.push(`${catId}: highlights HTTP ${hlRes.status}`)
+        continue
+      }
+      const hlData: any = await hlRes.json()
+      const productIds = (hlData.content || [])
+        .filter((x: any) => x.type === 'PRODUCT')
+        .slice(0, LIMIT_PER_CAT)
+        .map((x: any) => x.id)
+
+      if (!productIds.length) {
+        stats.error_list.push(`${catId}: nenhum produto PRODUCT nos highlights`)
+        continue
+      }
+
+      stats.categories_processed++
+
+      // 2. Para cada produto: busca detalhes + itens (preço) SEQUENCIALMENTE
+      // Cloudflare Workers tem limite de 50 subrequests por invocação.
+      // 2 fetches por produto × 10 produtos = 20 subrequests por categoria — seguro.
+      const results: { status: 'fulfilled' | 'rejected'; value?: any; reason?: any }[] = []
+      for (const mlProdId of productIds) {
+        try {
+          // Busca produto (nome, thumbnail)
+          const prodRes = await fetch(`${PRICE_SYNC_ML_API}/products/${mlProdId}`, { headers, signal: AbortSignal.timeout(8000) })
+          if (!prodRes.ok) {
+            results.push({ status: 'fulfilled', value: { ok: false, reason: `prod HTTP ${prodRes.status}`, ml_product_id: mlProdId } })
+            continue
+          }
+          const prod: any = await prodRes.json()
+
+          // Busca itens (preço mínimo)
+          const itemsRes = await fetch(`${PRICE_SYNC_ML_API}/products/${mlProdId}/items?limit=3`, { headers, signal: AbortSignal.timeout(8000) })
+
+          let bestItem: any = null
+          if (itemsRes.ok) {
+            const itemsData: any = await itemsRes.json()
+            const items = (itemsData.results || []).filter((it: any) => it.price && it.price > 0)
+            if (items.length) bestItem = items.reduce((a: any, b: any) => (a.price <= b.price ? a : b))
+          }
+
+          const name      = prod.name || prod.family_name || ''
+          const thumbnail = (prod.pictures?.[0]?.url || '').replace('-F.jpg', '-O.jpg')
+          const permalink = prod.permalink || ''
+          const mlItemId  = bestItem?.item_id || null
+          const price     = bestItem?.price   || null
+
+          if (!name) {
+            results.push({ status: 'fulfilled', value: { ok: false, reason: 'sem nome', ml_product_id: mlProdId } })
+            continue
+          }
+
+          const affUrl = mlItemId
+            ? `https://produto.mercadolivre.com.br/${mlItemId.replace('MLB', 'MLB-')}?matt_word=${PRICE_SYNC_PUB_ID}&matt_tool=${PRICE_SYNC_MATT_TOOL}&forceInApp=true`
+            : permalink
+              ? `${permalink}?matt_word=${PRICE_SYNC_PUB_ID}&matt_tool=${PRICE_SYNC_MATT_TOOL}&forceInApp=true`
+              : null
+
+          results.push({ status: 'fulfilled', value: { ok: true, ml_product_id: mlProdId, ml_item_id: mlItemId, name, thumbnail, price, affUrl, catId, catName } })
+        } catch (e: any) {
+          results.push({ status: 'fulfilled', value: { ok: false, reason: e.message, ml_product_id: mlProdId } })
+        }
+      }
+
+      // 3. Salva no banco
+      for (const r of results) {
+        stats.products_found++
+        if (r.status === 'rejected' || !r.value?.ok) {
+          stats.errors++
+          stats.error_list.push(`${catId}/${r.value?.ml_product_id || '?'}: ${r.value?.reason || 'erro desconhecido'}`)
+          continue
+        }
+        const p = r.value
+
+        if (DRY_RUN) {
+          stats.imported.push({ name: p.name.substring(0, 60), price: p.price, ml_item_id: p.ml_item_id })
+          stats.products_skipped++
+          continue
+        }
+
+        try {
+          // Verifica se já existe pelo ml_item_id ou nome similar
+          const existing = p.ml_item_id
+            ? await DB.prepare(`SELECT id, best_price FROM products WHERE ml_item_id = ? LIMIT 1`)
+                .bind(p.ml_item_id).first<any>()
+            : null
+
+          if (existing) {
+            // Atualiza preço e link se mudou
+            await DB.prepare(`
+              UPDATE products SET
+                best_price           = COALESCE(?, best_price),
+                best_store_id        = ${PRICE_SYNC_STORE_ID},
+                image_url            = COALESCE(?, image_url),
+                affiliate_url        = COALESCE(?, affiliate_url),
+                affiliate_updated_at = CURRENT_TIMESTAMP,
+                updated_at           = CURRENT_TIMESTAMP,
+                is_active            = 1
+              WHERE id = ?
+            `).bind(p.price, p.thumbnail, p.affUrl, existing.id).run()
+            stats.products_updated++
+            stats.imported.push({ action: 'updated', name: p.name.substring(0, 50), price: p.price })
+          } else {
+            // Insere novo produto
+            // Gera slug a partir do nome
+            const slug = p.name
+              .toLowerCase()
+              .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+              .replace(/[^a-z0-9]+/g, '-')
+              .replace(/^-|-$/g, '')
+              .substring(0, 100)
+              + '-' + p.ml_product_id.toLowerCase()
+
+            await DB.prepare(`
+              INSERT INTO products
+                (name, slug, ml_item_id, best_price, best_store_id,
+                 image_url, affiliate_url, affiliate_updated_at,
+                 is_active, offer_count, updated_at, created_at)
+              VALUES (?, ?, ?, ?, ${PRICE_SYNC_STORE_ID}, ?, ?, CURRENT_TIMESTAMP,
+                      1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            `).bind(
+              p.name,
+              slug,
+              p.ml_item_id || p.ml_product_id,
+              p.price,
+              p.thumbnail,
+              p.affUrl,
+              p.price ? 1 : 0,
+            ).run()
+
+            // Cria offer se tiver preço
+            if (p.price && p.ml_item_id) {
+              const newProd = await DB.prepare(`SELECT id FROM products WHERE slug = ? LIMIT 1`)
+                .bind(slug).first<{ id: number }>()
+              if (newProd) {
+                await DB.prepare(`
+                  INSERT INTO offers
+                    (product_id, store_id, external_id, title, price, in_stock,
+                     image_url, affiliate_url, source, is_active, last_updated)
+                  VALUES (?, ${PRICE_SYNC_STORE_ID}, ?, ?, ?, 1, ?, ?, 'mercadolivre', 1, CURRENT_TIMESTAMP)
+                `).bind(newProd.id, p.ml_item_id, p.name, p.price, p.thumbnail, p.affUrl).run()
+
+                await DB.prepare(`UPDATE products SET offer_count = 1 WHERE id = ?`).bind(newProd.id).run()
+              }
+            }
+
+            stats.products_inserted++
+            stats.imported.push({ action: 'inserted', name: p.name.substring(0, 50), price: p.price, ml_item_id: p.ml_item_id })
+          }
+        } catch (e: any) {
+          stats.errors++
+          stats.error_list.push(`DB ${p.ml_item_id}: ${e.message}`)
+        }
+      }
+
+      // Pequena pausa entre categorias para não sobrecarregar a API
+      await new Promise(r => setTimeout(r, 300))
+
+    } catch (e: any) {
+      stats.errors++
+      stats.error_list.push(`${catId}: ${e.message}`)
+    }
+  }
+
+  return c.json({
+    ok: true,
+    dry_run: DRY_RUN,
+    categories_processed: stats.categories_processed,
+    products_found:       stats.products_found,
+    products_inserted:    stats.products_inserted,
+    products_updated:     stats.products_updated,
+    products_skipped:     stats.products_skipped,
+    errors:               stats.errors,
+    error_list:           stats.error_list.slice(0, 20),
+    imported:             stats.imported.slice(0, 50),
+  })
+})
 
 // ── Página HTML do Admin (SPA) ────────────────────────────
 admin.get('*', async (c) => {

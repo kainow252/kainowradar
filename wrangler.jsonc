@@ -5,6 +5,10 @@
   "pages_build_output_dir": "./dist",
   "compatibility_flags": ["nodejs_compat"],
 
+  // Smart Placement: Cloudflare executa o Worker no datacenter mais próximo
+  // da origem das requisições de saída (ex: api.mercadolibre.com → Brasil)
+  "placement": { "mode": "smart" },
+
   "d1_databases": [
     {
       "binding": "DB",
