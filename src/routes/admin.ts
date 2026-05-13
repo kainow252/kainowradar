@@ -5381,6 +5381,127 @@ admin.post('/api/ml-highlights/import', async (c) => {
   })
 })
 
+// ══════════════════════════════════════════════════════════
+// ML LINKBUILDER BOT
+// Gera links meli.la/* chamando o endpoint interno do ML
+// O browser do usuário já tem o cookie de sessão ML → sem CORS
+// Endpoint descoberto: POST https://www.mercadolivre.com.br/afiliados/api/links
+//   body: { "url": "https://produto.mercadolivre.com.br/MLB-..." }
+//   resp: { "link": "https://meli.la/xxxxx", ... }  (quando autenticado)
+// ══════════════════════════════════════════════════════════
+
+// GET /admin/api/ml-linkbuilder/products
+// Lista produtos ativos com seus permalinks ML para o bot processar
+admin.get('/api/ml-linkbuilder/products', async (c) => {
+  const { DB } = c.env
+  const filter  = c.req.query('filter') || 'missing'   // missing | all | done
+  const page    = Math.max(1, parseInt(c.req.query('page') || '1'))
+  const perPage = Math.min(100, parseInt(c.req.query('per_page') || '50'))
+  const offset  = (page - 1) * perPage
+
+  let where = "WHERE p.is_active = 1 AND p.ml_item_id IS NOT NULL AND p.ml_item_id != ''"
+  if (filter === 'missing') {
+    where += " AND (p.affiliate_url IS NULL OR p.affiliate_url = '' OR p.affiliate_url NOT LIKE '%meli.la%')"
+  } else if (filter === 'done') {
+    where += " AND p.affiliate_url LIKE '%meli.la%'"
+  }
+
+  const { results } = await DB.prepare(`
+    SELECT p.id, p.name, p.ml_item_id, p.affiliate_url, p.best_price, p.category
+    FROM products p
+    ${where}
+    ORDER BY p.id ASC
+    LIMIT ? OFFSET ?
+  `).bind(perPage, offset).all<any>()
+
+  const count = await DB.prepare(
+    `SELECT COUNT(*) as n FROM products p ${where}`
+  ).first<any>()
+
+  // Monta permalink ML a partir do ml_item_id
+  // MLB24045332 → https://produto.mercadolivre.com.br/MLB-24045332-...
+  const products = results.map((p: any) => ({
+    ...p,
+    ml_url: `https://produto.mercadolivre.com.br/${p.ml_item_id.replace('MLB', 'MLB-')}`,
+  }))
+
+  return c.json({ results: products, total: count?.n || 0, page, per_page: perPage })
+})
+
+// PUT /admin/api/ml-linkbuilder/products/:id
+// Salva o link meli.la gerado pelo bot no banco
+admin.put('/api/ml-linkbuilder/products/:id', async (c) => {
+  const { DB } = c.env
+  const id = parseInt(c.req.param('id'))
+  if (!id) return c.json({ error: 'ID inválido' }, 400)
+
+  const body: any = await c.req.json().catch(() => ({}))
+  const { affiliate_url } = body
+
+  if (!affiliate_url || !affiliate_url.includes('meli.la')) {
+    return c.json({ error: 'affiliate_url inválida — deve conter meli.la' }, 400)
+  }
+
+  await DB.prepare(`
+    UPDATE products
+    SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(affiliate_url, id).run()
+
+  return c.json({ ok: true, id, affiliate_url })
+})
+
+// POST /admin/api/ml-linkbuilder/batch-save
+// Salva múltiplos links de uma vez (resultado do bot em lote)
+admin.post('/api/ml-linkbuilder/batch-save', async (c) => {
+  const { DB } = c.env
+  const body: any = await c.req.json().catch(() => ({}))
+  const items: Array<{ id: number; affiliate_url: string }> = body.items || []
+
+  if (!items.length) return c.json({ error: 'items[] obrigatório' }, 400)
+
+  let saved = 0
+  let errors = 0
+
+  for (const item of items) {
+    if (!item.id || !item.affiliate_url?.includes('meli.la')) {
+      errors++
+      continue
+    }
+    try {
+      await DB.prepare(`
+        UPDATE products
+        SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(item.affiliate_url, item.id).run()
+      saved++
+    } catch {
+      errors++
+    }
+  }
+
+  return c.json({ ok: true, saved, errors })
+})
+
+// GET /admin/api/ml-linkbuilder/status
+// Resumo: quantos produtos têm link meli.la vs total
+admin.get('/api/ml-linkbuilder/status', async (c) => {
+  const { DB } = c.env
+  const [total, withMeliLa, withAnyAffiliate, withMlId] = await Promise.all([
+    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1").first<any>(),
+    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND affiliate_url LIKE '%meli.la%'").first<any>(),
+    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND affiliate_url IS NOT NULL AND affiliate_url != ''").first<any>(),
+    DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND ml_item_id IS NOT NULL AND ml_item_id != ''").first<any>(),
+  ])
+  return c.json({
+    total:             total?.n         || 0,
+    with_meli_la:      withMeliLa?.n    || 0,
+    with_any_affiliate: withAnyAffiliate?.n || 0,
+    with_ml_id:        withMlId?.n      || 0,
+    missing_meli_la:   (withMlId?.n || 0) - (withMeliLa?.n || 0),
+  })
+})
+
 // ── Página HTML do Admin (SPA) ────────────────────────────
 admin.get('*', async (c) => {
   const path = new URL(c.req.url).pathname
@@ -5553,6 +5674,9 @@ function renderAdminSPA(): string {
       </div>
       <div onclick="showSection('ml-import')" class="sidebar-link" data-section="ml-import">
         <span class="text-lg">🟡</span> Importar do ML
+      </div>
+      <div onclick="showSection('ml-linkbuilder')" class="sidebar-link" data-section="ml-linkbuilder">
+        <span class="text-lg">🔗</span> ML LinkBuilder Bot
       </div>
       <div onclick="showSection('affiliate-codes')" class="sidebar-link" data-section="affiliate-codes">
         <span class="text-lg">🔗</span> Códigos Afiliados
