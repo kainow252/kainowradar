@@ -5487,14 +5487,23 @@ admin.get('/api/ml-linkbuilder/status', async (c) => {
   const userId       = await CACHE?.get('ml_user_id').catch(() => null)
   const tokenSource  = await CACHE?.get('ml_token_source').catch(() => null)
 
-  // Tenta obter token automático (client_credentials) para saber se auto-connect funciona
+  // ── Resolve token_source e auto_connected ──────────────────
+  // Prioridade: KV cache → refresh_token → client_credentials
   const appId  = (c.env as any).ML_APP_ID || '3098423019766450'
   const secret = (c.env as any).ML_SECRET  || ''
   let autoConnected = false
-  let resolvedTokenSource = tokenSource || (accessToken ? 'oauth' : 'none')
+  let resolvedTokenSource: string = tokenSource || 'none'
 
-  // Se não há token OAuth mas há secret, tenta client_credentials para confirmar auto-connect
-  if (!accessToken && !refreshToken && secret) {
+  if (accessToken) {
+    // Temos access_token no KV — origem já registrada em ml_token_source
+    resolvedTokenSource = tokenSource || 'oauth'
+    autoConnected       = tokenSource === 'client_credentials'
+  } else if (refreshToken) {
+    // Temos refresh_token OAuth — conexão via OAuth (usuário autorizou)
+    resolvedTokenSource = 'refresh'
+    autoConnected       = false
+  } else if (secret) {
+    // Sem token no KV → tenta client_credentials agora
     try {
       const res = await fetch('https://api.mercadolibre.com/oauth/token', {
         method: 'POST',
@@ -5509,21 +5518,20 @@ admin.get('/api/ml-linkbuilder/status', async (c) => {
       if (res.ok) {
         const td: any = await res.json()
         if (td.access_token) {
-          autoConnected = true
+          autoConnected       = true
           resolvedTokenSource = 'client_credentials'
-          // Salva no KV para próxima chamada ser direto do cache
           if (CACHE) {
             await CACHE.put('ml_access_token', td.access_token, { expirationTtl: td.expires_in || 21600 }).catch(() => {})
-            await CACHE.put('ml_token_source', 'client_credentials', { expirationTtl: td.expires_in || 21600 }).catch(() => {})
+            await CACHE.put('ml_token_source',  'client_credentials', { expirationTtl: td.expires_in || 21600 }).catch(() => {})
           }
         }
       }
     } catch { /* sem auto-connect */ }
-  } else if (accessToken) {
-    autoConnected = resolvedTokenSource === 'client_credentials'
   }
 
-  // Contadores
+  const isConnected = !!accessToken || !!refreshToken || autoConnected
+
+  // ── Contadores ──────────────────────────────────────────────
   const [total, withAff, withMlId, withMeliLa] = await Promise.all([
     DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1").first<any>(),
     DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND affiliate_url IS NOT NULL AND affiliate_url != ''").first<any>(),
@@ -5531,11 +5539,15 @@ admin.get('/api/ml-linkbuilder/status', async (c) => {
     DB.prepare("SELECT COUNT(*) as n FROM products WHERE is_active = 1 AND affiliate_url LIKE '%matt_word%'").first<any>(),
   ])
 
-  const pending = (withMlId?.n || 0) - (withMeliLa?.n || 0)
+  const withMlIdN   = withMlId?.n   || 0
+  const withMeliLaN = withMeliLa?.n || 0
+  // pending: produtos com ml_item_id que ainda não têm link afiliado rastreável
+  // Nunca negativo — produtos com affiliate_url mas sem ml_item_id não são "pendentes"
+  const pending = Math.max(0, withMlIdN - withMeliLaN)
 
   return c.json({
     oauth: {
-      connected:      !!accessToken || !!refreshToken || autoConnected,
+      connected:      isConnected,
       has_access:     !!accessToken || autoConnected,
       has_refresh:    !!refreshToken,
       user_id:        userId,
@@ -5544,10 +5556,10 @@ admin.get('/api/ml-linkbuilder/status', async (c) => {
       auto_connected: autoConnected,
     },
     products: {
-      total:          total?.n      || 0,
-      with_ml_id:     withMlId?.n   || 0,
-      with_affiliate: withAff?.n    || 0,
-      with_tracking:  withMeliLa?.n || 0,
+      total:          total?.n  || 0,
+      with_ml_id:     withMlIdN,
+      with_affiliate: withAff?.n || 0,
+      with_tracking:  withMeliLaN,
       pending,
     },
   })
