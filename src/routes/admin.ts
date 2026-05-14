@@ -2578,20 +2578,34 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
   }
 
   // ── Pré-processa pares: produto + link afiliado (com cfegdhabc31955)
-  // Quando 2 URLs são coladas juntas, a que tem cfegdhabc31955 é o link do botão Comprar
+  // Cenários:
+  //   A) Frontend enviou "socialUrl | Nome | Preço | Img"  → linha ÚNICA completa com /social/
+  //   B) Duas linhas separadas: linha produto + linha /social/ pura (sem |)
+  //   C) Linha normal de produto sem /social/
   interface PairItem { productUrl: string; affiliateUrl: string | null; name: string; price: number | null; image_url: string | null }
   const pairedItems: PairItem[] = []
 
   for (let i = 0; i < dataLines.length; i++) {
     const line = dataLines[i]
-    // Se esta linha tem o publisher ID → é link afiliado, associa ao produto anterior
-    if (line.includes('cfegdhabc31955') && pairedItems.length > 0 && pairedItems[pairedItems.length - 1].affiliateUrl === null) {
-      pairedItems[pairedItems.length - 1].affiliateUrl = line
-      continue
-    }
     const item = parseLine(line)
     if (!item) { continue }
-    pairedItems.push({ productUrl: item.url, affiliateUrl: null, name: item.name, price: item.price, image_url: item.image_url })
+
+    const isSocialLink = /mercadolivre\.com\.br\/social\//.test(item.url)
+
+    // Caso B: linha pura "/social/" sem nome — tenta associar ao produto anterior
+    if (isSocialLink && !item.name && pairedItems.length > 0 && pairedItems[pairedItems.length - 1].affiliateUrl === null) {
+      pairedItems[pairedItems.length - 1].affiliateUrl = item.url
+      continue
+    }
+
+    // Caso A ou C: linha completa (tem nome) — cria item normalmente
+    // Se a URL já é /social/, ela própria vira o affiliateUrl (não precisa de "par")
+    if (isSocialLink && item.name) {
+      // Linha completa com /social/ → o socialUrl É o affiliate_url
+      pairedItems.push({ productUrl: item.url, affiliateUrl: item.url, name: item.name, price: item.price, image_url: item.image_url })
+    } else {
+      pairedItems.push({ productUrl: item.url, affiliateUrl: null, name: item.name, price: item.price, image_url: item.image_url })
+    }
   }
 
   const results: any[] = []
@@ -2624,34 +2638,83 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       // 1) Cria o produto se não existir (ou cria novo se sem nome único)
       let productId: number | null = null
 
-      // ── DEDUPLICAÇÃO: checa se este link já foi importado ──────────
-      // Se temos um link /social/ (affUrl), busca por productUrl OU pelo affiliate_url atual
-      // para garantir que o /social/ sempre seja salvo
-      const searchUrl = affUrl ? productUrl : affiliateUrl
-      const existingAnyStore = await DB.prepare(
-        `SELECT o.id, o.product_id, o.title, o.store_id, o.affiliate_url, s.name as store_name
-         FROM offers o
-         LEFT JOIN stores s ON s.id = o.store_id
-         WHERE o.affiliate_url = ? OR o.affiliate_url LIKE ?
-         LIMIT 1`
-      ).bind(searchUrl, `%${searchUrl.split('?')[0].split('/').pop()}%`).first<any>()
+      // ── DEDUPLICAÇÃO: localiza offer existente com chave precisa ────────
+      // Ordem de prioridade para encontrar o produto:
+      //   1) MLB-ID na URL do produto (mais preciso)
+      //   2) ref= da URL /social/ (único por produto, serve de fingerprint)
+      //   3) URL exata sem query string (fallback genérico)
+      // NUNCA usar LIKE %cfegdhabc31955% — é o publisher_id, igual em todos os links.
+
+      // Extrai MLB-ID de qualquer URL que o tenha (produto, permalink, etc.)
+      const mlbMatchProd = productUrl.match(/MLB[\-_]?(\d+)/i)
+      const mlbMatchAff  = affiliateUrl.match(/MLB[\-_]?(\d+)/i)
+      const mlbId = (mlbMatchProd || mlbMatchAff)?.[1] ?? null
+
+      // Extrai ref= da URL /social/ — fingerprint único por produto
+      const refMatch = affiliateUrl.match(/[?&]ref=([^&]+)/)
+      const socialRef = refMatch ? refMatch[1] : null
+
+      let existingAnyStore: any = null
+
+      if (mlbId) {
+        // Caso 1: temos MLB-ID → busca exata por MLB-XXXXXXXX (ignora formato /p/ vs direto)
+        existingAnyStore = await DB.prepare(
+          `SELECT o.id, o.product_id, o.title, o.store_id, o.affiliate_url, s.name as store_name
+           FROM offers o
+           LEFT JOIN stores s ON s.id = o.store_id
+           WHERE o.affiliate_url LIKE ? OR o.affiliate_url LIKE ?
+           LIMIT 1`
+        ).bind(`%MLB-${mlbId}%`, `%MLB${mlbId}%`).first<any>()
+      } else if (socialRef) {
+        // Caso 2: URL /social/ sem MLB visível → usa ref= como fingerprint único
+        existingAnyStore = await DB.prepare(
+          `SELECT o.id, o.product_id, o.title, o.store_id, o.affiliate_url, s.name as store_name
+           FROM offers o
+           LEFT JOIN stores s ON s.id = o.store_id
+           WHERE o.affiliate_url LIKE ?
+           LIMIT 1`
+        ).bind(`%ref=${socialRef}%`).first<any>()
+      } else {
+        // Caso 3: fallback — URL exata sem query string
+        const baseUrl = affiliateUrl.split('?')[0]
+        existingAnyStore = await DB.prepare(
+          `SELECT o.id, o.product_id, o.title, o.store_id, o.affiliate_url, s.name as store_name
+           FROM offers o
+           LEFT JOIN stores s ON s.id = o.store_id
+           WHERE o.affiliate_url = ? OR o.affiliate_url LIKE ?
+           LIMIT 1`
+        ).bind(affiliateUrl, `${baseUrl}%`).first<any>()
+      }
 
       if (existingAnyStore) {
         const isSameStore = existingAnyStore.store_id === storeId
 
         if (isSameStore) {
-          // Mesma loja → tenta atualizar se vieram dados novos
+          // Mesma loja → atualiza dados e, SEMPRE, o affiliate_url se o novo for /social/
+          const incomingIsSocial = /mercadolivre\.com\.br\/social\//.test(affiliateUrl)
+          const existingIsSocial = /mercadolivre\.com\.br\/social\//.test(existingAnyStore.affiliate_url || '')
+          // Atualiza affiliate_url quando: o novo é /social/ E o atual não é /social/
+          const shouldUpdateAffUrl = incomingIsSocial && !existingIsSocial
+
           const hasNewName  = name && name !== existingAnyStore.title
           const hasNewPrice = price > 0
-          if (hasNewName || hasNewPrice) {
+
+          if (shouldUpdateAffUrl || hasNewName || hasNewPrice) {
             await DB.prepare(`
               UPDATE offers SET
                 title        = CASE WHEN ? != '' THEN ? ELSE title END,
                 price        = CASE WHEN ? > 0   THEN ? ELSE price END,
                 image_url    = CASE WHEN ? != '' THEN ? ELSE image_url END,
+                affiliate_url = CASE WHEN ? = 1  THEN ? ELSE affiliate_url END,
                 last_updated = CURRENT_TIMESTAMP
               WHERE id = ?
-            `).bind(name, name, price, price, imgUrl||'', imgUrl||'', existingAnyStore.id).run()
+            `).bind(
+              name, name,
+              price, price,
+              imgUrl||'', imgUrl||'',
+              shouldUpdateAffUrl ? 1 : 0, affiliateUrl,
+              existingAnyStore.id
+            ).run()
 
             await DB.prepare(`
               UPDATE products SET
@@ -2661,7 +2724,8 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
               WHERE id = ?
             `).bind(name, name, price, price, price, existingAnyStore.product_id).run()
 
-            results.push({ url: affiliateUrl, status: 'atualizado', product_id: existingAnyStore.product_id, name })
+            const updateInfo = shouldUpdateAffUrl ? ' (affiliate_url atualizado para /social/)' : ''
+            results.push({ url: affiliateUrl, status: 'atualizado', product_id: existingAnyStore.product_id, name, info: updateInfo.trim() })
             imported++
           } else {
             // Idêntico — duplicado puro
