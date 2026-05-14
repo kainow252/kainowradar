@@ -1753,10 +1753,29 @@ admin.post('/api/stores/ml/import-affiliate-links', async (c) => {
   // ── Processamento ───────────────────────────────────────────
 
   const results: any[] = []
-  let matched = 0, saved = 0, errors = 0, imported = 0
+  let matched = 0, saved = 0, errors = 0, imported = 0, duplicates = 0
 
   for (const originalUrl of urls) {
     try {
+      // ── DEDUPLICAÇÃO: checa se este link já foi importado antes ──
+      const alreadyImported = await DB.prepare(
+        `SELECT id, affiliate_url, product_name FROM ml_affiliate_imports
+         WHERE original_url = ? OR affiliate_url = ?
+         LIMIT 1`
+      ).bind(originalUrl, originalUrl).first<any>()
+
+      if (alreadyImported) {
+        duplicates++
+        results.push({
+          url:          originalUrl,
+          status:       'duplicado',
+          duplicate_of: alreadyImported.affiliate_url,
+          product_name: alreadyImported.product_name ?? null,
+          message:      'Link já foi importado anteriormente — ignorado',
+        })
+        continue
+      }
+
       const isShort = isShortAffiliateLink(originalUrl)
       const isLong  = isLongMlLink(originalUrl)
 
@@ -1776,6 +1795,24 @@ admin.post('/api/stores/ml/import-affiliate-links', async (c) => {
         // Link desconhecido — tenta extrair MLB de qualquer forma e usa como está
         mlbId = extractMlbId(originalUrl)
         affiliateUrl = originalUrl
+      }
+
+      // Checa também se o affiliateUrl resolvido já existe no banco
+      if (affiliateUrl !== originalUrl) {
+        const alreadyResolved = await DB.prepare(
+          `SELECT id, product_name FROM ml_affiliate_imports WHERE affiliate_url = ? LIMIT 1`
+        ).bind(affiliateUrl).first<any>()
+        if (alreadyResolved) {
+          duplicates++
+          results.push({
+            url:          originalUrl,
+            affiliate_url: affiliateUrl,
+            status:       'duplicado',
+            product_name: alreadyResolved.product_name ?? null,
+            message:      'Link resolvido já foi importado anteriormente — ignorado',
+          })
+          continue
+        }
       }
 
       imported++
@@ -1835,12 +1872,18 @@ admin.post('/api/stores/ml/import-affiliate-links', async (c) => {
 
   return c.json({
     ok: true,
-    total:    urls.length,
+    total:      urls.length,
     imported,
+    duplicates,
     matched,
     saved,
     errors,
     results,
+    tip: imported > 0
+      ? `${imported} link(s) processado(s), ${matched} vinculado(s) a produtos.`
+      : duplicates > 0
+        ? `Todos os ${duplicates} link(s) já foram importados anteriormente — nenhum duplicado.`
+        : 'Nenhum link novo processado.',
   })
 })
 
@@ -2445,6 +2488,7 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
   const results: any[] = []
   let imported = 0
   let skipped  = 0
+  let duplicates = 0
   let errors   = 0
 
   for (const line of dataLines) {
@@ -2469,39 +2513,65 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       // 1) Cria o produto se não existir (ou cria novo se sem nome único)
       let productId: number | null = null
 
-      // Tenta achar oferta existente pelo affiliate_url exato → UPSERT
-      const existingOffer = await DB.prepare(
-        `SELECT id, product_id, title FROM offers WHERE affiliate_url = ? AND store_id = ? LIMIT 1`
-      ).bind(affiliateUrl, storeId).first<any>()
+      // ── DEDUPLICAÇÃO: checa se este link já foi importado ──────────
+      // Busca por affiliate_url exato em QUALQUER loja (não só esta)
+      const existingAnyStore = await DB.prepare(
+        `SELECT o.id, o.product_id, o.title, o.store_id, s.name as store_name
+         FROM offers o
+         LEFT JOIN stores s ON s.id = o.store_id
+         WHERE o.affiliate_url = ?
+         LIMIT 1`
+      ).bind(affiliateUrl).first<any>()
 
-      if (existingOffer) {
-        // Atualiza título e preço se vieram preenchidos
-        const hasNewName  = name && name !== existingOffer.title && !affiliateUrl.includes(name)
-        const hasNewPrice = price > 0
-        if (hasNewName || hasNewPrice) {
-          await DB.prepare(`
-            UPDATE offers SET
-              title       = CASE WHEN ? != '' THEN ? ELSE title END,
-              price       = CASE WHEN ? > 0   THEN ? ELSE price END,
-              image_url   = CASE WHEN ? != '' THEN ? ELSE image_url END,
-              last_updated = CURRENT_TIMESTAMP
-            WHERE id = ?
-          `).bind(name, name, price, price, imgUrl||'', imgUrl||'', existingOffer.id).run()
+      if (existingAnyStore) {
+        const isSameStore = existingAnyStore.store_id === storeId
 
-          // Atualiza também o produto
-          await DB.prepare(`
-            UPDATE products SET
-              name       = CASE WHEN ? != '' THEN ? ELSE name END,
-              best_price = CASE WHEN ? > 0 AND (best_price IS NULL OR ? < best_price) THEN ? ELSE best_price END,
-              updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-          `).bind(name, name, price, price, price, existingOffer.product_id).run()
+        if (isSameStore) {
+          // Mesma loja → tenta atualizar se vieram dados novos
+          const hasNewName  = name && name !== existingAnyStore.title
+          const hasNewPrice = price > 0
+          if (hasNewName || hasNewPrice) {
+            await DB.prepare(`
+              UPDATE offers SET
+                title        = CASE WHEN ? != '' THEN ? ELSE title END,
+                price        = CASE WHEN ? > 0   THEN ? ELSE price END,
+                image_url    = CASE WHEN ? != '' THEN ? ELSE image_url END,
+                last_updated = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).bind(name, name, price, price, imgUrl||'', imgUrl||'', existingAnyStore.id).run()
 
-          results.push({ url: affiliateUrl, status: 'atualizado', product_id: existingOffer.product_id, name })
-          imported++
+            await DB.prepare(`
+              UPDATE products SET
+                name       = CASE WHEN ? != '' THEN ? ELSE name END,
+                best_price = CASE WHEN ? > 0 AND (best_price IS NULL OR ? < best_price) THEN ? ELSE best_price END,
+                updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).bind(name, name, price, price, price, existingAnyStore.product_id).run()
+
+            results.push({ url: affiliateUrl, status: 'atualizado', product_id: existingAnyStore.product_id, name })
+            imported++
+          } else {
+            // Idêntico — duplicado puro
+            duplicates++
+            results.push({
+              url: affiliateUrl,
+              status: 'duplicado',
+              product_id: existingAnyStore.product_id,
+              product_name: existingAnyStore.title,
+              message: 'Link já importado nesta loja — ignorado',
+            })
+          }
         } else {
-          results.push({ url: affiliateUrl, status: 'já existe', product_id: existingOffer.product_id, name: existingOffer.title })
-          skipped++
+          // Link já existe em OUTRA loja — recusa para evitar duplicação cruzada
+          duplicates++
+          results.push({
+            url: affiliateUrl,
+            status: 'duplicado',
+            product_id: existingAnyStore.product_id,
+            product_name: existingAnyStore.title,
+            existing_store: existingAnyStore.store_name,
+            message: `Link já importado na loja "${existingAnyStore.store_name}" — ignorado`,
+          })
         }
         continue
       }
@@ -2555,6 +2625,7 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
     store_name: store.name,
     total: dataLines.length,
     imported,
+    duplicates,
     skipped,
     errors,
     results,
@@ -2963,11 +3034,13 @@ admin.post('/api/affiliate-bot/import-offers', async (c) => {
       }
 
       // ── 6. Salva ou atualiza no banco ─────────────────────
+      // DEDUPLICAÇÃO: checa ml_item_id E affiliate_url para cobrir todos os casos
       const existing = await DB.prepare(
         `SELECT id, best_price FROM products WHERE ml_item_id = ? LIMIT 1`
       ).bind(mlId).first<{ id: number; best_price: number | null }>()
 
       if (existing) {
+        // Produto já existe → atualiza preço/afiliado mas NÃO duplica
         await DB.prepare(`
           UPDATE products SET
             best_price = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP,
@@ -2977,8 +3050,24 @@ admin.post('/api/affiliate-bot/import-offers', async (c) => {
         `).bind(price, affUrl, imgUrl, existing.id).run()
 
         skipped.push({
-          id: mlId, title: title.slice(0, 50), reason: 'ja existe — preco atualizado',
+          id: mlId, title: title.slice(0, 50),
+          status: 'duplicado',
+          reason: 'já importado — preço atualizado',
           price_before: existing.best_price, price_after: price, product_id: existing.id,
+        })
+        continue
+      }
+
+      // Checa também pela affiliate_url (produto sem ml_item_id)
+      const existingByUrl = await DB.prepare(
+        `SELECT id FROM offers WHERE affiliate_url = ? LIMIT 1`
+      ).bind(affUrl).first<{ id: number }>()
+
+      if (existingByUrl) {
+        skipped.push({
+          id: mlId, title: title.slice(0, 50),
+          status: 'duplicado',
+          reason: 'affiliate_url já cadastrado em outra oferta',
         })
         continue
       }
@@ -3017,7 +3106,8 @@ admin.post('/api/affiliate-bot/import-offers', async (c) => {
     }
   }
 
-  const updated = skipped.filter((s: any) => s.reason?.includes('atualizado')).length
+  const updated    = skipped.filter((s: any) => s.reason?.includes('atualizado')).length
+  const duplicates = skipped.filter((s: any) => s.status === 'duplicado').length
 
   return c.json({
     ok: true,
@@ -3029,17 +3119,20 @@ admin.post('/api/affiliate-bot/import-offers', async (c) => {
       processed:       Math.min(rawItems.length, limit),
     },
     summary: {
-      imported: imported.length,
+      imported:   imported.length,
       updated,
-      skipped:  skipped.length - updated,
-      errors:   errors.length,
+      duplicates,
+      skipped:    skipped.length - updated - duplicates,
+      errors:     errors.length,
     },
     imported,
     skipped,
     errors: errors.slice(0, 10),
     tip: imported.length > 0
       ? `${imported.length} produto(s) importado(s) direto da pagina de ofertas do ML!`
-      : 'Nenhum produto novo. Pode ter tudo ja importado — rode com dry_run:true para ver.',
+      : duplicates > 0
+        ? `Todos os ${duplicates} link(s) já foram importados anteriormente.`
+        : 'Nenhum produto novo. Pode ter tudo ja importado — rode com dry_run:true para ver.',
   })
 })
 
@@ -3214,18 +3307,38 @@ admin.post('/api/affiliate-bot/import-ids', async (c) => {
 
       const affiliate_url = `${p.link}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
 
-      // Verifica duplicata
+      // DEDUPLICAÇÃO: checa ml_item_id (mais confiável que slug)
       const existing = await DB.prepare(
-        `SELECT id FROM products WHERE ml_item_id=? OR slug=? LIMIT 1`
-      ).bind(mlId, slug).first<{id:number}>()
+        `SELECT id FROM products WHERE ml_item_id = ? LIMIT 1`
+      ).bind(mlId).first<{id:number}>()
 
       if (existing) {
+        // Produto já existe → atualiza preço/afiliado mas NÃO duplica
         await DB.prepare(`
           UPDATE products SET affiliate_url=?, affiliate_updated_at=CURRENT_TIMESTAMP,
             best_price=?, image_url=COALESCE(NULLIF(image_url,''),?), updated_at=CURRENT_TIMESTAMP
           WHERE id=?
         `).bind(affiliate_url, p.price, p.thumb, existing.id).run()
-        skipped.push({ ml_id: mlId, title, reason: 'já existe — preço e afiliado atualizados', id: existing.id })
+        skipped.push({
+          ml_id: mlId, title,
+          status: 'duplicado',
+          reason: 'já importado — preço e afiliado atualizados',
+          id: existing.id,
+        })
+        continue
+      }
+
+      // Checa também pela affiliate_url
+      const existingByUrl = await DB.prepare(
+        `SELECT id FROM offers WHERE affiliate_url = ? LIMIT 1`
+      ).bind(affiliate_url).first<{id:number}>()
+
+      if (existingByUrl) {
+        skipped.push({
+          ml_id: mlId, title,
+          status: 'duplicado',
+          reason: 'affiliate_url já cadastrado em outra oferta',
+        })
         continue
       }
 
@@ -3259,13 +3372,26 @@ admin.post('/api/affiliate-bot/import-ids', async (c) => {
     }
   }
 
+  const duplicates = skipped.filter((s: any) => s.status === 'duplicado').length
+
   return c.json({
     ok: true,
     token_source,
-    summary: { found: ids.length, imported: imported.length, skipped: skipped.length, errors: errors.length },
+    summary: {
+      found:      ids.length,
+      imported:   imported.length,
+      duplicates,
+      skipped:    skipped.length - duplicates,
+      errors:     errors.length,
+    },
     imported,
     skipped,
     errors: errors.slice(0, 10),
+    tip: imported.length > 0
+      ? `${imported.length} produto(s) importado(s) com sucesso!`
+      : duplicates > 0
+        ? `Todos os ${duplicates} ID(s) já foram importados anteriormente.`
+        : 'Nenhum produto novo importado.',
   })
 })
 

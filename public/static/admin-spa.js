@@ -860,18 +860,37 @@ function siUpdateCard(idx, url, meta) {
 function siRenderResult(data, el) {
   if (!data) return
   const rows = (data.results || []).map(function(r) {
-    const icon = r.status === 'importado' ? '✅' : r.status === 'atualizado' ? '🔄' : r.status === 'já existe' ? '⏭️' : '❌'
-    const info = r.error ? ' — ' + r.error : (r.name ? ' — ' + r.name.slice(0,40) : '')
-    return '<li class="text-xs text-slate-600">' + icon + ' ' + r.status + info + '</li>'
+    const icon = r.status === 'importado'  ? '✅'
+               : r.status === 'atualizado' ? '🔄'
+               : r.status === 'duplicado'  ? '🔁'
+               : r.status === 'já existe'  ? '⏭️'
+               : r.status === 'erro'       ? '❌'
+               : '❓'
+    const colorClass = r.status === 'importado'  ? 'text-green-700'
+                     : r.status === 'atualizado' ? 'text-blue-700'
+                     : r.status === 'duplicado'  ? 'text-amber-600'
+                     : r.status === 'erro'       ? 'text-red-600'
+                     : 'text-slate-500'
+    const extra = r.error   ? ' — ' + r.error
+                : r.message ? ' — ' + r.message
+                : r.name    ? ' — ' + r.name.slice(0,40)
+                : r.product_name ? ' — ' + r.product_name.slice(0,40)
+                : ''
+    return '<li class="flex items-start gap-1.5 text-xs py-0.5">'
+      + '<span class="flex-shrink-0">' + icon + '</span>'
+      + '<span class="' + colorClass + ' font-medium">' + r.status + '</span>'
+      + '<span class="text-slate-400 truncate">' + extra + '</span>'
+      + '</li>'
   }).join('')
-  el.innerHTML = '<div class="mt-2 p-3 rounded-xl bg-slate-50 border border-slate-200">' +
-    '<div class="flex gap-4 text-xs font-bold mb-2">' +
-      '<span class="text-green-700">✅ ' + (data.imported||0) + ' importados</span>' +
-      (data.skipped ? '<span class="text-slate-500">⏭️ ' + data.skipped + ' já existiam</span>' : '') +
-      (data.errors  ? '<span class="text-red-600">❌ ' + data.errors  + ' erros</span>'      : '') +
-    '</div>' +
-    (rows ? '<ul class="space-y-0.5 max-h-32 overflow-y-auto">' + rows + '</ul>' : '') +
-  '</div>'
+  el.innerHTML = '<div class="mt-2 p-3 rounded-xl bg-slate-50 border border-slate-200">'
+    + '<div class="flex flex-wrap gap-3 text-xs font-bold mb-2">'
+      + '<span class="text-green-700">✅ ' + (data.imported||0) + ' importados</span>'
+      + (data.duplicates ? '<span class="text-amber-600">🔁 ' + data.duplicates + ' duplicados</span>' : '')
+      + (data.skipped    ? '<span class="text-slate-500">⏭️ ' + data.skipped + ' ignorados</span>'   : '')
+      + (data.errors     ? '<span class="text-red-600">❌ ' + data.errors  + ' erros</span>'         : '')
+    + '</div>'
+    + (rows ? '<ul class="space-y-0.5 max-h-40 overflow-y-auto">' + rows + '</ul>' : '')
+  + '</div>'
 }
 
 function siBtnReset(btn, storeId, label) {
@@ -1667,12 +1686,20 @@ function renderMlImportResult(data, container) {
       </div>
       <div class="max-h-52 overflow-y-auto divide-y divide-slate-50">
         ${(results || []).map(r => {
-          const icon = r.status === 'matched' ? '✅' : r.status === 'resolved' ? '🔗' : '❌'
-          const bg   = r.status === 'matched' ? 'bg-green-50' : r.status === 'resolved' ? 'bg-blue-50' : 'bg-red-50'
+          const icon = r.status === 'matched'   ? '✅'
+                     : r.status === 'resolved'  ? '🔗'
+                     : r.status === 'duplicado' ? '🔁'
+                     : '❌'
+          const bg   = r.status === 'matched'   ? 'bg-green-50'
+                     : r.status === 'resolved'  ? 'bg-blue-50'
+                     : r.status === 'duplicado' ? 'bg-amber-50'
+                     : 'bg-red-50'
           const label = r.status === 'matched'
             ? `<span class="text-green-700 font-semibold text-xs truncate max-w-[160px] block">${r.product_name || r.ml_item_id}</span>`
             : r.status === 'resolved'
             ? `<span class="text-blue-700 text-xs">${r.ml_item_id} — sem produto no banco</span>`
+            : r.status === 'duplicado'
+            ? `<span class="text-amber-700 text-xs font-medium">🔁 Já importado — ${r.product_name || r.message || 'link duplicado'}</span>`
             : `<span class="text-red-600 text-xs">${r.error}</span>`
           const shortUrl = (r.url || '').replace('https://', '').substring(0, 28)
           return `<div class="flex items-center gap-2.5 px-3 py-2 ${bg}">
@@ -1711,15 +1738,26 @@ async function loadMlImportHistory() {
       </div>
       <div class="max-h-80 overflow-y-auto divide-y divide-slate-50">
         ${rows.map(r => {
-          const icon = r.status === 'matched' ? '✅' : r.status === 'resolved' ? '🔗' : '❌'
-          const bg   = r.status === 'matched' ? '' : r.status === 'resolved' ? 'bg-blue-50/40' : 'bg-red-50/40'
+          const icon = r.status === 'matched'   ? '✅'
+                     : r.status === 'resolved'  ? '🔗'
+                     : r.status === 'duplicado' ? '🔁'
+                     : '❌'
+          const bg   = r.status === 'matched'   ? ''
+                     : r.status === 'resolved'  ? 'bg-blue-50/40'
+                     : r.status === 'duplicado' ? 'bg-amber-50/40'
+                     : 'bg-red-50/40'
           const date = r.imported_at ? new Date(r.imported_at).toLocaleString('pt-BR', { dateStyle:'short', timeStyle:'short' }) : '—'
           const shortUrl = (r.original_url || '').replace('https://','').substring(0, 30)
+          const badge = r.status === 'duplicado'
+            ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-700">duplicado</span>`
+            : ''
           return `<div class="flex items-center gap-2.5 px-3 py-2 ${bg}">
             <span class="text-sm flex-shrink-0">${icon}</span>
             <div class="min-w-0 flex-1">
               <div class="text-xs font-mono text-slate-500 truncate">${shortUrl}</div>
-              <div class="text-xs text-slate-400">${r.ml_item_id || r.error_msg || '—'} ${r.product_name ? '· ' + r.product_name : ''}</div>
+              <div class="text-xs text-slate-400 flex items-center gap-1">
+                ${r.ml_item_id || r.error_msg || '—'} ${r.product_name ? '· ' + r.product_name : ''} ${badge}
+              </div>
             </div>
             <div class="text-xs text-slate-300 flex-shrink-0">${date}</div>
           </div>`
