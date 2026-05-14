@@ -5868,49 +5868,110 @@ admin.post('/api/feed/process', async (c) => {
         }
       }
 
-      // ── 4. Match por nome (similaridade) ─────────────
+      // ── 4. Match por nome (similaridade cross-plataforma) ────
       if (!productId && link.name) {
-        // Importa a lógica de nome normalizado inline
-        const normalize = (s: string) => s.toLowerCase()
+        const normStr = (s: string) => s.toLowerCase()
           .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
           .replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
 
-        const linkNorm = normalize(link.name)
+        // Palavras irrelevantes para o match
+        const STOP = new Set([
+          'de','do','da','dos','das','com','para','por','em','no','na','nos','nas',
+          'the','with','for','and','or','in','um','uma','os','as','e','a','o',
+          'kit','combo','pack','leve','mais','frete','gratis','oferta','promo',
+          'original','lacrado','novo','semi','usado','importado','nacional',
+        ])
 
-        // Extrai tokens relevantes
-        const stopwords = new Set(['de','do','da','com','para','por','em','no','na','the','with','for','and','or','in'])
-        const tokens = linkNorm.split(' ').filter(t => t.length > 2 && !stopwords.has(t))
+        // Palavras de cor/variante: diminuem penalização se divergem
+        const VARIANTS = new Set([
+          'preto','branco','prata','dourado','azul','vermelho','verde','rosa',
+          'cinza','bege','amarelo','laranja','roxo','lilas','grafite','titanium',
+          'black','white','silver','gold','blue','red','green','pink','gray',
+          '128gb','256gb','512gb','1tb','2tb','4gb','6gb','8gb','12gb','16gb',
+          '32gb','64gb','wi-fi','4g','5g','wifi',
+        ])
 
-        if (tokens.length > 0) {
-          // Busca candidatos filtrando por marca ou categoria para limitar comparações
-          const candidateQuery = link.brand
-            ? `SELECT id, name FROM products WHERE (brand = ? OR category = ?) AND is_active = 1 LIMIT 300`
-            : `SELECT id, name FROM products WHERE is_active = 1 LIMIT 500`
+        // ── Extrai "modelo fingerprint" ─────────────────────────
+        // Retém marca + modelo + spec chave, ignorando marketing e variantes de cor
+        const extractFingerprint = (name: string): string[] => {
+          const norm = normStr(name)
+          return norm.split(' ')
+            .filter(t => t.length > 1 && !STOP.has(t) && !VARIANTS.has(t))
+        }
 
-          const { results: candidates } = link.brand
-            ? await db.prepare(candidateQuery).bind(link.brand, link.category || '').all<{ id: number; name: string }>()
-            : await db.prepare(candidateQuery).all<{ id: number; name: string }>()
+        const linkNorm    = normStr(link.name)
+        const linkTokens  = linkNorm.split(' ').filter(t => t.length > 1 && !STOP.has(t))
+        const linkFP      = extractFingerprint(link.name)
+
+        if (linkFP.length > 0) {
+          // Busca candidatos: prioriza mesma marca/categoria
+          let candidates: { id: number; name: string; brand: string | null }[] = []
+
+          if (link.brand) {
+            // 1ª tentativa: mesma marca (mais preciso)
+            const r1 = await db.prepare(
+              `SELECT id, name, brand FROM products WHERE brand = ? AND is_active = 1 LIMIT 400`
+            ).bind(link.brand).all<{ id: number; name: string; brand: string | null }>()
+            candidates = r1.results
+
+            // 2ª tentativa: mesma categoria (fallback)
+            if (candidates.length === 0 && link.category) {
+              const r2 = await db.prepare(
+                `SELECT id, name, brand FROM products WHERE category = ? AND is_active = 1 LIMIT 400`
+              ).bind(link.category).all<{ id: number; name: string; brand: string | null }>()
+              candidates = r2.results
+            }
+          } else {
+            const r = await db.prepare(
+              `SELECT id, name, brand FROM products WHERE is_active = 1 LIMIT 600`
+            ).all<{ id: number; name: string; brand: string | null }>()
+            candidates = r.results
+          }
 
           let bestId: number | null = null
           let bestScore = 0
+          let bestMethod = 'name_fuzzy'
 
           for (const cand of candidates) {
-            const candNorm = normalize(cand.name)
-            const candTokens = new Set(candNorm.split(' ').filter(t => t.length > 2 && !stopwords.has(t)))
-            const inter = tokens.filter(t => candTokens.has(t)).length
-            const union = new Set([...tokens, ...candTokens]).size
-            const jaccard = union > 0 ? inter / union : 0
+            const candFP     = extractFingerprint(cand.name)
+            const candFPSet  = new Set(candFP)
+            const linkFPSet  = new Set(linkFP)
 
-            if (jaccard > bestScore && jaccard >= 0.72) {
-              bestScore = jaccard
-              bestId = cand.id
+            // ── Score 1: Jaccard sobre fingerprint (marca+modelo, sem cor/variante)
+            const fpInter  = linkFP.filter(t => candFPSet.has(t)).length
+            const fpUnion  = new Set([...linkFP, ...candFP]).size
+            const fpJacc   = fpUnion > 0 ? fpInter / fpUnion : 0
+
+            // ── Score 2: Jaccard sobre tokens completos (inclui variantes)
+            const candNorm    = normStr(cand.name)
+            const candTokens  = new Set(candNorm.split(' ').filter(t => t.length > 1 && !STOP.has(t)))
+            const fullInter   = linkTokens.filter(t => candTokens.has(t)).length
+            const fullUnion   = new Set([...linkTokens, ...candTokens]).size
+            const fullJacc    = fullUnion > 0 ? fullInter / fullUnion : 0
+
+            // ── Bônus: mesma marca explícita
+            const brandBonus = (link.brand && cand.brand &&
+              normStr(link.brand) === normStr(cand.brand)) ? 0.08 : 0
+
+            // Score final: usa o melhor dos dois + bônus de marca
+            const score = Math.min(1.0, Math.max(fpJacc, fullJacc) + brandBonus)
+
+            // ── Limiares adaptativos ──────────────────────────────
+            // - Se mesma marca: 0.60 (nomes podem variar entre plataformas)
+            // - Se sem marca: 0.72 (mais conservador para evitar falsos positivos)
+            const threshold = brandBonus > 0 ? 0.60 : 0.72
+
+            if (score > bestScore && score >= threshold) {
+              bestScore  = score
+              bestId     = cand.id
+              bestMethod = fpJacc >= fullJacc ? 'name_fp' : 'name_fuzzy'
             }
           }
 
           if (bestId) {
-            productId = bestId
-            matchMethod = 'name_fuzzy'
-            matchScore = bestScore
+            productId   = bestId
+            matchMethod = bestMethod
+            matchScore  = bestScore
           }
         }
       }
