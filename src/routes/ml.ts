@@ -2426,5 +2426,110 @@ ml.get('/debug-scrape', async (c) => {
   }
 })
 
+// ── POST /admin/api/ml/update-affiliate ──────────────────────────────────
+// Atualiza o affiliate_url dos produtos já importados
+// Body: { urls: string[] }  ← cole todos os pares (produto + /social/) de uma vez
+// O sistema detecta automaticamente qual link tem cfegdhabc31955 e salva como affiliate_url
+ml.post('/update-affiliate', async (c) => {
+  const { DB } = c.env
+  const body: any = await c.req.json().catch(() => ({}))
+  const urls: string[] = Array.isArray(body.urls) ? body.urls : []
+
+  if (!urls.length) return c.json({ error: 'Nenhuma URL enviada' }, 400)
+
+  // Expande todas as entradas em linhas individuais (igual import-url)
+  const allLines: string[] = []
+  for (const raw of urls) {
+    const byNewline = raw.split(/[\n,]+/).map((l: string) => l.trim()).filter(Boolean)
+    for (const chunk of byNewline) {
+      const parts = chunk.split(/\s+/).filter(Boolean)
+      if (parts.length >= 2 && parts.every((p: string) => p.startsWith('http'))) {
+        allLines.push(...parts)
+      } else {
+        allLines.push(chunk)
+      }
+    }
+  }
+
+  // Monta pares: produto + link afiliado (com cfegdhabc31955)
+  interface Pair { productLine: string; affLine: string | null }
+  const pairs: Pair[] = []
+
+  for (const line of allLines) {
+    const isAffiliateLink = line.includes(PUBLISHER_ID)
+    if (isAffiliateLink) {
+      if (pairs.length > 0 && pairs[pairs.length - 1].affLine === null) {
+        pairs[pairs.length - 1].affLine = line
+      }
+      continue
+    }
+    pairs.push({ productLine: line, affLine: null })
+  }
+
+  let updated = 0, notFound = 0, noAff = 0
+  const details: any[] = []
+
+  for (const { productLine, affLine } of pairs) {
+    if (!affLine) {
+      noAff++
+      details.push({ url: productLine.substring(0, 80), status: 'sem_link_afiliado' })
+      continue
+    }
+
+    // Extrai MLB ID do link do produto
+    const mlId = extractMLBId(productLine)
+    if (!mlId) {
+      notFound++
+      details.push({ url: productLine.substring(0, 80), status: 'id_nao_encontrado' })
+      continue
+    }
+
+    // Busca o offer pelo ml_item_id ou pelo slug da URL
+    const row = await DB.prepare(`
+      SELECT o.id FROM offers o
+      JOIN products p ON o.product_id = p.id
+      WHERE p.ml_item_id = ? AND o.is_active = 1
+      LIMIT 1
+    `).bind(mlId).first<{ id: number }>()
+
+    if (!row) {
+      // Tenta buscar pelo slug extraído da URL
+      const slugHint = productLine.split('/').filter(s => s.length > 10 && !s.startsWith('http') && !s.startsWith('p') && !s.startsWith('up'))[0] || ''
+      const row2 = await DB.prepare(`
+        SELECT o.id FROM offers o
+        JOIN products p ON o.product_id = p.id
+        WHERE p.slug LIKE ? AND o.is_active = 1
+        LIMIT 1
+      `).bind(`%${slugHint.substring(0, 30)}%`).first<{ id: number }>()
+
+      if (!row2) {
+        notFound++
+        details.push({ mlId, url: productLine.substring(0, 80), status: 'produto_nao_encontrado' })
+        continue
+      }
+
+      await DB.prepare(`UPDATE offers SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+        .bind(affLine, row2.id).run()
+      updated++
+      details.push({ mlId, offerId: row2.id, status: 'atualizado', affiliate_url: affLine.substring(0, 80) })
+      continue
+    }
+
+    await DB.prepare(`UPDATE offers SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .bind(affLine, row.id).run()
+    updated++
+    details.push({ mlId, offerId: row.id, status: 'atualizado', affiliate_url: affLine.substring(0, 80) })
+  }
+
+  return c.json({
+    ok: true,
+    total_pares: pairs.length,
+    updated,
+    not_found: notFound,
+    sem_link_afiliado: noAff,
+    details
+  })
+})
+
 export default ml
 export { ML_CATEGORIES, extractMLBId }
