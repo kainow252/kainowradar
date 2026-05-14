@@ -9631,6 +9631,10 @@ async function renderCategories(area) {
           class="btn-primary flex items-center gap-2">
           🔄 Sincronizar Contadores
         </button>
+        <button onclick="recategorizeProducts()" id="btn-recat"
+          class="btn-secondary flex items-center gap-2 ml-2">
+          🤖 Recategorizar Produtos
+        </button>
       </div>
 
       <!-- Cards resumo -->
@@ -9747,10 +9751,69 @@ async function syncCategories() {
   const res = await api('POST', '/admin/api/categories/sync')
   if (res?.ok) {
     toast(`✅ ${res.message}`, 'success')
-    // Recarrega a seção para mostrar os novos valores
     setTimeout(() => renderCategories(document.getElementById('content-area')), 600)
   } else {
     toast('Erro ao sincronizar', 'error')
     if (btn) { btn.disabled = false; btn.textContent = '🔄 Sincronizar Contadores' }
+  }
+}
+
+// ── Recategoriza produtos sem categoria (backfill) ────────
+async function recategorizeProducts() {
+  const btn = document.getElementById('btn-recat')
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Detectando...' }
+
+  toast('Rodando auto-categorização nos produtos sem categoria...', 'info')
+
+  const res = await api('POST', '/admin/api/categories/recategorize', null, 30000)
+  if (!res) {
+    toast('Timeout ou erro na recategorização', 'error')
+    if (btn) { btn.disabled = false; btn.textContent = '🤖 Recategorizar Produtos' }
+    return
+  }
+
+  if (res.ok) {
+    const msg = `✅ ${res.updated} produto${res.updated !== 1 ? 's' : ''} categorizados` +
+                (res.skipped > 0 ? ` · ${res.skipped} sem categoria reconhecida` : '')
+    toast(msg, 'success')
+
+    // Mostra preview dos resultados no modal
+    if (res.results && res.results.length > 0) {
+      const mc = document.getElementById('modal-container')
+      if (mc) {
+        mc.innerHTML = `
+          <div class="modal-backdrop" onclick="this.parentElement.innerHTML=''">
+            <div class="modal max-w-2xl" onclick="event.stopPropagation()">
+              <div class="flex items-center justify-between mb-4">
+                <h3 class="font-bold text-slate-800">🤖 Produtos recategorizados (${res.updated})</h3>
+                <button onclick="document.getElementById('modal-container').innerHTML=''"
+                  class="text-slate-400 hover:text-slate-700">✕</button>
+              </div>
+              <div class="overflow-y-auto max-h-80 space-y-1">
+                ${res.results.map(r => `
+                  <div class="flex items-center gap-3 px-3 py-2 rounded-lg bg-slate-50 text-sm">
+                    <span class="badge-blue">${r.category}</span>
+                    <span class="text-slate-600 truncate">${r.name}</span>
+                  </div>
+                `).join('')}
+              </div>
+              <div class="mt-4 pt-4 border-t border-slate-100 flex justify-between items-center">
+                <span class="text-xs text-slate-400">${res.skipped} produto${res.skipped !== 1 ? 's' : ''} sem categoria reconhecida (ficaram como "outros")</span>
+                <button onclick="document.getElementById('modal-container').innerHTML=''"
+                  class="btn-primary text-sm">Fechar</button>
+              </div>
+            </div>
+          </div>`
+      }
+    }
+
+    // Após fechar o modal, sincroniza contadores e recarrega
+    setTimeout(async () => {
+      await api('POST', '/admin/api/categories/sync')
+      renderCategories(document.getElementById('content-area'))
+    }, 800)
+  } else {
+    toast(res.message || 'Nenhum produto para recategorizar', 'info')
+    if (btn) { btn.disabled = false; btn.textContent = '🤖 Recategorizar Produtos' }
   }
 }

@@ -6179,6 +6179,93 @@ admin.get('/api/categories', async (c) => {
   return c.json(results)
 })
 
+// ── POST /admin/api/categories/recategorize ───────────────
+// Roda detectCategory() em TODOS os produtos sem categoria (ou com 'outros')
+// e atualiza o campo category no banco.
+// Util para backfill de produtos importados antes da auto-cat existir.
+admin.post('/api/categories/recategorize', async (c) => {
+  const { DB } = c.env
+  const force = c.req.query('force') === '1'  // se force=1, recategoriza TODOS (mesmo os que já têm cat)
+
+  // Busca produtos sem categoria (ou forçado = todos)
+  const where = force
+    ? `WHERE is_active = 1`
+    : `WHERE is_active = 1 AND (category IS NULL OR category = '' OR category = 'outros')`
+
+  const { results: products } = await DB.prepare(
+    `SELECT id, name, best_price FROM products ${where} ORDER BY id ASC LIMIT 500`
+  ).all<{ id: number; name: string; best_price: number | null }>()
+
+  if (products.length === 0) {
+    return c.json({ ok: true, updated: 0, message: 'Nenhum produto para recategorizar' })
+  }
+
+  // Aplica detectCategory inline (sem import dinâmico — reusa a lógica diretamente)
+  // ─── mapa de palavras-chave inline ────────────────────────────────────────────
+  type CatRule = { slug: string; keywords: string[] }
+  const RULES: CatRule[] = [
+    // beleza ANTES de eletro para 'chapinha','prancha' não conflitar
+    { slug: 'beleza',           keywords: ['shampoo','condicionador','mascara capilar','leave-in','leave in','finalizador capilar','oleo capilar','tratamento capilar','reconstrucao capilar','hidratacao capilar','tanino','escova progressiva','chapinha','prancha de cabelo','prancha cabelo','prancha titanium','prancha ceramica','chapa titanium','chapa ceramica','escova secadora','secador de cabelo','babyliss','taiff','mq professional','gama italy','creme facial','serum facial','hidratante facial','hidratante corporal','loção corporal','protetor solar','vitamina c facial','retinol','acido hialuronico','hyaluronic','esfoliante','mascara facial','base maquiagem','batom','demaquilante','isdin','la roche','vichy','eucerin','cetaphil','neutrogena','olay','loreal','maybelline','natura una','natura ekos','natura chronos','o boticario','eudora','oleo de amendoas','oleo de ricino','creme dental','pasta de dente','don alcides','fit cosmetics','grandha','wella','schwarzkopf','tresemme','pantene','keune','ampola capilar','soro capilar','serum capilar','keratina','queratina','botox capilar','selante','antifrizz','limpeza de dentes','branqueamento','raavi','sendor','creme para massagem','loção desodorante','cuidados pessoais'] },
+    { slug: 'perfumes',         keywords: ['perfume','colonia','eau de parfum','eau de toilette','edp ','edt ','deo parfum','deo colonia','body splash','body mist','desodorante','antitranspirante','roll-on','al wataniah','arabian oud','lattafa','armaf','oud intense','oud wood','musk ','natura una celebrar','o.u.i parfum'] },
+    { slug: 'saude',            keywords: ['whey protein','proteina whey','creatina','bcaa','pre-treino','pre treino','colageno ','colágeno ','vitamina d','vitamina b12','acido folico','omega 3','omega-3','multivitaminico','suplemento alimentar','termogenico','aminoacido','glutamina','maltodextrina','dextrose','bebida de eletrolitos','eletrolitos em po','bebida isotonica','bebida vegetal','leite vegetal','leite de amendoas','leite de aveia','leite de coco','liquidz','aparelho de pressao','oximetro','glicosimetro','termometro','nebulizador','almofada ortopedica','elimine verrugas','crioterapia','dermafreeze','ampola de soro'] },
+    { slug: 'alimentos',        keywords: ['chocolate ','biscoito','bolacha','snack','barra de cereal','granola','aveia em flocos','farinha de aveia','azeite de oliva','molho de tomate','macarrao','cafe em grao','cafe solúvel','capsula de cafe','cha verde','cha preto','erva-mate','kit compre','kit leve','fardo de','cx de','leite de coco tradicional'] },
+    { slug: 'smartphones',      keywords: ['smartphone','celular','iphone','galaxy s','galaxy a','galaxy m','moto g','moto e','motorola edge','redmi','xiaomi','poco','realme','oppo','pixel ','oneplus','asus zenfone','android phone','telefone celular'] },
+    { slug: 'notebooks',        keywords: ['notebook','laptop','macbook','ultrabook','chromebook','thinkpad','ideapad','legion ','yoga book','dell xps','dell inspiron','hp pavilion','hp envy','hp victus','acer aspire','acer nitro','acer swift','asus vivobook','asus zenbook','asus rog','asus tuf','surface laptop','surface book','surface pro'] },
+    { slug: 'tv',               keywords: ['smart tv','televisao','televisor','tv led','tv oled','tv qled','tv uhd','tv 4k','tv 8k','tv 32','tv 40','tv 43','tv 50','tv 55','tv 65','tv 75','tv 85','tv samsung','tv lg','tv sony','tv philips','tv tcl','tv hisense','tv xiaomi','bravia','qled tv','neo qled','oled tv','crystal uhd','nanocell','4k tv','8k tv','android tv','google tv','webos','tizen tv'] },
+    { slug: 'tablets',          keywords: ['tablet','ipad','ipad air','ipad pro','ipad mini','galaxy tab','tab s','tab a','lenovo tab','fire hd','fire tablet','kindle fire'] },
+    { slug: 'games',            keywords: ['playstation','ps5','ps4','xbox series','xbox one','nintendo switch','switch oled','switch lite','steam deck','controle gamer','joystick','jogo ps5','jogo ps4','jogo xbox','jogo nintendo','headset gamer','cadeira gamer','mouse gamer','teclado gamer','placa de video','gpu rtx','gpu rx','rtx 3060','rtx 3070','rtx 3080','rtx 4060','rtx 4070','rtx 4080','rx 6600','rx 6700','rx 7600','rx 7700','geforce','radeon rx','gaming chair'] },
+    { slug: 'audio',            keywords: ['fone de ouvido','headphone','headset','earphone','earbuds','airpods','galaxy buds','jabra','beats headphones','jbl headphone','bose headphone','sony headphone','sennheiser','skullcandy','caixa de som','caixa bluetooth','speaker bluetooth','alto-falante','soundbar','subwoofer','home theater','sistema de som','amplificador','microfone','toca-discos','vitrola','aparelho de som'] },
+    { slug: 'cameras',          keywords: ['camera digital','camera fotografica','camera mirrorless','camera reflex','dslr','mirrorless','gopro','action camera','camera de acao','drone','dji','dji mini','dji air','phantom','mavic','canon eos','nikon d','nikon z','sony alpha','fujifilm x','lente camera','objetiva','flash fotografico','camera instantanea','instax'] },
+    { slug: 'eletrodomesticos', keywords: ['geladeira','refrigerador','freezer','lavadora','maquina de lavar','secadora','lava-loucas','lava-roupas','fogao','cooktop','forno eletrico','microondas','ar condicionado','ar-condicionado','split ','ventilador','purificador de agua','filtro de agua','maquina de cafe','cafeteira','batedeira','liquidificador','fritadeira','airfryer','air fryer','panela eletrica','panela de pressao','sanduicheira','torradeira','espremedor','multiprocessador','aspirador de po','aspirador robo','ferro de passar'] },
+    { slug: 'computadores',     keywords: ['desktop','computador','pc gamer','pc gaming','all in one','mini pc','workstation','imac','processador intel','processador amd','core i3','core i5','core i7','core i9','ryzen 3','ryzen 5','ryzen 7','ryzen 9','placa mae','motherboard','memoria ram','pente de ram','ram ddr4','ram ddr5','fonte de alimentacao','gabinete pc','case atx','case mid-tower'] },
+    { slug: 'monitores',        keywords: ['monitor 4k','monitor gamer','monitor led','monitor ips','monitor curvo','monitor ultrawide','dell monitor','lg monitor','samsung monitor','aoc monitor','asus monitor','monitor 24','monitor 27','monitor 32','144hz','165hz','240hz','freesync','gsync'] },
+    { slug: 'impressoras',      keywords: ['impressora','multifuncional','scanner','plotter','cartucho de tinta','toner','epson l','epson ecotank','hp deskjet','hp laserjet','canon pixma','brother mfc','brother dcp'] },
+    { slug: 'componentes',      keywords: ['ssd m.2','ssd nvme','hd ssd','ssd 250','ssd 500','ssd 1tb','ssd 2tb','placa de video','placa-de-video','placa mae','placa-mae','cooler cpu','pasta termica','cabo sata','fonte 500w','fonte 600w','fonte 700w','fonte 750w','fonte 800w','gabinete ','dissipador'] },
+    { slug: 'armazenamento',    keywords: ['hd externo','hd interno','hard disk','hard drive','pendrive','pen drive','flash drive','memoria flash','cartao de memoria','cartao sd','microsd','sdxc','sdhc','ssd externo','ssd portatil','nvme externo','nas storage','wd red','wd blue','seagate barracuda','seagate ironwolf'] },
+    { slug: 'redes',            keywords: ['roteador','router','modem','access point','ponto de acesso','switch de rede','cabo de rede','cabo ethernet','cabo rj45','placa de rede','adaptador wifi','repetidor wifi','extensor wifi','mesh wifi','sistema mesh','tp-link','intelbras roteador','asus roteador','netgear','ubiquiti','mikrotik'] },
+    { slug: 'moda',             keywords: ['tenis ','sapato','sandalia','bota ','mocassim','chinelo','camiseta','camisa ','calca jeans','vestido','saia ','blusa ','casaco','jaqueta','moletom','shorts ','bermuda ','cueca','calcinha','sutiã','meia ','cinto ','bolsa ','mochila ','carteira couro','oculos ','relogio ','nike','adidas','puma','vans','converse','new balance','havaianas','melissa','zara','lacoste'] },
+  ]
+
+  const norm = (t: string) => t.toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
+
+  const detectCat = (name: string): string => {
+    const h = norm(name)
+    for (const rule of RULES) {
+      for (const kw of rule.keywords) {
+        if (h.includes(norm(kw))) return rule.slug
+      }
+    }
+    return 'outros'
+  }
+
+  // Atualiza produto por produto (D1 não suporta batch UPDATE com CASE)
+  let updated = 0
+  let skipped = 0
+  const results: { id: number; name: string; category: string; detected: string }[] = []
+
+  for (const prod of products) {
+    const detected = detectCat(prod.name || '')
+    if (detected === 'outros') { skipped++; continue }
+
+    await DB.prepare(
+      `UPDATE products SET category = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).bind(detected, prod.id).run()
+
+    updated++
+    results.push({ id: prod.id, name: (prod.name || '').substring(0, 50), category: detected, detected })
+  }
+
+  return c.json({
+    ok: true,
+    total_candidates: products.length,
+    updated,
+    skipped,
+    results,
+  })
+})
+
 // ── POST /admin/api/categories/sync — Sincroniza product_count ──
 // Atualiza categories.product_count com a contagem real de produtos ativos
 admin.post('/api/categories/sync', async (c) => {

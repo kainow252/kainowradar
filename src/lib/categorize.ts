@@ -11,6 +11,117 @@ type CategoryRule = {
 
 // Ordem importa: regras mais específicas primeiro
 const CATEGORY_RULES: CategoryRule[] = [
+
+  // ── Beleza & Cuidados Pessoais ─────────────────────────────
+  // (antes de eletrodomesticos para evitar que "chapinha" vá para eletro)
+  {
+    slug: 'beleza',
+    keywords: [
+      // cabelos
+      'shampoo', 'condicionador', 'mascara capilar', 'mascara de cabelo',
+      'leave-in', 'leave in', 'finalizador capilar', 'oleo capilar',
+      'tratamento capilar', 'reconstrucao capilar', 'hidratacao capilar',
+      'nutrição capilar', 'proteina capilar', 'selante', 'antifrizz',
+      'tanino', 'escova progressiva', 'alisamento', 'relaxamento capilar',
+      'ampola capilar', 'soro capilar', 'tonico capilar', 'serum capilar',
+      'keratina', 'queratina', 'botox capilar', 'cauterizacao',
+      'chapinha', 'prancha de cabelo', 'prancha cabelo', 'prancha titanium',
+      'prancha ceramica', 'chapa titanium', 'chapa ceramica',
+      'escova secadora', 'secador de cabelo', 'secador cabelo',
+      'babyliss', 'taiff', 'mq professional', 'gama italy',
+      'corte de cabelo', 'tintura de cabelo', 'coloracao cabelo',
+      // pele / rosto
+      'creme facial', 'creme para rosto', 'serum facial', 'serum para rosto',
+      'hidratante facial', 'hidratante corporal', 'loção corporal',
+      'protetor solar', 'fps', 'sunscreen', 'vitamina c facial',
+      'retinol', 'acido hialuronico', 'acido hialuronico', 'hyaluronic',
+      'esfoliante', 'mascara facial', 'limpeza facial', 'tônico facial',
+      'micellar', 'agua micelar', 'demaquilante', 'base maquiagem',
+      'corretivo maquiagem', 'contorno maquiagem', 'blush',
+      'sombra olhos', 'mascara cilios', 'rimel', 'delineador',
+      'batom', 'gloss labial', 'primer maquiagem', 'po compacto',
+      'isdin', 'la roche', 'vichy', 'eucerin', 'cetaphil', 'neutrogena',
+      'nivea rosto', 'olay', 'l\'oreal', 'maybelline', 'mac cosmeticos',
+      'natura una', 'natura ekos', 'natura chronos', 'o boticario',
+      'eudora', 'dermage', 'skinceuticals', 'theraskin',
+      // corpo
+      'oleo de amendoas', 'oleo de ricino', 'oleo de coco cosmetico',
+      'manteiga de karité', 'manteiga de shea', 'creme corporal',
+      'creme para massagem', 'gel de massagem', 'oleos essenciais',
+      'aromaterapia',
+      // higiene / oral
+      'creme dental', 'pasta de dente', 'enxaguante bucal', 'fio dental',
+      'escova dental', 'branqueamento dental', 'clareamento dental',
+      'palito de dente',
+      // depilacao / barba
+      'creme depilatório', 'lâmina de barbear', 'gel de barbear',
+      'loção pós-barba', 'kit de barba', 'barbeador',
+      'don alcides', 'kit barba', 'pomada modeladora',
+      // unhas
+      'esmalte', 'base para unhas', 'removedor de esmalte', 'acetona',
+      // anti-age / tratamentos
+      'anti-idade', 'anti-envelhecimento', 'creme antirrugas',
+      'colageno', 'colágeno hidrolisado', 'acido retinóico',
+      'crioterapia', 'verrugas', 'dermafreeze',
+      // marcas de beleza
+      'fit cosmetics', 'grandha', 'wella', 'schwarzkopf', 'loreal',
+      'tresemme', 'pantene', 'dove cabelos', 'keune',
+    ],
+  },
+
+  // ── Perfumes & Cosméticos ──────────────────────────────────
+  {
+    slug: 'perfumes',
+    keywords: [
+      'perfume', 'colonia', 'eau de parfum', 'eau de toilette', 'edp ',
+      'edt ', 'deo parfum', 'deo colonia', 'body splash', 'body mist',
+      'desodorante', 'antitranspirante', 'roll-on desodorante',
+      'al wataniah', 'arabian oud', 'lattafa', 'armaf', 'fragrance',
+      'fragancia', 'aroma', 'oud intense', 'oud wood', 'musk ',
+      'boticario perfume', 'natura perfume', 'o.u.i parfum',
+    ],
+  },
+
+  // ── Saúde & Suplementos ─────────────────────────────────────
+  {
+    slug: 'saude',
+    keywords: [
+      // suplementos
+      'whey protein', 'proteina whey', 'creatina', 'bcaa', 'pre-treino',
+      'pre treino', 'colageno ', 'colágeno ', 'vitamina d', 'vitamina c',
+      'vitamina b12', 'acido folico', 'omega 3', 'omega-3', 'multivitaminico',
+      'suplemento alimentar', 'termogenico', 'emagrecer',
+      'aminoacido', 'glutamina', 'maltodextrina', 'dextrose',
+      // bebidas saudáveis
+      'bebida de eletrolitos', 'eletrolitos em po', 'bebida isotonica',
+      'bebida vegetal', 'leite vegetal', 'leite de amendoas', 'leite de aveia',
+      'leite de coco', 'bebida de amendoa', 'liquidz',
+      // outros saúde
+      'aparelho de pressao', 'oximetro', 'glicosimetro', 'termometro',
+      'nebulizador', 'umidificador de ar', 'purificador de ar',
+      'almofada ortopedica', 'suporte lombar',
+      'pomada cicatrizante', 'curativo', 'micropore',
+      // pharma
+      'loção antiséptica', 'anti-inflamatorio', 'analgesico',
+      'repelente de insetos',
+    ],
+  },
+
+  // ── Alimentação & Bebidas ──────────────────────────────────
+  {
+    slug: 'alimentos',
+    keywords: [
+      'chocolate ', 'biscoito', 'bolacha', 'snack', 'barra de cereal',
+      'granola', 'aveia em flocos', 'farinha de aveia',
+      'azeite de oliva', 'azeite extravirgem', 'molho de tomate',
+      'macarrao', 'arroz ', 'feijao ', 'lentilha',
+      'cafe em grao', 'cafe solúvel', 'capsula de cafe', 'nespresso',
+      'cha verde', 'cha preto', 'erva-mate', 'erva mate',
+      'suco de fruta', 'refrigerante', 'agua mineral',
+      'kit leve', 'compre e leve', 'fardo de', 'cx de',
+    ],
+  },
+
   // ── Smartphones ────────────────────────────────────────────
   {
     slug: 'smartphones',
@@ -46,7 +157,6 @@ const CATEGORY_RULES: CategoryRule[] = [
       'tv lg', 'tv sony', 'tv philips', 'tv tcl', 'tv hisense', 'tv xiaomi',
       'bravia', 'qled tv', 'neo qled', 'oled tv', 'crystal uhd', 'nanocell',
       '4k tv', '8k tv', 'android tv', 'google tv', 'webos', 'tizen tv',
-      '"polegadas"', '"polegada"',
     ],
   },
 
@@ -113,8 +223,7 @@ const CATEGORY_RULES: CategoryRule[] = [
       'maquina de cafe', 'cafeteira', 'batedeira', 'liquidificador',
       'fritadeira', 'airfryer', 'air fryer', 'panela eletrica', 'panela de pressao',
       'sanduicheira', 'torradeira', 'espremedor', 'multiprocessador',
-      'aspirador de po', 'aspirador robo', 'ferro de passar', 'depilador',
-      'barbeador eletrico', 'escova secadora', 'chapinha', 'prancha de cabelo',
+      'aspirador de po', 'aspirador robo', 'ferro de passar',
     ],
   },
 
