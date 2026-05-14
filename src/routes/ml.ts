@@ -29,6 +29,20 @@ const MATT_TOOL    = '38524122'
 const ML_API       = 'https://api.mercadolibre.com'
 const APP_ID       = '3098423019766450'
 
+// ── Converte qualquer permalink ML para formato afiliado /p/MLB canônico ─
+// produto.mercadolivre.com.br/MLB-XXXXXXX → /p/MLBXXXXXXX
+// www.mercadolivre.com.br/MLB-XXXXXXX      → /p/MLBXXXXXXX
+// /p/MLB... ou /social/...                 → mantém como está
+function toAffUrl(permalink: string): string {
+  if (!permalink) return ''
+  const clean = permalink.split('?')[0]
+  const m = clean.match(/mercadolivre\.com\.br\/MLB-(\d+)/i)
+  if (m) {
+    return `https://www.mercadolivre.com.br/p/MLB${m[1]}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+  }
+  return `${clean}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+}
+
 // ── Mapa de categorias ML ─────────────────────────────────
 // seedIds: IDs reais do ML — use /admin/api/ml/import-url para adicionar mais
 // Limpe os IDs inválidos e adicione reais via painel de afiliados do ML
@@ -461,7 +475,7 @@ ml.post('/webhook', async (c) => {
       if (token && itemId) {
         const item = await fetchMLItem(itemId, token)
         if (item) {
-          const aff_url = `${item.permalink}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+          const aff_url = toAffUrl(item.permalink || '')
           await DB.prepare(`
             UPDATE products
             SET best_price = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
@@ -1083,9 +1097,9 @@ ml.post('/import-url', async (c) => {
     return `https://www.mercadolivre.com.br/p/${mlId}`
   }
 
-  // Helper: monta link afiliado
+  // Helper: monta link afiliado — delega para toAffUrl global
   function buildAffUrl(permalink: string): string {
-    return `${permalink.split('?')[0]}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+    return toAffUrl(permalink)
   }
 
   // Expande todas as entradas em linhas individuais
@@ -1427,7 +1441,7 @@ ml.post('/import-item', async (c) => {
     name:          item.title,
     price:         item.price,
     category:      catSlug,
-    affiliate_url: `${item.permalink}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`,
+    affiliate_url: toAffUrl(item.permalink || ''),
   })
 })
 
@@ -1519,9 +1533,7 @@ ml.get('/browse', async (c) => {
     // Injeta link afiliado em cada item
     const results = items.map((item: any) => {
       const permalink = item.permalink || ''
-      const affUrl    = permalink
-        ? `${permalink.split('?')[0]}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
-        : ''
+      const affUrl    = permalink ? toAffUrl(permalink) : ''
       return {
         id:             item.id,
         title:          item.title,
@@ -1683,9 +1695,7 @@ ml.get('/deals', async (c) => {
           ? Math.round((1 - price / orig) * 100)
           : 0
         const permalink = item.permalink || ''
-        const affUrl    = permalink
-          ? `${permalink.split('?')[0]}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
-          : ''
+        const affUrl    = permalink ? toAffUrl(permalink) : ''
         return {
           id:             item.id,
           title:          item.title,
@@ -1794,9 +1804,7 @@ ml.get('/search', async (c) => {
       const orig      = item.original_price || 0
       const price     = item.price || 0
       const permalink = item.permalink || ''
-      const affUrl    = permalink
-        ? `${permalink.split('?')[0]}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
-        : ''
+      const affUrl    = permalink ? toAffUrl(permalink) : ''
       return {
         id:             item.id,
         title:          item.title,
@@ -1858,9 +1866,7 @@ ml.get('/item/:id', async (c) => {
     if (!item) return c.json({ error: `Item ${itemId} não encontrado` }, 404)
 
     const permalink = item.permalink || ''
-    const affUrl    = permalink
-      ? `${permalink.split('?')[0]}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
-      : ''
+    const affUrl    = permalink ? toAffUrl(permalink) : ''
 
     const payload = {
       id:             item.id,
