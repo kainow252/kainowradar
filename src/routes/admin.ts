@@ -6773,6 +6773,16 @@ function renderAdminSPA(): string {
       <div onclick="showSection('api-configs')" class="sidebar-link" data-section="api-configs">
         <span class="text-lg">🔌</span> APIs & Secrets
       </div>
+      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest mt-1">Publicação</div>
+      <div onclick="showSection('social')" class="sidebar-link" data-section="social">
+        <span class="text-lg">📣</span> Social Media
+      </div>
+      <div onclick="showSection('editorial')" class="sidebar-link" data-section="editorial">
+        <span class="text-lg">🤖</span> IA Editorial
+      </div>
+      <div onclick="showSection('footer')" class="sidebar-link" data-section="footer">
+        <span class="text-lg">🦶</span> Rodapé
+      </div>
       <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest mt-1">Análise</div>
       <div onclick="showSection('analytics')" class="sidebar-link" data-section="analytics">
         <span class="text-lg">📈</span> Analytics
