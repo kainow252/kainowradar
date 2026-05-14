@@ -12,12 +12,27 @@ type CategoryRule = {
 // Ordem importa: regras mais específicas primeiro
 const CATEGORY_RULES: CategoryRule[] = [
 
+  // ── Saúde Sexual & Produtos Íntimos ───────────────────────
+  // (antes de beleza/saude para evitar que gel lubrificante vá para beleza)
+  {
+    slug: 'saude',
+    keywords: [
+      // produtos íntimos / adultos
+      'sex shop', 'sexshop', 'gel lubrificante', 'lubrificante intimo',
+      'lubrificante sexual', 'gel intimo', 'gel sexual', 'preservativo',
+      'camisinha', 'vibrador', 'massageador intimo', 'estimulante sexual',
+      'kit intimo', 'kit sex', 'produtos intimos', 'produto intimo',
+      'excitante', 'excitante feminino', 'excitante masculino',
+      'calcinha comestivel', 'fantasia erotica', 'acessorio intimo',
+    ],
+  },
+
   // ── Beleza & Cuidados Pessoais ─────────────────────────────
   // (antes de eletrodomesticos para evitar que "chapinha" vá para eletro)
   {
     slug: 'beleza',
     keywords: [
-      // cabelos
+      // cabelos — pranchas e secadores (marcas e modelos)
       'shampoo', 'condicionador', 'mascara capilar', 'mascara de cabelo',
       'leave-in', 'leave in', 'finalizador capilar', 'oleo capilar',
       'tratamento capilar', 'reconstrucao capilar', 'hidratacao capilar',
@@ -27,15 +42,16 @@ const CATEGORY_RULES: CategoryRule[] = [
       'keratina', 'queratina', 'botox capilar', 'cauterizacao',
       'chapinha', 'prancha de cabelo', 'prancha cabelo', 'prancha titanium',
       'prancha ceramica', 'chapa titanium', 'chapa ceramica',
+      'prancha mq', 'mq pro', 'prancha turbo', 'prancha led',
       'escova secadora', 'secador de cabelo', 'secador cabelo',
-      'babyliss', 'taiff', 'mq professional', 'gama italy',
+      'babyliss', 'taiff', 'mq professional', 'gama italy', 'lizze',
       'corte de cabelo', 'tintura de cabelo', 'coloracao cabelo',
       // pele / rosto
       'creme facial', 'creme para rosto', 'serum facial', 'serum para rosto',
       'hidratante facial', 'hidratante corporal', 'loção corporal',
       'protetor solar', 'fps', 'sunscreen', 'vitamina c facial',
-      'retinol', 'acido hialuronico', 'acido hialuronico', 'hyaluronic',
-      'esfoliante', 'mascara facial', 'limpeza facial', 'tônico facial',
+      'retinol', 'acido hialuronico', 'hyaluronic',
+      'esfoliante', 'mascara facial', 'limpeza facial', 'tonico facial',
       'micellar', 'agua micelar', 'demaquilante', 'base maquiagem',
       'corretivo maquiagem', 'contorno maquiagem', 'blush',
       'sombra olhos', 'mascara cilios', 'rimel', 'delineador',
@@ -44,24 +60,32 @@ const CATEGORY_RULES: CategoryRule[] = [
       'nivea rosto', 'olay', 'l\'oreal', 'maybelline', 'mac cosmeticos',
       'natura una', 'natura ekos', 'natura chronos', 'o boticario',
       'eudora', 'dermage', 'skinceuticals', 'theraskin',
+      // aparelhos de beleza facial / corporal
+      'rolo facial', 'rolos faciais', 'massageador facial', 'rolo de jade',
+      'rolo led', 'mascara led', 'aparelho led facial', 'led facial',
+      'microagulhamento', 'dermapen', 'microcorrente facial',
+      'aparelho de beleza', 'aparelho facial', 'espatula ultrassonica',
+      'vacuum facial', 'limpador facial', 'esfoliador facial',
+      'depilador', 'depiladora', 'epilador', 'epiladora',
       // corpo
       'oleo de amendoas', 'oleo de ricino', 'oleo de coco cosmetico',
-      'manteiga de karité', 'manteiga de shea', 'creme corporal',
+      'manteiga de karite', 'manteiga de shea', 'creme corporal',
       'creme para massagem', 'gel de massagem', 'oleos essenciais',
       'aromaterapia',
       // higiene / oral
       'creme dental', 'pasta de dente', 'enxaguante bucal', 'fio dental',
       'escova dental', 'branqueamento dental', 'clareamento dental',
-      'palito de dente',
+      'palito de dente', 'palito dente', 'fio de dente',
       // depilacao / barba
-      'creme depilatório', 'lâmina de barbear', 'gel de barbear',
-      'loção pós-barba', 'kit de barba', 'barbeador',
+      'creme depilatorio', 'lamina de barbear', 'gel de barbear',
+      'locao pos-barba', 'kit de barba', 'barbeador',
       'don alcides', 'kit barba', 'pomada modeladora',
       // unhas
       'esmalte', 'base para unhas', 'removedor de esmalte', 'acetona',
+      'gel para unhas', 'alongamento de unhas',
       // anti-age / tratamentos
       'anti-idade', 'anti-envelhecimento', 'creme antirrugas',
-      'colageno', 'colágeno hidrolisado', 'acido retinóico',
+      'colageno', 'colageno hidrolisado', 'acido retinoico',
       'crioterapia', 'verrugas', 'dermafreeze',
       // marcas de beleza
       'fit cosmetics', 'grandha', 'wella', 'schwarzkopf', 'loreal',
@@ -88,22 +112,24 @@ const CATEGORY_RULES: CategoryRule[] = [
     keywords: [
       // suplementos
       'whey protein', 'proteina whey', 'creatina', 'bcaa', 'pre-treino',
-      'pre treino', 'colageno ', 'colágeno ', 'vitamina d', 'vitamina c',
-      'vitamina b12', 'acido folico', 'omega 3', 'omega-3', 'multivitaminico',
+      'pre treino', 'vitamina d', 'vitamina c', 'vitamina b12',
+      'acido folico', 'omega 3', 'omega-3', 'multivitaminico',
       'suplemento alimentar', 'termogenico', 'emagrecer',
       'aminoacido', 'glutamina', 'maltodextrina', 'dextrose',
       // bebidas saudáveis
       'bebida de eletrolitos', 'eletrolitos em po', 'bebida isotonica',
       'bebida vegetal', 'leite vegetal', 'leite de amendoas', 'leite de aveia',
       'leite de coco', 'bebida de amendoa', 'liquidz',
-      // outros saúde
+      // outros saúde / farmácia
       'aparelho de pressao', 'oximetro', 'glicosimetro', 'termometro',
       'nebulizador', 'umidificador de ar', 'purificador de ar',
       'almofada ortopedica', 'suporte lombar',
       'pomada cicatrizante', 'curativo', 'micropore',
-      // pharma
-      'loção antiséptica', 'anti-inflamatorio', 'analgesico',
-      'repelente de insetos',
+      'locao antisseptica', 'anti-inflamatorio', 'analgesico',
+      'repelente de insetos', 'protetor solar fps',
+      // saúde sexual / íntimos (segunda ocorrência — garante cobertura)
+      'lubrificante', 'gel lubrificante', 'produtos intimos',
+      'saude sexual', 'saude intima', 'higiene intima',
     ],
   },
 

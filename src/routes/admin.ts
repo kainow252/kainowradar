@@ -6007,6 +6007,24 @@ admin.post('/api/feed/process', async (c) => {
       } else {
         status = 'matched'
         getStats(link.batch_id).matched++
+
+        // ── Fix: atualiza categoria se produto existe mas category = null ─
+        if (productId) {
+          const existingCat = await db.prepare(
+            `SELECT category FROM products WHERE id = ? LIMIT 1`
+          ).bind(productId).first<{ category: string | null }>()
+
+          if (!existingCat?.category || existingCat.category === 'outros') {
+            const newCat = detectCategoryWithFallback(
+              link.name || '', link.product_url || '', null
+            )
+            if (newCat && newCat !== 'outros') {
+              await db.prepare(
+                `UPDATE products SET category = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+              ).bind(newCat, productId).run()
+            }
+          }
+        }
       }
 
       // ── 6. Upsert da oferta ───────────────────────────
@@ -6265,10 +6283,12 @@ admin.post('/api/categories/recategorize', async (c) => {
   // ─── mapa de palavras-chave inline ────────────────────────────────────────────
   type CatRule = { slug: string; keywords: string[] }
   const RULES: CatRule[] = [
+    // saúde sexual ANTES de beleza — 'gel lubrificante' não vai para beleza
+    { slug: 'saude',            keywords: ['sex shop','sexshop','gel lubrificante','lubrificante intimo','lubrificante sexual','gel intimo','gel sexual','preservativo','camisinha','vibrador','massageador intimo','estimulante sexual','kit intimo','kit sex','produtos intimos','produto intimo','excitante','calcinha comestivel','fantasia erotica','acessorio intimo','lubrificante','saude sexual','saude intima','higiene intima'] },
     // beleza ANTES de eletro para 'chapinha','prancha' não conflitar
-    { slug: 'beleza',           keywords: ['shampoo','condicionador','mascara capilar','leave-in','leave in','finalizador capilar','oleo capilar','tratamento capilar','reconstrucao capilar','hidratacao capilar','tanino','escova progressiva','chapinha','prancha de cabelo','prancha cabelo','prancha titanium','prancha ceramica','chapa titanium','chapa ceramica','escova secadora','secador de cabelo','babyliss','taiff','mq professional','gama italy','creme facial','serum facial','hidratante facial','hidratante corporal','loção corporal','protetor solar','vitamina c facial','retinol','acido hialuronico','hyaluronic','esfoliante','mascara facial','base maquiagem','batom','demaquilante','isdin','la roche','vichy','eucerin','cetaphil','neutrogena','olay','loreal','maybelline','natura una','natura ekos','natura chronos','o boticario','eudora','oleo de amendoas','oleo de ricino','creme dental','pasta de dente','don alcides','fit cosmetics','grandha','wella','schwarzkopf','tresemme','pantene','keune','ampola capilar','soro capilar','serum capilar','keratina','queratina','botox capilar','selante','antifrizz','limpeza de dentes','branqueamento','raavi','sendor','creme para massagem','loção desodorante','cuidados pessoais'] },
+    { slug: 'beleza',           keywords: ['shampoo','condicionador','mascara capilar','leave-in','leave in','finalizador capilar','oleo capilar','tratamento capilar','reconstrucao capilar','hidratacao capilar','tanino','escova progressiva','chapinha','prancha de cabelo','prancha cabelo','prancha titanium','prancha ceramica','chapa titanium','chapa ceramica','prancha mq','mq pro','prancha turbo','prancha led','escova secadora','secador de cabelo','babyliss','taiff','mq professional','gama italy','lizze','creme facial','serum facial','hidratante facial','hidratante corporal','protetor solar','retinol','acido hialuronico','hyaluronic','esfoliante','mascara facial','base maquiagem','batom','demaquilante','isdin','la roche','vichy','eucerin','cetaphil','neutrogena','olay','loreal','maybelline','natura una','natura ekos','natura chronos','o boticario','eudora','oleo de amendoas','oleo de ricino','creme dental','pasta de dente','palito de dente','palito dente','don alcides','fit cosmetics','grandha','wella','schwarzkopf','tresemme','pantene','keune','ampola capilar','soro capilar','serum capilar','keratina','queratina','botox capilar','selante','antifrizz','branqueamento','rolo facial','rolos faciais','massageador facial','rolo de jade','rolo led','mascara led','aparelho led facial','led facial','dermapen','aparelho de beleza','aparelho facial','depilador','depiladora','epilador','epiladora','creme para massagem','cuidados pessoais'] },
     { slug: 'perfumes',         keywords: ['perfume','colonia','eau de parfum','eau de toilette','edp ','edt ','deo parfum','deo colonia','body splash','body mist','desodorante','antitranspirante','roll-on','al wataniah','arabian oud','lattafa','armaf','oud intense','oud wood','musk ','natura una celebrar','o.u.i parfum'] },
-    { slug: 'saude',            keywords: ['whey protein','proteina whey','creatina','bcaa','pre-treino','pre treino','colageno ','colágeno ','vitamina d','vitamina b12','acido folico','omega 3','omega-3','multivitaminico','suplemento alimentar','termogenico','aminoacido','glutamina','maltodextrina','dextrose','bebida de eletrolitos','eletrolitos em po','bebida isotonica','bebida vegetal','leite vegetal','leite de amendoas','leite de aveia','leite de coco','liquidz','aparelho de pressao','oximetro','glicosimetro','termometro','nebulizador','almofada ortopedica','elimine verrugas','crioterapia','dermafreeze','ampola de soro'] },
+    { slug: 'saude',            keywords: ['whey protein','proteina whey','creatina','bcaa','pre-treino','pre treino','vitamina d','vitamina b12','acido folico','omega 3','omega-3','multivitaminico','suplemento alimentar','termogenico','aminoacido','glutamina','maltodextrina','dextrose','bebida de eletrolitos','eletrolitos em po','bebida isotonica','bebida vegetal','leite vegetal','leite de amendoas','leite de aveia','leite de coco','liquidz','aparelho de pressao','oximetro','glicosimetro','termometro','nebulizador','almofada ortopedica','elimine verrugas','crioterapia','dermafreeze','ampola de soro'] },
     { slug: 'alimentos',        keywords: ['chocolate ','biscoito','bolacha','snack','barra de cereal','granola','aveia em flocos','farinha de aveia','azeite de oliva','molho de tomate','macarrao','cafe em grao','cafe solúvel','capsula de cafe','cha verde','cha preto','erva-mate','kit compre','kit leve','fardo de','cx de','leite de coco tradicional'] },
     { slug: 'smartphones',      keywords: ['smartphone','celular','iphone','galaxy s','galaxy a','galaxy m','moto g','moto e','motorola edge','redmi','xiaomi','poco','realme','oppo','pixel ','oneplus','asus zenfone','android phone','telefone celular'] },
     { slug: 'notebooks',        keywords: ['notebook','laptop','macbook','ultrabook','chromebook','thinkpad','ideapad','legion ','yoga book','dell xps','dell inspiron','hp pavilion','hp envy','hp victus','acer aspire','acer nitro','acer swift','asus vivobook','asus zenbook','asus rog','asus tuf','surface laptop','surface book','surface pro'] },
