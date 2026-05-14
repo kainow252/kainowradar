@@ -2506,7 +2506,17 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
   //   - URL | Nome | Preço
   //   - URL | Nome | Preço | ImageURL
   //   - CSV: url,name,price,image_url
-  const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+  // Separa linhas — também divide 2 URLs coladas na mesma linha por espaço
+  const rawLines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+  const lines: string[] = []
+  for (const l of rawLines) {
+    const parts = l.split(/\s+/).filter(Boolean)
+    if (parts.length >= 2 && parts.every(p => p.startsWith('http'))) {
+      lines.push(...parts) // cola "url1 url2" → separa em 2 linhas
+    } else {
+      lines.push(l)
+    }
+  }
 
   // Detecta se é CSV (primeira linha tem vírgula e parece cabeçalho)
   const firstLine = lines[0] || ''
@@ -2567,18 +2577,37 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       .substring(0, 120)
   }
 
+  // ── Pré-processa pares: produto + link afiliado (com cfegdhabc31955)
+  // Quando 2 URLs são coladas juntas, a que tem cfegdhabc31955 é o link do botão Comprar
+  interface PairItem { productUrl: string; affiliateUrl: string | null; name: string; price: number | null; image_url: string | null }
+  const pairedItems: PairItem[] = []
+
+  for (let i = 0; i < dataLines.length; i++) {
+    const line = dataLines[i]
+    // Se esta linha tem o publisher ID → é link afiliado, associa ao produto anterior
+    if (line.includes('cfegdhabc31955') && pairedItems.length > 0 && pairedItems[pairedItems.length - 1].affiliateUrl === null) {
+      pairedItems[pairedItems.length - 1].affiliateUrl = line
+      continue
+    }
+    const item = parseLine(line)
+    if (!item) { continue }
+    pairedItems.push({ productUrl: item.url, affiliateUrl: null, name: item.name, price: item.price, image_url: item.image_url })
+  }
+
   const results: any[] = []
   let imported = 0
   let skipped  = 0
   let duplicates = 0
   let errors   = 0
 
-  for (const line of dataLines) {
-    const item = parseLine(line)
-    if (!item) { skipped++; continue }
+  for (const item of pairedItems) {
+    const { productUrl, affiliateUrl: affUrl, name: rawName, price: rawPrice, image_url } = item
+    // Usa o link afiliado correto (/social/ com ref=) se disponível, senão usa a URL do produto
+    const finalAffiliateUrl = affUrl || productUrl
+    if (!finalAffiliateUrl) { skipped++; continue }
 
-    const affiliateUrl = item.url
-    const name = (item.name || '').trim()
+    const affiliateUrl = finalAffiliateUrl
+    const name = (rawName || '').trim()
     // Rejeita itens sem nome — o frontend DEVE fornecer o nome antes de salvar
     if (!name) {
       results.push({ url: affiliateUrl, name: '', status: 'erro', error: 'Nome obrigatório' })
@@ -2586,8 +2615,8 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       continue
     }
 
-    const price   = item.price ?? 0
-    const imgUrl  = item.image_url || null
+    const price   = rawPrice ?? 0
+    const imgUrl  = image_url || null
     const slug    = slugify(name) + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6)
     const extId   = 'import-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6)
 

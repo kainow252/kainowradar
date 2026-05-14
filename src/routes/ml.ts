@@ -1147,12 +1147,11 @@ ml.post('/import-url', async (c) => {
     const line = resolvedLines[i]
     const orig = allLines[i]
 
-    // Detecta link afiliado: qualquer URL que contenha o publisher ID (cfegdhabc31955)
-    // Exemplos válidos:
-    //   https://www.mercadolivre.com.br/social/cfegdhabc31955?matt_word=...
-    //   https://www.mercadolivre.com.br/MLB-123?matt_word=cfegdhabc31955&...
-    //   qualquer URL com cfegdhabc31955 no path ou query string
-    const isAffiliateLink = line.includes(PUBLISHER_ID)
+    // Detecta link afiliado: URL do painel ML Afiliados
+    // Formato real: https://www.mercadolivre.com.br/social/cfegdhabc31955?...&ref=...
+    // IMPORTANTE: não usar só includes(PUBLISHER_ID) pois a URL do produto também pode ter
+    // matt_word=cfegdhabc31955 — precisa ser especificamente o link /social/
+    const isAffiliateLink = /mercadolivre\.com\.br\/social\//.test(line)
 
     if (isAffiliateLink) {
       // Se há um produto pendente no par anterior → associa como link afiliado
