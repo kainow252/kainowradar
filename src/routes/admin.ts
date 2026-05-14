@@ -6,6 +6,7 @@
 import { Hono } from 'hono'
 import type { Bindings } from '../types'
 import { CacheManager } from '../lib/cache'
+import { detectCategoryWithFallback } from '../lib/categorize'
 import ml from './ml'
 
 type AdminBindings = Bindings & {
@@ -5923,12 +5924,17 @@ admin.post('/api/feed/process', async (c) => {
           .replace(/[^\w\s]/g, ' ').replace(/\s+/g, '-').replace(/-+/g, '-').substring(0, 80)
         const slug = `${slugBase}-${Math.random().toString(36).substring(2, 7)}`
 
+        // Auto-detecta categoria se não informada
+        const detectedCategory = detectCategoryWithFallback(
+          link.name || '', link.product_url || '', link.category || null
+        )
+
         const res = await db.prepare(`
           INSERT OR IGNORE INTO products (ean, name, slug, brand, category, image_url, best_price, offer_count, source)
           VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
         `).bind(
           link.ean || null, link.name, slug,
-          link.brand || null, link.category || 'outros',
+          link.brand || null, detectedCategory,
           link.image_url || null, link.price || null, link.network || 'manual'
         ).run()
 
@@ -6152,6 +6158,89 @@ admin.get('/api/feed/pending', async (c) => {
   return c.json({ pending: row?.n || 0 })
 })
 
+// ── GET /admin/api/categories — Lista com COUNT real ─────
+// Retorna todas as categorias com contagem real de produtos
+// (ignora product_count estático, que pode estar desatualizado)
+admin.get('/api/categories', async (c) => {
+  const { DB } = c.env
+  const { results } = await DB.prepare(`
+    SELECT
+      c.id, c.slug, c.name, c.icon, c.is_active, c.sort_order,
+      c.product_count AS stored_count,
+      COUNT(p.id) AS product_count
+    FROM categories c
+    LEFT JOIN products p
+      ON p.category = c.slug
+      AND p.is_active = 1
+      AND p.best_price IS NOT NULL
+    GROUP BY c.id
+    ORDER BY c.sort_order ASC, COUNT(p.id) DESC
+  `).all<any>()
+  return c.json(results)
+})
+
+// ── POST /admin/api/categories/sync — Sincroniza product_count ──
+// Atualiza categories.product_count com a contagem real de produtos ativos
+admin.post('/api/categories/sync', async (c) => {
+  const { DB } = c.env
+
+  // Busca contagens reais por slug
+  const { results: counts } = await DB.prepare(`
+    SELECT category as slug, COUNT(*) as cnt
+    FROM products
+    WHERE is_active = 1 AND best_price IS NOT NULL AND category IS NOT NULL
+    GROUP BY category
+  `).all<{ slug: string; cnt: number }>()
+
+  if (counts.length === 0) {
+    return c.json({ ok: true, updated: 0, message: 'Nenhum produto com categoria' })
+  }
+
+  // Atualiza cada categoria individualmente (D1 não suporta UPDATE com VALUES clause)
+  let updated = 0
+  for (const row of counts) {
+    const res = await DB.prepare(
+      `UPDATE categories SET product_count = ? WHERE slug = ?`
+    ).bind(row.cnt, row.slug).run()
+    if (res.meta.changes > 0) updated++
+  }
+
+  // Zera categorias sem produtos
+  await DB.prepare(`
+    UPDATE categories SET product_count = 0
+    WHERE slug NOT IN (
+      SELECT DISTINCT category FROM products
+      WHERE is_active = 1 AND best_price IS NOT NULL AND category IS NOT NULL
+    )
+  `).run()
+
+  return c.json({
+    ok: true,
+    updated,
+    total_slugs: counts.length,
+    message: `${updated} categorias atualizadas`,
+  })
+})
+
+// ── PATCH /admin/api/categories/:id — Editar categoria ───
+admin.patch('/api/categories/:id', async (c) => {
+  const { DB } = c.env
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json().catch(() => ({})) as any
+  const { name, icon, is_active, sort_order } = body
+
+  await DB.prepare(`
+    UPDATE categories SET
+      name       = COALESCE(?, name),
+      icon       = COALESCE(?, icon),
+      is_active  = COALESCE(?, is_active),
+      sort_order = COALESCE(?, sort_order)
+    WHERE id = ?
+  `).bind(name ?? null, icon ?? null, is_active ?? null, sort_order ?? null, id).run()
+
+  return c.json({ ok: true })
+})
+
 // ── Página HTML do Admin (SPA) ────────────────────────────
 admin.get('*', async (c) => {
   const path = new URL(c.req.url).pathname
@@ -6291,6 +6380,9 @@ function renderAdminSPA(): string {
       <div onclick="showSection('offers')" class="sidebar-link" data-section="offers">
         <span class="text-lg">💰</span> Ofertas
       </div>
+      <div onclick="showSection('categories')" class="sidebar-link" data-section="categories">
+        <span class="text-lg">🗂️</span> Categorias
+      </div>
       <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Integrações</div>
       <!-- ml-import, ml-categories, ml-search, ml-crawl, ml-linkbuilder ocultos do menu -->
       <div onclick="showSection('feed-ingestion')" class="sidebar-link" data-section="feed-ingestion">
@@ -6357,7 +6449,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260514a"><\/script>
+<script src="/static/admin-spa.js?v=20260514b"><\/script>
 </body>
 </html>`
 }

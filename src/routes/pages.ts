@@ -667,7 +667,7 @@ pages.get('/categoria/:slug', async (c) => {
   const offset = (page - 1) * 24
   const orderBy = sort === 'price_asc' ? 'p.best_price ASC' : sort === 'price_desc' ? 'p.best_price DESC' : 'p.offer_count DESC'
 
-  const [{ results: products }, { results: navCatsCategoria }] = await Promise.all([
+  const [{ results: products }, { results: navCatsCategoria }, realCountRow] = await Promise.all([
     DB.prepare(`
       SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
       FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
@@ -675,14 +675,21 @@ pages.get('/categoria/:slug', async (c) => {
       ORDER BY ${orderBy} LIMIT 24 OFFSET ?
     `).bind(slug, offset).all<Product>(),
     DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>(),
+    // COUNT real — ignora product_count estático (pode estar desatualizado)
+    DB.prepare(`
+      SELECT COUNT(*) as total FROM products
+      WHERE category = ? AND is_active = 1 AND best_price IS NOT NULL
+    `).bind(slug).first<{ total: number }>(),
   ])
+
+  const realCount = realCountRow?.total ?? products.length
 
   const content = `
     <div class="max-w-7xl mx-auto px-4 py-8">
       <div class="flex items-center justify-between mb-6">
         <h1 class="text-2xl font-bold text-gray-900">
           ${category?.icon || '🛍️'} ${catName}
-          <span class="text-base font-normal text-gray-500 ml-2">${category?.product_count || products.length} produtos</span>
+          <span class="text-base font-normal text-gray-500 ml-2">${realCount} produto${realCount !== 1 ? 's' : ''}</span>
         </h1>
         <select onchange="location.href='?sort='+this.value" class="sort-select">
           <option value="relevance" ${sort === 'relevance' ? 'selected' : ''}>Relevância</option>

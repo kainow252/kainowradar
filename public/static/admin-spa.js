@@ -145,6 +145,7 @@ async function loadSection(name) {
     'lomadee-import': renderLomadeeImport,
     'ml-linkbuilder': renderMLLinkBuilder,
     'feed-ingestion': renderFeedIngestion,
+    'categories': renderCategories,
   }
   if (sections[name]) await sections[name](area)
 }
@@ -9584,4 +9585,172 @@ async function feedDeleteBatch(id) {
   await api('DELETE', `/admin/api/feed/batches/${id}`)
   toast('Lote removido.', 'success')
   setTimeout(() => renderFeedIngestion(document.getElementById('content-area')), 500)
+}
+
+// ============================================================
+// CATEGORIAS — renderCategories
+// Lista todas as categorias com COUNT real + botão de sync
+// ============================================================
+async function renderCategories(area) {
+  area.innerHTML = `<div class="flex items-center justify-center py-16"><div class="text-slate-400 text-sm">Carregando categorias...</div></div>`
+
+  const cats = await api('GET', '/admin/api/categories')
+  if (!cats) return
+
+  // Totais
+  const totalCats  = cats.length
+  const activeCats = cats.filter(c => c.is_active).length
+  const totalProds = cats.reduce((s, c) => s + (c.product_count || 0), 0)
+  const emptyCats  = cats.filter(c => (c.product_count || 0) === 0).length
+
+  const statusBadge = (cat) => {
+    if (!cat.is_active) return `<span class="badge-red">inativa</span>`
+    if ((cat.product_count || 0) === 0) return `<span class="badge-yellow">vazia</span>`
+    return `<span class="badge-green">ativa</span>`
+  }
+
+  const syncDiff = (cat) => {
+    const stored = cat.stored_count || 0
+    const real   = cat.product_count || 0
+    if (stored === real) return `<span class="text-xs text-slate-400">=</span>`
+    const delta = real - stored
+    const color = delta > 0 ? 'text-green-600' : 'text-red-500'
+    return `<span class="text-xs font-bold ${color}">${delta > 0 ? '+' : ''}${delta}</span>`
+  }
+
+  area.innerHTML = `
+    <div class="section">
+
+      <!-- Header -->
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-xl font-black text-slate-800">🗂️ Categorias</h2>
+          <p class="text-sm text-slate-500 mt-0.5">${activeCats} ativas · ${totalProds} produtos · ${emptyCats} vazias</p>
+        </div>
+        <button onclick="syncCategories()" id="btn-sync-cats"
+          class="btn-primary flex items-center gap-2">
+          🔄 Sincronizar Contadores
+        </button>
+      </div>
+
+      <!-- Cards resumo -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="stat-card text-center">
+          <div class="text-2xl font-black text-blue-600">${totalCats}</div>
+          <div class="text-xs text-slate-500 mt-1">Total de categorias</div>
+        </div>
+        <div class="stat-card text-center">
+          <div class="text-2xl font-black text-green-600">${activeCats}</div>
+          <div class="text-xs text-slate-500 mt-1">Ativas</div>
+        </div>
+        <div class="stat-card text-center">
+          <div class="text-2xl font-black text-slate-800">${totalProds}</div>
+          <div class="text-xs text-slate-500 mt-1">Produtos reais</div>
+        </div>
+        <div class="stat-card text-center">
+          <div class="text-2xl font-black ${emptyCats > 0 ? 'text-amber-500' : 'text-green-600'}">${emptyCats}</div>
+          <div class="text-xs text-slate-500 mt-1">Vazias</div>
+        </div>
+      </div>
+
+      <!-- Aviso de categorias com contagem desatualizada -->
+      ${(() => {
+        const stale = cats.filter(c => (c.stored_count || 0) !== (c.product_count || 0))
+        if (stale.length === 0) return ''
+        return `
+          <div class="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-3">
+            <span class="text-amber-500 text-lg shrink-0">⚠️</span>
+            <div>
+              <div class="text-sm font-bold text-amber-800">${stale.length} categori${stale.length > 1 ? 'as têm' : 'a tem'} contagem desatualizada</div>
+              <div class="text-xs text-amber-700 mt-0.5">
+                Clique em <strong>Sincronizar Contadores</strong> para atualizar o campo <code>product_count</code> no banco.
+              </div>
+            </div>
+          </div>`
+      })()}
+
+      <!-- Tabela de categorias -->
+      <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <table class="w-full">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-100">
+              <th class="table-th">Ícone</th>
+              <th class="table-th">Slug</th>
+              <th class="table-th">Nome</th>
+              <th class="table-th text-right">Produtos reais</th>
+              <th class="table-th text-right">No banco</th>
+              <th class="table-th text-center">Delta</th>
+              <th class="table-th text-center">Status</th>
+              <th class="table-th text-center">Ordem</th>
+              <th class="table-th text-center">Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${cats.map(cat => `
+              <tr class="hover:bg-slate-50 transition-colors ${(cat.product_count || 0) === 0 ? 'opacity-60' : ''}">
+                <td class="table-td text-2xl">${cat.icon || '🛍️'}</td>
+                <td class="table-td">
+                  <code class="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">${cat.slug}</code>
+                </td>
+                <td class="table-td font-semibold text-slate-800">${cat.name}</td>
+                <td class="table-td text-right">
+                  <a href="/categoria/${cat.slug}" target="_blank"
+                     class="text-blue-600 hover:underline font-bold">
+                    ${cat.product_count || 0}
+                  </a>
+                </td>
+                <td class="table-td text-right text-slate-500 text-xs">${cat.stored_count || 0}</td>
+                <td class="table-td text-center">${syncDiff(cat)}</td>
+                <td class="table-td text-center">${statusBadge(cat)}</td>
+                <td class="table-td text-center text-xs text-slate-500">${cat.sort_order || 0}</td>
+                <td class="table-td text-center">
+                  <a href="/categoria/${cat.slug}" target="_blank"
+                     class="text-xs text-blue-500 hover:text-blue-700 hover:underline">
+                    Ver →
+                  </a>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Info sobre auto-categorização -->
+      <div class="bg-blue-50 border border-blue-200 rounded-2xl p-5">
+        <h3 class="font-bold text-blue-800 mb-2">🤖 Auto-categorização ativa</h3>
+        <p class="text-sm text-blue-700 leading-relaxed">
+          Ao importar links via <strong>Feed Ingestion</strong>, o sistema detecta automaticamente a categoria
+          pelo nome e URL do produto. O mapa cobre: smartphones, notebooks, TVs, tablets, games, áudio,
+          câmeras, eletrodomésticos, computadores, monitores, impressoras, componentes, armazenamento,
+          redes e moda.
+        </p>
+        <div class="mt-3 flex flex-wrap gap-2">
+          ${['smartphones','notebooks','tv','tablets','games','audio','cameras',
+             'eletrodomesticos','computadores','monitores','impressoras',
+             'componentes','armazenamento','redes','moda'].map(slug => `
+            <span class="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-100 text-blue-700">
+              ${cats.find(c => c.slug === slug)?.icon || '🏷️'} ${slug}
+            </span>
+          `).join('')}
+        </div>
+      </div>
+
+    </div>
+  `
+}
+
+// ── Sincroniza product_count no banco ────────────────────
+async function syncCategories() {
+  const btn = document.getElementById('btn-sync-cats')
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Sincronizando...' }
+
+  const res = await api('POST', '/admin/api/categories/sync')
+  if (res?.ok) {
+    toast(`✅ ${res.message}`, 'success')
+    // Recarrega a seção para mostrar os novos valores
+    setTimeout(() => renderCategories(document.getElementById('content-area')), 600)
+  } else {
+    toast('Erro ao sincronizar', 'error')
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Sincronizar Contadores' }
+  }
 }
