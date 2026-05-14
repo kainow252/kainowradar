@@ -5,7 +5,6 @@
 import { Hono } from 'hono'
 import type { Bindings, Product, Offer, Category } from '../types'
 import { CacheManager } from '../lib/cache'
-import { DeeplinkEngine } from '../lib/deeplink'
 
 // ── Tipos para Footer Dinâmico ────────────────────────────
 export type FooterConfigRow = {
@@ -116,39 +115,6 @@ pages.use('*', async (c, next) => {
   await next()
   c.header('Cache-Control', 'no-store, no-cache, must-revalidate')
   c.header('Pragma', 'no-cache')
-})
-
-// ── Redirect de clique com rastreamento ───────────────────
-pages.get('/go/:slug/:offerId', async (c) => {
-  const { DB } = c.env
-  const offerId = parseInt(c.req.param('offerId'))
-  const slug = c.req.param('slug')
-
-  const offer = await DB
-    .prepare(`
-      SELECT o.*, s.slug as store_slug, s.name as store_name,
-             s.affiliate_id, s.affiliate_network
-      FROM offers o JOIN stores s ON s.id = o.store_id
-      WHERE o.id = ? AND o.is_active = 1
-    `)
-    .bind(offerId)
-    .first<any>()
-
-  if (!offer) return c.redirect(`/produto/${slug}`)
-
-  // Registra clique async (não bloqueia redirect)
-  const ipHash = await hashIP(c.req.header('CF-Connecting-IP') || '0')
-  DB.prepare(`INSERT INTO click_events (offer_id, store_id, ip_hash, user_agent) VALUES (?,?,?,?)`)
-    .bind(offerId, offer.store_id, ipHash, c.req.header('User-Agent') || '')
-    .run()
-
-  // Gera URL de afiliado e redireciona
-  const finalUrl = DeeplinkEngine.generateAffiliateUrl(
-    offer.checkout_url || offer.product_url || '#',
-    { slug: offer.store_slug, name: offer.store_name, affiliate_id: offer.affiliate_id, affiliate_network: offer.affiliate_network } as any
-  )
-
-  return c.redirect(finalUrl, 302)
 })
 
 // ── Página de produto — COMPLETA (Feature 1+2+4) ────────────

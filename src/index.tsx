@@ -141,17 +141,15 @@ app.route('/api/ml-webhook', ml)
 // NOTA: /admin/api/ml/* está registrado DENTRO do admin.ts para passar pelo middleware de auth
 
 // ── Redirect Afiliado — /go/:offer_id ─────────────────────
-// Quando o usuário clica em "Ir à loja", passa por aqui:
-// 1. Registra click_event para analytics
-// 2. Lê affiliate_url da oferta (gerado na importação)
-// 3. Redireciona com 302 para o destino final
-// URL pública: /go/123  (onde 123 = offer.id no banco)
-app.get('/go/:id', async (c) => {
+// Aceita dois formatos:
+//   /go/123                  — offer_id numérico direto
+//   /go/nome-do-produto/123  — slug + offer_id (SEO friendly)
+// Registra click_event e redireciona 302 para affiliate_url
+
+async function handleGoRedirect(c: any, offerId: number) {
   const { DB } = c.env
-  const offerId = parseInt(c.req.param('id') || '0')
   if (!offerId || isNaN(offerId)) return c.redirect('/', 302)
 
-  // Busca oferta com dados da loja e produto
   const offer = await DB.prepare(`
     SELECT
       o.id, o.affiliate_url, o.product_url, o.product_id, o.store_id,
@@ -170,7 +168,7 @@ app.get('/go/:id', async (c) => {
   const ip = c.req.header('CF-Connecting-IP') || ''
   const ipHash = ip
     ? await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ip))
-        .then(b => Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2,'0')).join(''))
+        .then((b: ArrayBuffer) => Array.from(new Uint8Array(b)).map((x: number) => x.toString(16).padStart(2,'0')).join(''))
         .catch(() => '')
     : ''
   DB.prepare(`
@@ -181,18 +179,16 @@ app.get('/go/:id', async (c) => {
     ipHash || null,
     c.req.header('User-Agent')?.slice(0,200) || null,
     c.req.header('Referer')?.slice(0,500) || null
-  ).run().catch(() => {}) // ignora erro — não bloqueia o redirect
+  ).run().catch(() => {})
 
   // ── Determina URL de destino ─────────────────────────────
   // Prioridade:
-  //  1. affiliate_url salva na oferta (gerado no import)
-  //  2. Fallback dinâmico: reconstrói link afiliado via affiliate_rules
-  //  3. product_url (URL direta sem tracking)
+  //  1. affiliate_url salva na oferta — inclui /social/cfegdhabc31955 e /p/MLB...
+  //  2. Fallback dinâmico via affiliate_rules
+  //  3. product_url (sem tracking)
   //  4. Homepage
   let dest = offer.affiliate_url || ''
 
-  // Fallback dinâmico: se affiliate_url está vazio, tenta reconstruir
-  // usando a rede de afiliado da loja + regra cadastrada no banco
   if (!dest && offer.product_url) {
     try {
       const rule = await DB.prepare(`
@@ -205,17 +201,14 @@ app.get('/go/:id', async (c) => {
       const baseUrl = offer.product_url
 
       if (rule?.link_template && pubId) {
-        // Para Buscapé: usa o redirect /lead?oid= como URL base
         const trackingBase = (offer.source === 'buscape' && offer.buscape_oid)
           ? `https://www.buscape.com.br/lead?oid=${offer.buscape_oid}&channel=11`
           : baseUrl
-
         dest = rule.link_template
           .replace('{url}',   encodeURIComponent(trackingBase))
           .replace('{pub}',   pubId)
           .replace('{extra}', rule.extra_param ?? '')
       } else if (offer.source === 'buscape' && offer.buscape_oid) {
-        // Sem regra de afiliado configurada: usa redirect Buscapé direto
         dest = `https://www.buscape.com.br/lead?oid=${offer.buscape_oid}&channel=11`
       } else {
         dest = baseUrl
@@ -226,11 +219,21 @@ app.get('/go/:id', async (c) => {
   }
 
   if (!dest) dest = offer.product_url || '/'
-
-  // Garante que a URL é absoluta
   if (dest && !dest.startsWith('http')) dest = '/' + dest
 
   return c.redirect(dest, 302)
+}
+
+// /go/slug/123  — slug + id numérico
+app.get('/go/:slug/:id', async (c) => {
+  const offerId = parseInt(c.req.param('id') || '0')
+  return handleGoRedirect(c, offerId)
+})
+
+// /go/123  — id numérico direto (legacy e links internos)
+app.get('/go/:id', async (c) => {
+  const offerId = parseInt(c.req.param('id') || '0')
+  return handleGoRedirect(c, offerId)
 })
 
 // ── Page Routes ───────────────────────────────────────────
