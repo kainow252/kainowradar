@@ -1228,6 +1228,15 @@ ml.post('/import-url', async (c) => {
         ...(apiData?.category ? [apiData.category]  : []),
         mlId,
       ).run()
+      // ── CRÍTICO: atualiza também a tabela offers (botão Comprar lê daqui)
+      if (affLine) {
+        await DB.prepare(`
+          UPDATE offers SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
+          WHERE product_id = ? AND store_id = (
+            SELECT id FROM stores WHERE affiliate_network = 'mercadolivre' OR name LIKE '%Mercado Livre%' LIMIT 1
+          )
+        `).bind(affLine, existing.id).run()
+      }
       updated++
       details.push({
         ml_id: mlId, name: apiData?.name || existing.name,
