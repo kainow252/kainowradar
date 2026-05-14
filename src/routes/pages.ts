@@ -239,40 +239,68 @@ pages.get('/produto/:slug', async (c) => {
 
   // ── OFERTAS HTML ─────────────────────────────────────────
   const offersHTML = offers.map((o, i) => {
-    const trackUrl   = `/go/${slug}/${o.id}`
-    const isBest     = i === 0
-    const discount   = o.discount_percent > 0 ? Math.round(o.discount_percent) : 0
-    const storeAv    = o.store_logo
-      ? `<img src="${o.store_logo}" alt="${o.store_name}" class="h-7 max-w-[90px] object-contain">`
-      : `<span class="font-black text-sm text-gray-800">${o.store_name}</span>`
+    const trackUrl = `/go/${slug}/${o.id}`
+    const isBest   = i === 0
+    const discount = o.discount_percent > 0 ? Math.round(o.discount_percent) : 0
+
+    // Logo da loja — tamanho generoso para ser reconhecível
+    const storeLogo = o.store_logo
+      ? `<img src="${o.store_logo}" alt="${o.store_name}" class="h-8 w-auto max-w-[110px] object-contain">`
+      : `<span class="text-sm font-bold text-gray-700 leading-tight">${o.store_name}</span>`
+
     return `
-    <div class="rounded-2xl border-2 p-4 transition-all ${
-      isBest ? 'border-green-400 bg-gradient-to-r from-green-50 to-emerald-50 shadow-md shadow-green-100' : 'border-gray-100 bg-white hover:border-blue-200'
+    <div class="rounded-2xl border-2 transition-all ${
+      isBest
+        ? 'border-green-400 bg-gradient-to-br from-green-50 to-emerald-50 shadow-md shadow-green-100'
+        : 'border-gray-100 bg-white hover:border-blue-200 hover:shadow-sm'
     }">
-      ${ isBest ? '<div class="text-xs font-black text-green-700 bg-green-100 inline-flex items-center gap-1 px-2 py-0.5 rounded-full mb-2">🏆 MELHOR PREÇO</div>' : '' }
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <div class="w-12 h-12 bg-white rounded-xl border border-gray-100 flex items-center justify-center p-1 shadow-sm">
-            ${storeAv}
-          </div>
-          <div>
-            ${ o.original_price && o.original_price > o.price
-              ? `<div class="text-xs text-gray-400 line-through">${formatCurrency(o.original_price)}</div>` : '' }
-            <div class="text-2xl font-black text-gray-900">${formatCurrency(o.price)}</div>
-            <div class="flex items-center gap-2 mt-0.5">
-              ${ o.free_shipping ? '<span class="text-xs font-semibold text-green-600">✓ Frete grátis</span>' : '<span class="text-xs text-gray-400">Frete a consultar</span>' }
-              ${ discount > 0 ? `<span class="text-xs font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded-lg">-${discount}%</span>` : '' }
-              ${ o.installments_count ? `<span class="text-xs text-gray-500">${o.installments_count}x ${formatCurrency((o.installments_value || o.price/o.installments_count))}</span>` : '' }
-            </div>
-          </div>
+
+      ${isBest ? `
+      <!-- Badge MELHOR PREÇO -->
+      <div class="px-4 pt-3 pb-0">
+        <span class="inline-flex items-center gap-1 text-xs font-black text-green-700 bg-green-100 border border-green-200 px-2.5 py-1 rounded-full">
+          🏆 MELHOR PREÇO
+        </span>
+      </div>` : ''}
+
+      <!-- Corpo do card -->
+      <div class="flex items-center gap-4 px-4 py-3">
+
+        <!-- Logo da loja — container fixo e centralizado -->
+        <div class="flex-shrink-0 w-[120px] h-[52px] bg-white rounded-xl border border-gray-100 shadow-sm flex items-center justify-center px-3">
+          ${storeLogo}
         </div>
+
+        <!-- Preço + frete — bloco central que cresce -->
+        <div class="flex-1 min-w-0">
+          ${ o.original_price && o.original_price > o.price
+            ? `<div class="text-xs text-gray-400 line-through leading-none mb-0.5">${formatCurrency(o.original_price)}</div>`
+            : '' }
+          <div class="text-3xl font-black text-gray-900 leading-none">${formatCurrency(o.price)}</div>
+          <div class="flex flex-wrap items-center gap-2 mt-1.5">
+            ${ o.free_shipping
+              ? '<span class="inline-flex items-center gap-1 text-xs font-semibold text-green-600"><svg class=\'w-3 h-3\' fill=\'currentColor\' viewBox=\'0 0 20 20\'><path fill-rule=\'evenodd\' d=\'M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z\' clip-rule=\'evenodd\'/></svg>Frete grátis</span>'
+              : '<span class="text-xs text-gray-400">Frete a consultar</span>' }
+            ${ discount > 0
+              ? `<span class="text-xs font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded-md">-${discount}%</span>`
+              : '' }
+            ${ o.installments_count
+              ? `<span class="text-xs text-gray-500">${o.installments_count}x ${formatCurrency(o.installments_value || o.price / o.installments_count)}</span>`
+              : '' }
+          </div>
+          ${ o.seller_name
+            ? `<div class="text-xs text-gray-400 mt-1">Vendido por: ${o.seller_name}</div>`
+            : '' }
+        </div>
+
+        <!-- Botão Comprar -->
         <a href="${trackUrl}" target="_blank" rel="noopener sponsored"
            onclick="return requireLoginToBuy(event,'${trackUrl}',${o.id},${product!.id},${o.store_id})"
-           class="btn-buy flex-shrink-0 ${ isBest ? 'bg-green-600 hover:bg-green-700' : '' }">
+           class="flex-shrink-0 btn-buy ${ isBest ? 'bg-green-600 hover:bg-green-700 shadow-green-200 shadow-md' : '' }">
           Comprar →
         </a>
+
       </div>
-      ${ o.seller_name ? `<div class="text-xs text-gray-400 mt-2 pl-1">Vendido por: ${o.seller_name}</div>` : '' }
     </div>`
   }).join('')
 
