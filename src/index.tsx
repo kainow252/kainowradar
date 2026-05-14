@@ -556,9 +556,10 @@ app.get('/', async (c) => {
         </div>
       </div>
 
-      <!-- Lojas: marquee se tiver 5+, grid estático se tiver poucas -->
+      <!-- Lojas: marquee se tiver 10+, grid estático se tiver poucas -->
+      <!-- Threshold 10: abaixo disso a duplicação do loop deixa lojas aparecendo 2× no viewport -->
       <div id="stores-marquee-section" class="relative mb-4">
-        ${stores.length >= 5 ? `
+        ${stores.length >= 10 ? `
         <div class="stores-marquee-wrapper">
           <div class="stores-marquee-fade-left"></div>
           <div class="stores-marquee-fade-right"></div>
@@ -570,7 +571,7 @@ app.get('/', async (c) => {
           </div>
         </div>
         ` : `
-        <div class="flex flex-wrap gap-4 px-4 py-2">
+        <div class="flex flex-wrap gap-3 px-4 py-2">
           ${storeCards(stores)}
         </div>
         `}
@@ -1002,12 +1003,22 @@ app.get('/', async (c) => {
     </div>
   ` : ''
 
-  const content = heroHTML + storesHTML + bannerHTML + insightsHTML + searchResultsHTML + dealsHTML + catBlocksHTML + featuredHTML + howHTML
+  // Ordem: Hero → Lojas → Deals (produtos visíveis logo no topo) → Banners → Categorias → Destaque → Como funciona
+  const content = heroHTML + storesHTML + dealsHTML + featuredHTML + bannerHTML + insightsHTML + searchResultsHTML + catBlocksHTML + howHTML
 
   // Nunca cachear a home no CDN — lojas/produtos mudam dinamicamente
   c.header('Cache-Control', 'no-store, no-cache, must-revalidate')
   c.header('Pragma', 'no-cache')
-  return c.html(renderLayout('KainowRadar — Seu radar inteligente de ofertas', content, { navCategories: categories, footerConfig: footerCfg }))
+  // Monta navStores: lojas ativas com cores corretas para o menu mobile dinâmico
+  const navStores = stores.map(s => ({
+    name:      s.name,
+    slug:      s.slug,
+    color:     s.color,
+    textColor: s.color === '#FFE600' ? '#333' : '#fff', // ML tem fundo amarelo → texto escuro
+    initial:   s.initial,
+  }))
+
+  return c.html(renderLayout('KainowRadar — Seu radar inteligente de ofertas', content, { navCategories: categories, navStores, footerConfig: footerCfg }))
 })
 
 // ── 404 ───────────────────────────────────────────────────

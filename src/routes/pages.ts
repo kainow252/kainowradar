@@ -904,7 +904,7 @@ function renderProductCard(p: Product): string {
   `
 }
 
-export function renderLayout(title: string, content: string, opts: { hideHeader?: boolean; description?: string; ogImage?: string; canonical?: string; jsonLd?: string; navCategories?: { name: string; slug: string; icon?: string }[]; footerConfig?: FooterConfigData } = {}): string {
+export function renderLayout(title: string, content: string, opts: { hideHeader?: boolean; description?: string; ogImage?: string; canonical?: string; jsonLd?: string; navCategories?: { name: string; slug: string; icon?: string }[]; navStores?: { name: string; slug: string; color?: string; textColor?: string; initial?: string }[]; footerConfig?: FooterConfigData } = {}): string {
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -1092,16 +1092,25 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
         </button>
         <div id="mob-stores-list" class="mt-1 pb-1" style="display:none">
           <div class="flex flex-col gap-0.5 px-1">
-            ${[
-              { name:'Amazon',       color:'#FF9900', textColor:'#fff', initial:'A',  slug:'amazon'       },
-              { name:'Magalu',       color:'#0086FF', textColor:'#fff', initial:'M',  slug:'magalu'       },
-              { name:'Mercado Livre',color:'#FFE600', textColor:'#333', initial:'ML', slug:'mercadolivre' },
-              { name:'Americanas',   color:'#E60014', textColor:'#fff', initial:'Am', slug:'americanas'   },
-              { name:'Casas Bahia',  color:'#0057A8', textColor:'#fff', initial:'CB', slug:'casasbahia'   },
-              { name:'KaBuM!',       color:'#F47920', textColor:'#fff', initial:'K',  slug:'kabum'        },
-              { name:'Shopee',       color:'#EE4D2D', textColor:'#fff', initial:'S',  slug:'shopee'       },
-              { name:'Fast Shop',    color:'#00843D', textColor:'#fff', initial:'FS', slug:'fastshop'     },
-            ].map(s => `
+            ${(opts.navStores && opts.navStores.length > 0
+              ? opts.navStores.map(s => ({
+                  name: s.name,
+                  slug: s.slug,
+                  color: s.color || '#6366F1',
+                  textColor: s.textColor || '#fff',
+                  initial: s.initial || s.name.substring(0, 2).toUpperCase(),
+                }))
+              : [
+                  { name:'Amazon',       color:'#FF9900', textColor:'#fff', initial:'A',  slug:'amazon'       },
+                  { name:'Magalu',       color:'#0086FF', textColor:'#fff', initial:'M',  slug:'magalu'       },
+                  { name:'Mercado Livre',color:'#FFE600', textColor:'#333', initial:'ML', slug:'mercadolivre' },
+                  { name:'Americanas',   color:'#E60014', textColor:'#fff', initial:'Am', slug:'americanas'   },
+                  { name:'Casas Bahia',  color:'#0057A8', textColor:'#fff', initial:'CB', slug:'casasbahia'   },
+                  { name:'KaBuM!',       color:'#F47920', textColor:'#fff', initial:'K',  slug:'kabum'        },
+                  { name:'Shopee',       color:'#EE4D2D', textColor:'#fff', initial:'S',  slug:'shopee'       },
+                  { name:'Fast Shop',    color:'#00843D', textColor:'#fff', initial:'FS', slug:'fastshop'     },
+              ]
+            ).map(s => `
               <a href="/loja/${s.slug}" onclick="closeHamburger()"
                 class="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-blue-50 transition-colors group">
                 <div class="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm" style="background:${s.color}">
