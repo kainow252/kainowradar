@@ -745,6 +745,88 @@ admin.delete('/api/admin-users/:id', async (c) => {
   return c.json({ ok: true })
 })
 
+// ── GET /admin/api/login-history — Histórico de logins ────
+admin.get('/api/login-history', async (c) => {
+  const { DB } = c.env
+  const page    = Math.max(1, parseInt(c.req.query('page')  || '1'))
+  const type    = c.req.query('type')  || ''   // 'admin' | 'member' | ''
+  const search  = c.req.query('q')     || ''
+  const perPage = 50
+
+  const offset = (page - 1) * perPage
+
+  // ── Admins: login sessions ───────────────────────────────
+  // Junta admin_sessions com admin_users pelo email (campo admin_user)
+  const adminRows = type === 'member' ? [] : (await DB.prepare(`
+    SELECT
+      's:' || s.token                    AS id,
+      'admin'                            AS login_type,
+      COALESCE(au.name, s.admin_user)    AS display_name,
+      COALESCE(au.email, s.admin_user)   AS email,
+      COALESCE(au.role, 'admin')         AS role,
+      s.ip_hash,
+      s.user_agent,
+      s.created_at,
+      s.expires_at,
+      CASE WHEN s.is_valid = 1 AND s.expires_at > datetime('now') THEN 'active'
+           WHEN s.is_valid = 0 THEN 'revogada'
+           ELSE 'expirada' END           AS session_status
+    FROM admin_sessions s
+    LEFT JOIN admin_users au ON lower(au.email) = lower(s.admin_user)
+    ${search ? `WHERE (au.name LIKE ? OR au.email LIKE ? OR s.admin_user LIKE ?)` : ''}
+    ORDER BY s.created_at DESC
+    LIMIT 500
+  `).bind(...(search ? [`%${search}%`, `%${search}%`, `%${search}%`] : [])).all<any>()).results || []
+
+  // ── Members: últimos logins (oauth_users) ────────────────
+  const memberRows = type === 'admin' ? [] : (await DB.prepare(`
+    SELECT
+      'm:' || u.id                       AS id,
+      'member'                           AS login_type,
+      COALESCE(u.full_name, u.email)     AS display_name,
+      u.email,
+      u.auth_provider                    AS role,
+      NULL                               AS ip_hash,
+      NULL                               AS user_agent,
+      u.last_login_at                    AS created_at,
+      u.session_expires_at               AS expires_at,
+      CASE WHEN u.session_expires_at > datetime('now') THEN 'active'
+           ELSE 'expirada' END           AS session_status
+    FROM oauth_users u
+    WHERE u.last_login_at IS NOT NULL
+      ${search ? `AND (u.full_name LIKE ? OR u.email LIKE ?)` : ''}
+    ORDER BY u.last_login_at DESC
+    LIMIT 500
+  `).bind(...(search ? [`%${search}%`, `%${search}%`] : [])).all<any>()).results || []
+
+  // ── Merge, ordenar e paginar ──────────────────────────────
+  const all = [...adminRows, ...memberRows].sort((a, b) => {
+    const da = a.created_at ? new Date(a.created_at).getTime() : 0
+    const db = b.created_at ? new Date(b.created_at).getTime() : 0
+    return db - da
+  })
+
+  const total = all.length
+  const rows  = all.slice(offset, offset + perPage)
+
+  // ── Contadores de sumário ─────────────────────────────────
+  const totalAdmins  = adminRows.length
+  const totalMembers = memberRows.length
+  const totalActive  = all.filter(r => r.session_status === 'active').length
+
+  return c.json({ rows, total, page, per_page: perPage, totalAdmins, totalMembers, totalActive })
+})
+
+// ── DELETE /admin/api/login-history/:token — Revogar sessão
+admin.delete('/api/login-history/:token', async (c) => {
+  const { DB } = c.env
+  const raw = c.req.param('token')   // prefixo 's:' para sessões admin
+  if (!raw.startsWith('s:')) return c.json({ error: 'Apenas sessões admin podem ser revogadas' }, 400)
+  const token = raw.slice(2)
+  await DB.prepare(`UPDATE admin_sessions SET is_valid = 0 WHERE token = ?`).bind(token).run()
+  return c.json({ ok: true })
+})
+
 // ============================================================
 // SOCIAL MEDIA — Helpers + CRUD Accounts + CRUD Posts + Cron
 // ============================================================

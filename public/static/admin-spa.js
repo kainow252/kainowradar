@@ -4125,6 +4125,10 @@ async function renderUsers(area) {
           class="flex-1 py-3.5 text-sm font-bold text-slate-400 border-b-2 border-transparent hover:text-slate-600 transition-all">
           🔑 Administradores
         </button>
+        <button id="utab-logins" onclick="switchUsersTab('logins')"
+          class="flex-1 py-3.5 text-sm font-bold text-slate-400 border-b-2 border-transparent hover:text-slate-600 transition-all">
+          🕐 Histórico de Logins
+        </button>
       </div>
     </div>
     <!-- Conteúdo da aba ativa -->
@@ -4135,16 +4139,19 @@ async function renderUsers(area) {
 
 function switchUsersTab(tab) {
   _usersTab = tab
-  const tc  = document.getElementById('utab-clients')
-  const ta  = document.getElementById('utab-admins')
-  if (!tc || !ta) return
+  const tc = document.getElementById('utab-clients')
+  const ta = document.getElementById('utab-admins')
+  const tl = document.getElementById('utab-logins')
+  if (!tc || !ta || !tl) return
   const activeClass   = 'flex-1 py-3.5 text-sm font-bold text-blue-600 border-b-2 border-blue-600 transition-all'
   const inactiveClass = 'flex-1 py-3.5 text-sm font-bold text-slate-400 border-b-2 border-transparent hover:text-slate-600 transition-all'
   tc.className = tab === 'clients' ? activeClass : inactiveClass
   ta.className = tab === 'admins'  ? activeClass : inactiveClass
+  tl.className = tab === 'logins'  ? activeClass : inactiveClass
   const content = document.getElementById('users-tab-content')
-  if (tab === 'clients') renderMembersTab(content)
-  else                   renderAdminsTab(content)
+  if      (tab === 'clients') renderMembersTab(content)
+  else if (tab === 'admins')  renderAdminsTab(content)
+  else                        renderLoginHistoryTab(content)
 }
 
 // ── ABA CLIENTES ──────────────────────────────────────────
@@ -4512,6 +4519,177 @@ async function deleteAdminUser(id, name) {
   await api('DELETE', `/admin/api/admin-users/${id}`)
   toast('Admin removido', 'info')
   renderAdminsTab(document.getElementById('users-tab-content'))
+}
+
+// ── ABA HISTÓRICO DE LOGINS ───────────────────────────────
+async function renderLoginHistoryTab(area, page = 1, type = '', q = '') {
+  area.innerHTML = spin
+  const qs   = new URLSearchParams({ page, type, q }).toString()
+  const data = await api('GET', `/admin/api/login-history?${qs}`)
+  if (!data) return
+
+  // ── Badges de tipo ────────────────────────────────────────
+  const typeBadge = (r) => {
+    if (r.login_type === 'admin') {
+      const roleColors = {
+        superadmin: 'bg-purple-100 text-purple-700',
+        admin:      'bg-slate-800 text-white',
+        moderator:  'bg-blue-100 text-blue-700',
+        editor:     'bg-cyan-100 text-cyan-700',
+      }
+      const cls = roleColors[r.role] || 'bg-slate-100 text-slate-600'
+      return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${cls}">🔑 ${r.role || 'admin'}</span>`
+    }
+    const providerColors = { google: 'bg-blue-50 text-blue-700', email: 'bg-slate-100 text-slate-600' }
+    const cls = providerColors[r.role] || 'bg-slate-100 text-slate-600'
+    const icon = r.role === 'google'
+      ? `<svg class="w-3 h-3" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>`
+      : `📧`
+    return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${cls}">${icon} ${r.role === 'google' ? 'Google' : 'Email'}</span>`
+  }
+
+  // ── Badge de status da sessão ─────────────────────────────
+  const statusBadge = (s) => {
+    if (s === 'active')   return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">● Ativa</span>`
+    if (s === 'revogada') return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">✕ Revogada</span>`
+    return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-500">○ Expirada</span>`
+  }
+
+  // ── User-agent simplificado ───────────────────────────────
+  const uaShort = (ua) => {
+    if (!ua) return '<span class="text-slate-300">—</span>'
+    if (/mobile/i.test(ua))  return '📱 Mobile'
+    if (/tablet/i.test(ua))  return '📟 Tablet'
+    if (/chrome/i.test(ua))  return '🌐 Chrome'
+    if (/firefox/i.test(ua)) return '🦊 Firefox'
+    if (/safari/i.test(ua))  return '🧭 Safari'
+    if (/edge/i.test(ua))    return '🔷 Edge'
+    return '💻 Desktop'
+  }
+
+  // ── Linhas da tabela ──────────────────────────────────────
+  const rows = (data.rows || []).length > 0
+    ? data.rows.map(r => `
+      <tr class="hover:bg-slate-50 transition-colors">
+        <td class="table-td">
+          <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-sm shrink-0
+              ${r.login_type === 'admin' ? 'bg-gradient-to-br from-slate-600 to-slate-800' : 'bg-gradient-to-br from-blue-400 to-blue-600'}">
+              ${(r.display_name || r.email || '?')[0].toUpperCase()}
+            </div>
+            <div>
+              <div class="font-semibold text-sm text-slate-800">${r.display_name || '—'}</div>
+              <div class="text-xs text-slate-400">${r.email || '—'}</div>
+            </div>
+          </div>
+        </td>
+        <td class="table-td">${typeBadge(r)}</td>
+        <td class="table-td">${statusBadge(r.session_status)}</td>
+        <td class="table-td text-xs text-slate-500 font-mono">
+          ${r.ip_hash ? `<span title="${r.ip_hash}" class="cursor-help">${r.ip_hash.slice(0,12)}…</span>` : '<span class="text-slate-300">—</span>'}
+        </td>
+        <td class="table-td text-xs text-slate-500">${uaShort(r.user_agent)}</td>
+        <td class="table-td text-xs text-slate-500">${fDateTime(r.created_at)}</td>
+        <td class="table-td text-xs text-slate-500">${fDateTime(r.expires_at)}</td>
+        <td class="table-td">
+          ${r.login_type === 'admin' && r.session_status === 'active'
+            ? `<button onclick="revokeSession('${r.id}')" class="text-xs px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 transition-all whitespace-nowrap">🚫 Revogar</button>`
+            : `<span class="text-slate-300 text-xs">—</span>`}
+        </td>
+      </tr>`).join('')
+    : `<tr><td colspan="8" class="py-16 text-center text-slate-400">Nenhum login registrado ainda</td></tr>`
+
+  // ── Filtros de tipo ───────────────────────────────────────
+  const typeOpts = [
+    ['', '🔀 Todos'],
+    ['admin', '🔑 Administradores'],
+    ['member', '👥 Membros'],
+  ].map(([v,l]) => `<option value="${v}" ${type===v?'selected':''}>${l}</option>`).join('')
+
+  // ── Cards de sumário ──────────────────────────────────────
+  const summaryCards = `
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-1">
+    <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-xl">📊</div>
+      <div>
+        <div class="text-2xl font-black text-slate-800">${data.total || 0}</div>
+        <div class="text-xs text-slate-400 mt-0.5">Total de registros</div>
+      </div>
+    </div>
+    <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-green-50 flex items-center justify-center text-xl">🟢</div>
+      <div>
+        <div class="text-2xl font-black text-green-700">${data.totalActive || 0}</div>
+        <div class="text-xs text-slate-400 mt-0.5">Sessões ativas</div>
+      </div>
+    </div>
+    <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-xl">🔑</div>
+      <div>
+        <div class="text-2xl font-black text-slate-800">${data.totalAdmins || 0}</div>
+        <div class="text-xs text-slate-400 mt-0.5">Logins admin</div>
+      </div>
+    </div>
+    <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-xl">👥</div>
+      <div>
+        <div class="text-2xl font-black text-blue-700">${data.totalMembers || 0}</div>
+        <div class="text-xs text-slate-400 mt-0.5">Logins membros</div>
+      </div>
+    </div>
+  </div>`
+
+  area.innerHTML = `
+  <div class="space-y-3">
+    ${summaryCards}
+    <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <!-- Toolbar -->
+      <div class="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center gap-3">
+        <div class="flex-1 min-w-[200px]">
+          <input id="lh-search" type="text" value="${q}" placeholder="Buscar por nome ou email..."
+            class="input w-full"
+            onkeydown="if(event.key==='Enter'){renderLoginHistoryTab(document.getElementById('users-tab-content'),1,document.getElementById('lh-type').value,this.value)}">
+        </div>
+        <select id="lh-type" class="input w-52"
+          onchange="renderLoginHistoryTab(document.getElementById('users-tab-content'),1,this.value,document.getElementById('lh-search').value)">
+          ${typeOpts}
+        </select>
+        <button onclick="renderLoginHistoryTab(document.getElementById('users-tab-content'),1,document.getElementById('lh-type').value,document.getElementById('lh-search').value)"
+          class="btn-primary">🔍 Buscar</button>
+        <button onclick="renderLoginHistoryTab(document.getElementById('users-tab-content'),1,'','')"
+          class="btn-secondary text-xs">↺ Limpar</button>
+        <span class="text-sm text-slate-500 ml-auto">${data.total || 0} registros</span>
+      </div>
+      <!-- Tabela -->
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead><tr>
+            <th class="table-th">Usuário</th>
+            <th class="table-th">Tipo</th>
+            <th class="table-th">Sessão</th>
+            <th class="table-th">IP (hash)</th>
+            <th class="table-th">Navegador</th>
+            <th class="table-th">Login em</th>
+            <th class="table-th">Expira em</th>
+            <th class="table-th">Ações</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      ${renderPagination(page, data.total, data.per_page, p => `renderLoginHistoryTab(document.getElementById('users-tab-content'),${p},'${type}','${q}')`)}
+    </div>
+  </div>`
+}
+
+async function revokeSession(tokenId) {
+  if (!confirm('Revogar esta sessão? O usuário será deslogado imediatamente.')) return
+  const r = await api('DELETE', `/admin/api/login-history/${encodeURIComponent(tokenId)}`)
+  if (r?.ok) {
+    toast('Sessão revogada ✓', 'success')
+    renderLoginHistoryTab(document.getElementById('users-tab-content'))
+  } else {
+    toast(r?.error || 'Erro ao revogar sessão', 'error')
+  }
 }
 
 // Mantém compatibilidade com funções antigas
