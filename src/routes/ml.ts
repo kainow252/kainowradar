@@ -1107,8 +1107,18 @@ ml.post('/import-url', async (c) => {
   // Expande todas as entradas em linhas individuais
   const allLines: string[] = []
   for (const raw of urls) {
-    const lines = raw.split(/[\n,]+/).map((l: string) => l.trim()).filter(Boolean)
-    allLines.push(...lines)
+    // Divide por nova linha ou vírgula primeiro
+    const byNewline = raw.split(/[\n,]+/).map((l: string) => l.trim()).filter(Boolean)
+    for (const chunk of byNewline) {
+      // Se a linha tem 2 URLs juntas separadas por espaço, separa
+      // Ex: "https://...produto... https://...social/..."
+      const parts = chunk.split(/\s+/).filter(Boolean)
+      if (parts.length >= 2 && parts.every(p => p.startsWith('http'))) {
+        allLines.push(...parts)
+      } else {
+        allLines.push(chunk)
+      }
+    }
   }
 
   // Resolve encurtadores e links afiliados (meli.la, go.mercadolivre.com.br → URL real)
