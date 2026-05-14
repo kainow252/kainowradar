@@ -98,6 +98,13 @@ export async function loadFooterConfig(DB: D1Database): Promise<FooterConfigData
 
 const pages = new Hono<{ Bindings: Bindings }>()
 
+// ── Middleware: nunca cachear páginas dinâmicas no CDN ────
+pages.use('*', async (c, next) => {
+  await next()
+  c.header('Cache-Control', 'no-store, no-cache, must-revalidate')
+  c.header('Pragma', 'no-cache')
+})
+
 // ── Redirect de clique com rastreamento ───────────────────
 pages.get('/go/:slug/:offerId', async (c) => {
   const { DB } = c.env

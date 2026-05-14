@@ -1004,6 +1004,9 @@ app.get('/', async (c) => {
 
   const content = heroHTML + storesHTML + bannerHTML + insightsHTML + searchResultsHTML + dealsHTML + catBlocksHTML + featuredHTML + howHTML
 
+  // Nunca cachear a home no CDN — lojas/produtos mudam dinamicamente
+  c.header('Cache-Control', 'no-store, no-cache, must-revalidate')
+  c.header('Pragma', 'no-cache')
   return c.html(renderLayout('KainowRadar — Seu radar inteligente de ofertas', content, { navCategories: categories, footerConfig: footerCfg }))
 })
 
