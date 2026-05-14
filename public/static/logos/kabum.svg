@@ -1,4 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 50" width="200" height="50">
-  <rect width="200" height="50" fill="#F7941D" rx="6"/>
-  <text x="100" y="34" font-family="Arial, sans-serif" font-size="22" font-weight="bold" fill="#fff" text-anchor="middle">KaBuM!</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Fundo laranja KaBuM -->
+  <rect width="200" height="200" fill="#F7941D" rx="20"/>
+  <!-- "KaBuM!" centralizado -->
+  <text x="100" y="118" font-family="Arial Black,sans-serif" font-size="48" font-weight="900" fill="#fff" text-anchor="middle">KaBuM!</text>
 </svg>

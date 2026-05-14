@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
   <!-- Fundo amarelo -->
   <rect width="200" height="200" fill="#FFE600" rx="20"/>
-  <!-- Escudo azul -->
-  <path d="M100 28 C100 28 50 50 50 90 L50 118 C50 152 100 174 100 174 C100 174 150 152 150 118 L150 90 C150 50 100 28 100 28Z" fill="#3483FA"/>
+  <!-- Escudo azul grande e centralizado -->
+  <path d="M100 22 C100 22 44 48 44 88 L44 118 C44 158 100 178 100 178 C100 178 156 158 156 118 L156 88 C156 48 100 22 100 22Z" fill="#3483FA"/>
   <!-- Estrela amarela no escudo -->
-  <polygon points="100,68 108,92 134,92 113,107 121,131 100,116 79,131 87,107 66,92 92,92" fill="#FFE600"/>
+  <polygon points="100,62 109,88 138,88 115,105 124,131 100,114 76,131 85,105 62,88 91,88" fill="#FFE600"/>
 </svg>

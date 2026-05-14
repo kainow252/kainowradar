@@ -763,10 +763,10 @@ app.get('/', async (c) => {
        class="store-pill-card flex-shrink-0 flex flex-col items-center gap-2 w-[76px] cursor-pointer group"
        title="Comparar preços na ${s.name}">
       <div class="store-logo-circle w-16 h-16 rounded-2xl flex items-center justify-center shadow-md transition-all duration-200 group-hover:scale-110 group-hover:shadow-xl overflow-hidden ring-2 ring-transparent group-hover:ring-blue-200"
-           style="${s.logoUrl || s.logoSvg ? 'background:#fff;' : `background:${s.bg};border:2px solid ${s.color};`}">
+           style="${s.logoUrl ? '' : s.logoSvg ? 'background:#fff;' : `background:${s.bg};border:2px solid ${s.color};`}">
         ${s.logoUrl
-          ? `<img src="${s.logoUrl}" alt="${s.name}" loading="lazy" class="w-full h-full object-contain p-1" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-             <span class="hidden font-black text-xl leading-none" style="color:${s.color}">${s.initial}</span>`
+          ? `<img src="${s.logoUrl}" alt="${s.name}" loading="lazy" class="w-full h-full object-cover" style="display:block" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+             <span class="hidden w-full h-full items-center justify-center font-black text-xl leading-none rounded-2xl" style="background:${s.bg};color:${s.color}">${s.initial}</span>`
           : s.logoSvg
             ? s.logoSvg
             : `<span class="font-black text-xl leading-none" style="color:${s.color}">${s.initial}</span>`
