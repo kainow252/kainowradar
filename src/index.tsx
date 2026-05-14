@@ -636,8 +636,9 @@ app.get('/', async (c) => {
     const initial = words.length >= 2
       ? (words[0][0] + words[1][0]).toUpperCase()
       : (s.name as string).substring(0, 2).toUpperCase()
-    const logoSvg = STORE_LOGO_SVG[s.slug] || null
-    return { ...s, color, bg, text, initial, logoSvg }
+    const logoSvg    = STORE_LOGO_SVG[s.slug] || null
+    const logoUrl     = s.logo_url || null   // URL/base64 cadastrado no admin — prioridade máxima
+    return { ...s, color, bg, text, initial, logoSvg, logoUrl }
   })
 
   // ── HERO ─────────────────────────────────────────────────
@@ -762,10 +763,13 @@ app.get('/', async (c) => {
        class="store-pill-card flex-shrink-0 flex flex-col items-center gap-2 w-[76px] cursor-pointer group"
        title="Comparar preços na ${s.name}">
       <div class="store-logo-circle w-16 h-16 rounded-2xl flex items-center justify-center shadow-md transition-all duration-200 group-hover:scale-110 group-hover:shadow-xl overflow-hidden ring-2 ring-transparent group-hover:ring-blue-200"
-           style="${s.logoSvg ? 'background:transparent;' : `background:${s.bg};border:2px solid ${s.color};`}">
-        ${s.logoSvg
-          ? s.logoSvg
-          : `<span class="font-black text-xl leading-none" style="color:${s.color}">${s.initial}</span>`
+           style="${s.logoUrl || s.logoSvg ? 'background:#fff;' : `background:${s.bg};border:2px solid ${s.color};`}">
+        ${s.logoUrl
+          ? `<img src="${s.logoUrl}" alt="${s.name}" loading="lazy" class="w-full h-full object-contain p-1" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+             <span class="hidden font-black text-xl leading-none" style="color:${s.color}">${s.initial}</span>`
+          : s.logoSvg
+            ? s.logoSvg
+            : `<span class="font-black text-xl leading-none" style="color:${s.color}">${s.initial}</span>`
         }
       </div>
       <span class="text-xs text-gray-700 font-bold text-center leading-tight w-full truncate group-hover:text-blue-700 transition-colors">${s.name}</span>
