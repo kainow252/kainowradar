@@ -157,79 +157,196 @@ async function renderDashboard(area) {
   const p = data.products || {}; const o = data.offers || {}; const s = data.stores || {}
   const u = data.users || {}; const cl = data.clicks || {}; const q = data.queue || {}
 
-  area.innerHTML = `
-    <div class="section">
-      <!-- Stats grid -->
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        ${statCard('[Itens]', 'Produtos', p.total, `${p.with_offers || 0} com ofertas`, 'blue')}
-        ${statCard('[Preco]', 'Ofertas Ativas', o.total, `${o.in_stock || 0} em estoque`, 'green')}
-        ${statCard('[Loja]', 'Lojas', s.total, `${s.active || 0} ativas`, 'purple')}
-        ${statCard('[Click]', 'Cliques Hoje', cl.today, `Fila: ${q.pending || 0} pendentes`, 'orange')}
-      </div>
+  const catColors = ['#6366f1','#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#f97316']
+  const maxCat = Math.max(...(data.topCategories||[]).map(c=>c.count), 1)
 
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <!-- Cliques por dia -->
-        <div class="stat-card">
-          <h3 class="font-bold text-slate-800 mb-4">📈 Cliques (7 dias)</h3>
-          <canvas id="clicks-chart" height="180"></canvas>
+  area.innerHTML = `
+    <div class="space-y-6">
+
+      <!-- ── KPI Cards ──────────────────────────────────────── -->
+      <div class="grid grid-cols-2 xl:grid-cols-4 gap-4">
+
+        <!-- Produtos -->
+        <div class="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+          <div class="flex items-center justify-between mb-3">
+            <div class="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center">
+              <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2z"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>
+            </div>
+            <span class="text-xs font-semibold px-2 py-1 rounded-full bg-blue-50 text-blue-600">${p.with_offers || 0} com oferta</span>
+          </div>
+          <div class="text-3xl font-black text-slate-900">${p.total ?? '—'}</div>
+          <div class="text-sm font-medium text-slate-500 mt-1">Produtos</div>
         </div>
 
-        <!-- Top Categorias -->
-        <div class="stat-card">
-          <h3 class="font-bold text-slate-800 mb-4">📂 Top Categorias</h3>
+        <!-- Ofertas -->
+        <div class="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+          <div class="flex items-center justify-between mb-3">
+            <div class="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center">
+              <svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z"/></svg>
+            </div>
+            <span class="text-xs font-semibold px-2 py-1 rounded-full bg-emerald-50 text-emerald-600">${o.in_stock || 0} em estoque</span>
+          </div>
+          <div class="text-3xl font-black text-slate-900">${o.total ?? '—'}</div>
+          <div class="text-sm font-medium text-slate-500 mt-1">Ofertas Ativas</div>
+        </div>
+
+        <!-- Lojas -->
+        <div class="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+          <div class="flex items-center justify-between mb-3">
+            <div class="w-10 h-10 rounded-xl bg-violet-100 flex items-center justify-center">
+              <svg class="w-5 h-5 text-violet-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            </div>
+            <span class="text-xs font-semibold px-2 py-1 rounded-full bg-violet-50 text-violet-600">${s.active || 0} ativas</span>
+          </div>
+          <div class="text-3xl font-black text-slate-900">${s.total ?? '—'}</div>
+          <div class="text-sm font-medium text-slate-500 mt-1">Lojas</div>
+        </div>
+
+        <!-- Cliques -->
+        <div class="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+          <div class="flex items-center justify-between mb-3">
+            <div class="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center">
+              <svg class="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5"/></svg>
+            </div>
+            <span class="text-xs font-semibold px-2 py-1 rounded-full ${q.pending > 0 ? 'bg-amber-50 text-amber-600' : 'bg-slate-50 text-slate-400'}">${q.pending || 0} na fila</span>
+          </div>
+          <div class="text-3xl font-black text-slate-900">${cl.today ?? 0}</div>
+          <div class="text-sm font-medium text-slate-500 mt-1">Cliques Hoje</div>
+        </div>
+      </div>
+
+      <!-- ── Linha 2: Gráfico + Categorias ──────────────────── -->
+      <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
+
+        <!-- Gráfico de cliques (3/5) -->
+        <div class="lg:col-span-3 bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="font-bold text-slate-800">Cliques nos últimos 7 dias</h3>
+              <p class="text-xs text-slate-400 mt-0.5">Eventos de clique em links afiliados</p>
+            </div>
+            <div class="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
+              <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            </div>
+          </div>
+          <canvas id="clicks-chart" height="160"></canvas>
+        </div>
+
+        <!-- Top Categorias (2/5) -->
+        <div class="lg:col-span-2 bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="font-bold text-slate-800">Top Categorias</h3>
+            <span class="text-xs text-slate-400">${p.total || 0} produtos</span>
+          </div>
           <div class="space-y-3">
-            ${(data.topCategories || []).map(c => `
-              <div class="flex items-center justify-between">
-                <span class="text-sm font-medium text-slate-700 capitalize">${c.category || 'Outros'}</span>
-                <div class="flex items-center gap-3">
-                  <div class="w-32 bg-slate-100 rounded-full h-2 overflow-hidden">
-                    <div class="bg-blue-500 h-2 rounded-full" style="width:${Math.min(100, (c.count / p.total) * 100)}%"></div>
-                  </div>
-                  <span class="text-sm font-bold text-slate-800 w-8 text-right">${c.count}</span>
+            ${(data.topCategories || []).map((c, i) => `
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-sm font-medium text-slate-700 capitalize">${(c.category||'outros').replace(/-/g,' ')}</span>
+                  <span class="text-sm font-bold text-slate-800">${c.count}</span>
+                </div>
+                <div class="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                  <div class="h-1.5 rounded-full transition-all duration-700" style="width:${Math.round((c.count/maxCat)*100)}%;background:${catColors[i%catColors.length]}"></div>
                 </div>
               </div>
             `).join('')}
+            ${!(data.topCategories||[]).length ? '<p class="text-sm text-slate-400 text-center py-4">Nenhum dado ainda</p>' : ''}
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Linha 3: Lojas + Preços + Usuários ─────────────── -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+        <!-- Lojas por Ofertas -->
+        <div class="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="font-bold text-slate-800">Lojas por Ofertas</h3>
+            <div class="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center">
+              <svg class="w-4 h-4 text-violet-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2 5h12m-10 0a1 1 0 100 2 1 1 0 000-2zm8 0a1 1 0 100 2 1 1 0 000-2z"/></svg>
+            </div>
+          </div>
+          <div class="space-y-2">
+            ${(data.topStores || []).map(st => `
+              <div class="flex items-center justify-between py-2 border-b border-slate-50 last:border-0">
+                <span class="text-sm font-medium text-slate-700">${st.name}</span>
+                <div class="flex items-center gap-3">
+                  <span class="text-xs text-slate-400">${st.offer_count} ofertas</span>
+                  <span class="text-sm font-bold text-emerald-600">${fBRL(st.min_price)}</span>
+                </div>
+              </div>
+            `).join('')}
+            ${!(data.topStores||[]).length ? '<p class="text-sm text-slate-400 text-center py-4">Nenhuma loja ainda</p>' : ''}
           </div>
         </div>
 
-        <!-- Top Lojas -->
-        <div class="stat-card">
-          <h3 class="font-bold text-slate-800 mb-4">🏆 Lojas por Ofertas</h3>
-          <table class="w-full">
-            <thead><tr>
-              <th class="text-left text-xs text-slate-500 font-semibold pb-2">Loja</th>
-              <th class="text-right text-xs text-slate-500 font-semibold pb-2">Ofertas</th>
-              <th class="text-right text-xs text-slate-500 font-semibold pb-2">Menor Preço</th>
-            </tr></thead>
-            <tbody>
-              ${(data.topStores || []).map(s => `
-                <tr class="border-t border-slate-50 hover:bg-slate-50">
-                  <td class="py-2 text-sm font-medium text-slate-700">${s.name}</td>
-                  <td class="py-2 text-sm text-right text-slate-600">${s.offer_count}</td>
-                  <td class="py-2 text-sm text-right font-semibold text-green-700">${fBRL(s.min_price)}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-
-        <!-- Faixa de preços -->
-        <div class="stat-card">
-          <h3 class="font-bold text-slate-800 mb-4">💵 Faixa de Preços</h3>
+        <!-- Faixa de Preços -->
+        <div class="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="font-bold text-slate-800">Faixa de Preços</h3>
+            <div class="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
+              <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+            </div>
+          </div>
           <div class="space-y-4">
-            ${priceRange('Menor preço', o.min_price, 'text-green-700')}
-            ${priceRange('Preço médio', o.avg_price, 'text-blue-700')}
-            ${priceRange('Maior preço', o.max_price, 'text-red-700')}
+            <div class="flex items-center justify-between p-3 bg-emerald-50 rounded-xl">
+              <div>
+                <div class="text-xs font-medium text-emerald-600 uppercase tracking-wide">Menor preço</div>
+                <div class="text-xl font-black text-emerald-700 mt-0.5">${fBRL(o.min_price)}</div>
+              </div>
+              <svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+            </div>
+            <div class="flex items-center justify-between p-3 bg-blue-50 rounded-xl">
+              <div>
+                <div class="text-xs font-medium text-blue-600 uppercase tracking-wide">Preço médio</div>
+                <div class="text-xl font-black text-blue-700 mt-0.5">${fBRL(o.avg_price)}</div>
+              </div>
+              <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+            </div>
+            <div class="flex items-center justify-between p-3 bg-red-50 rounded-xl">
+              <div>
+                <div class="text-xs font-medium text-red-500 uppercase tracking-wide">Maior preço</div>
+                <div class="text-xl font-black text-red-600 mt-0.5">${fBRL(o.max_price)}</div>
+              </div>
+              <svg class="w-6 h-6 text-red-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg>
+            </div>
           </div>
-          <div class="mt-4 pt-4 border-t border-slate-100">
-            <div class="text-xs text-slate-500">Usuários cadastrados</div>
-            <div class="flex items-baseline gap-2 mt-1">
-              <span class="text-2xl font-bold text-slate-800">${u.total || 0}</span>
-              <span class="text-sm text-green-600">${u.active || 0} ativos</span>
+        </div>
+
+        <!-- Usuários + Status Geral -->
+        <div class="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="font-bold text-slate-800">Visão Geral</h3>
+            <div class="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center">
+              <svg class="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+            </div>
+          </div>
+          <div class="space-y-3">
+            <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+              <span class="text-sm text-slate-600">Usuários cadastrados</span>
+              <div class="flex items-baseline gap-1.5">
+                <span class="text-xl font-black text-slate-800">${u.total || 0}</span>
+                <span class="text-xs text-emerald-600 font-semibold">${u.active || 0} ativos</span>
+              </div>
+            </div>
+            <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+              <span class="text-sm text-slate-600">Cobertura de ofertas</span>
+              <span class="text-xl font-black text-blue-600">${p.total ? Math.round((p.with_offers/p.total)*100) : 0}%</span>
+            </div>
+            <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+              <span class="text-sm text-slate-600">Fila de atualização</span>
+              <span class="text-xl font-black ${q.pending > 0 ? 'text-amber-600' : 'text-emerald-600'}">${q.pending || 0}</span>
+            </div>
+            <div class="mt-2 pt-3 border-t border-slate-100">
+              <div class="flex items-center gap-2">
+                <div class="w-2 h-2 rounded-full ${o.in_stock > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}"></div>
+                <span class="text-xs text-slate-500">${o.in_stock > 0 ? `${o.in_stock} ofertas em estoque agora` : 'Nenhuma oferta em estoque'}</span>
+              </div>
             </div>
           </div>
         </div>
       </div>
+
     </div>
   `
 
@@ -237,16 +354,33 @@ async function renderDashboard(area) {
   const ctx = document.getElementById('clicks-chart')
   if (ctx && data.clicksByDay) {
     if (App.charts.clicks) App.charts.clicks.destroy()
+    const days = data.clicksByDay
     App.charts.clicks = new Chart(ctx, {
       type: 'bar',
       data: {
-        labels: data.clicksByDay.map(d => new Date(d.day).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})),
-        datasets: [{ label: 'Cliques', data: data.clicksByDay.map(d => d.clicks),
-          backgroundColor: '#3b82f6', borderRadius: 6 }]
+        labels: days.map(d => new Date(d.day + 'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'2-digit'})),
+        datasets: [{
+          label: 'Cliques',
+          data: days.map(d => d.clicks),
+          backgroundColor: days.map((d,i) => i === days.length-1 ? '#3b82f6' : '#bfdbfe'),
+          borderRadius: 8,
+          borderSkipped: false,
+        }]
       },
-      options: { responsive: true, plugins: { legend: { display: false } },
-        scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false }, tooltip: { callbacks: {
+          label: ctx => ` ${ctx.parsed.y} clique${ctx.parsed.y !== 1 ? 's' : ''}`
+        }}},
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+          y: { beginAtZero: true, ticks: { stepSize: 1, font: { size: 11 } }, grid: { color: '#f1f5f9' } }
+        }
+      }
     })
+  } else if (ctx) {
+    // sem dados: mostra mensagem vazia
+    ctx.parentElement.innerHTML += '<p class="text-sm text-slate-400 text-center pt-8">Nenhum clique registrado ainda</p>'
   }
 }
 

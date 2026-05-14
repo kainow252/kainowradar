@@ -91,25 +91,34 @@ function slugify(text: string): string {
     .substring(0, 80)
 }
 
-// ── Helper: Detecta se URL é de encurtador ML ───────────
-// meli.la/xxxxx, mercadol.iv/xxxxx, etc.
+// ── Helper: Detecta se URL precisa de resolução de redirect ──
+// Cobre encurtadores ML e links afiliados (go.mercadolivre.com.br)
 function isShortUrl(url: string): boolean {
   try {
     const host = new URL(url).hostname
-    return host === 'meli.la' || host === 'mercadol.iv' || host === 'm.me'
+    return (
+      host === 'meli.la'              ||  // encurtador ML
+      host === 'mercadol.iv'          ||  // encurtador alternativo
+      host === 'm.me'                 ||  // messenger
+      host === 'go.mercadolivre.com.br'   // link afiliado do painel ML ← BUG FIX
+    )
   } catch {
     return false
   }
 }
 
-// ── Helper: Resolve URL encurtada → URL final (segue redirects) ──
+// ── Helper: Resolve URL encurtada/afiliada → URL final (segue redirects) ──
 // Usa fetch com redirect:'follow' — o Cloudflare Worker suporta isso
 async function resolveShortUrl(url: string): Promise<string> {
   try {
     const res = await fetch(url, {
       method: 'GET',
       redirect: 'follow',
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; KainowRadar/1.0)' },
+      headers: {
+        'User-Agent':       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept':           'text/html,application/xhtml+xml,*/*',
+        'Accept-Language':  'pt-BR,pt;q=0.9',
+      },
     })
     // Após seguir todos os redirects, res.url é a URL final
     return res.url || url
@@ -119,31 +128,79 @@ async function resolveShortUrl(url: string): Promise<string> {
 }
 
 // ── Helper: Extrai MLB ID de uma URL do Mercado Livre ─────
-// Suporta formatos reais do ML:
-//   MLB3597223513                                        → ID direto
-//   https://...mercadolivre.com.br/celular/p/MLB28965210 → product page (/p/)
-//   https://produto.mercadolivre.com.br/MLB-3597223513-samsung-_JM → listing
-//   https://produto.mercadolivre.com.br/MLB-3635088353-iphone?partner_id=x
+// Suporta todos os formatos reais do ML:
 //
-// IDs do ML têm 8+ dígitos CONTÍNUOS no path (sem hífen separando dígitos).
-// URLs com hífen no meio dos dígitos (ex: MLB-4411-4104) são inválidas → null.
+//   ID direto:     MLB3597223513
+//   Listing:       /produto.mercadolivre.com.br/MLB-3597223513-samsung-_JM
+//   Product page:  /p/MLB28965210
+//   Up page:       /up/MLBU3222497078
+//   Hash wid:      #...&wid=MLB4085178895   ← item real (tracking ML via fragment)
+//   Query wid:     ?wid=MLB4085178895
+//   Query item_id: ?item_id=MLB3597223513
+//
+// ⚠️  ATENÇÃO: o ML coloca wid= no FRAGMENTO (#), não no query string.
+//     Ex: /up/MLBU3222497078#...&wid=MLB4085178895&sid=search
+//     URLSearchParams não lê fragmento — precisa parsear u.hash manualmente.
+//
+// Prioridade: wid (item real) > item_id > /p/ > /up/ > slug > qualquer MLB\d+
+// IDs com hífen separando dígitos (MLB-4411-4104) são inválidos → null.
 function extractMLBId(input: string): string | null {
   const s = input.trim()
 
-  // 1. ID direto (ex: MLB3597223513)
-  if (/^MLB\d+$/i.test(s)) return s.toUpperCase()
+  // 1. ID direto (ex: MLB3597223513 ou MLBU3222497078)
+  if (/^MLB[U]?\d+$/i.test(s)) return s.toUpperCase().replace(/^MLBU/i, 'MLB')
 
-  // 2. /p/MLBXXXXXXXX — product group page
-  const pMatch = s.match(/\/p\/(MLB\d+)/i)
-  if (pMatch) return pMatch[1].toUpperCase()
+  // 2. Tenta parsear como URL
+  try {
+    const u = new URL(s)
 
-  // 3. /MLB-XXXXXXXXXX-slug — ID contínuo com 8+ dígitos sem hífen no meio
-  //    Correto:  /MLB-3597223513-samsung → MLB3597223513
-  //    Inválido: /MLB-4411-4104-titulo  → null (dígitos separados por hífen = ID inválido)
-  const contMatch = s.match(/\/MLB-?(\d{8,})(?:[^0-9]|$)/i)
-  if (contMatch) return 'MLB' + contMatch[1]
+    // 2a. wid= no FRAGMENTO (#...&wid=MLB4085178895&...)
+    //     O ML usa hash com query-string-like params nos links de busca/tracking
+    //     Isso é o item real do anúncio — prioridade máxima
+    if (u.hash) {
+      const hashParams = new URLSearchParams(u.hash.replace(/^#/, ''))
+      const widHash = hashParams.get('wid')
+      if (widHash && /^MLB\d{8,}$/i.test(widHash)) return widHash.toUpperCase()
+      // Fallback: regex no hash bruto
+      const hashMatch = u.hash.match(/\bwid=(MLB\d{8,})\b/i)
+      if (hashMatch) return hashMatch[1].toUpperCase()
+    }
 
-  // 4. MLB\d{8,} em qualquer posição (query string, fragmento, etc.)
+    // 2b. ?wid=MLB... no query string normal
+    const wid = u.searchParams.get('wid')
+    if (wid && /^MLB\d{8,}$/i.test(wid)) return wid.toUpperCase()
+
+    // 2c. ?item_id=MLB... ou ?itemId=MLB...
+    const qItemId = u.searchParams.get('item_id') || u.searchParams.get('itemId')
+    if (qItemId && /^MLB\d{8,}$/i.test(qItemId)) return qItemId.toUpperCase()
+
+    // 2d. /p/MLBXXXXXXXX — product group page
+    const pMatch = u.pathname.match(/\/p\/(MLB\d+)/i)
+    if (pMatch) return pMatch[1].toUpperCase()
+
+    // 2e. /up/MLBUXXXXXXXX — catálogo via URL de produto universal
+    //     ex: /tapete-borracha/up/MLBU3222497078
+    //     Normaliza MLBU → MLB para bater com os endpoints da API
+    const upMatch = u.pathname.match(/\/up\/(MLB[U]?\d+)/i)
+    if (upMatch) return upMatch[1].toUpperCase().replace(/^MLBU/i, 'MLB')
+
+    // 2f. /MLB-XXXXXXXXXX-slug — ID contínuo com 8+ dígitos sem hífen no meio
+    //     Correto:  /MLB-3597223513-samsung → MLB3597223513
+    //     Inválido: /MLB-4411-4104-titulo  → null
+    const contMatch = u.pathname.match(/\/MLB-?(\d{8,})(?:[^0-9]|$)/i)
+    if (contMatch) return 'MLB' + contMatch[1]
+
+    // 2g. MLB\d{8,} em qualquer parte do path
+    const pathAny = u.pathname.match(/\b(MLB\d{8,})\b/i)
+    if (pathAny) return pathAny[1].toUpperCase()
+
+    // 2h. MLB\d{8,} em qualquer parte da URL completa (query + hash)
+    const urlAny = (u.search + u.hash).match(/\b(MLB\d{8,})\b/i)
+    if (urlAny) return urlAny[1].toUpperCase()
+
+  } catch { /* não é URL válida — trata como string bruta */ }
+
+  // 3. Fallback: MLB\d{8,} em qualquer posição da string bruta
   const anyMatch = s.match(/\b(MLB\d{8,})\b/i)
   if (anyMatch) return anyMatch[1].toUpperCase()
 
@@ -886,18 +943,21 @@ ml.post('/force-refresh', async (c) => {
 // ── POST /admin/api/ml/import-url ────────────────────────
 // Importa produtos a partir de URLs do ML (ou IDs diretos)
 // Body: { urls: string[], category?: string, names?: string[] }
-// Aceita:
-//   - https://produto.mercadolivre.com.br/MLB-1234-titulo-do-produto-_JM
-//   - https://www.mercadolivre.com.br/produto/p/MLB28965210
-//   - https://meli.la/XXXXX  (link encurtado do linkbuilder)
+//
+// Formatos suportados:
+//   - https://produto.mercadolivre.com.br/MLB-1234-titulo-_JM
+//   - https://www.mercadolivre.com.br/tapete/up/MLBU3222497078?wid=MLB4085178895
+//     └ extrai wid=MLB4085178895 (item real) OU MLBU (catálogo) como fallback
+//   - https://meli.la/XXXXX  (encurtado)
+//   - https://go.mercadolivre.com.br/...  (link afiliado — resolve redirect)
 //   - MLB1234567890  (ID direto)
 //
-// ESTRATÉGIA SEM API:
-//   A API ML /items/{id} exige OAuth com permissão read:catalog (403 sem ela).
-//   Este endpoint extrai o ID e o título da própria URL fornecida,
-//   monta o permalink canônico e gera o link afiliado sem nenhuma chamada à API ML.
-//   O título é extraído do slug da URL (ex: MLB-3990393083-apple-iphone-15-128gb → "apple iphone 15 128gb").
-//   Se o usuário passar { names: ["Nome do produto 1", ...] } os nomes serão usados diretamente.
+// ESTRATÉGIA HÍBRIDA:
+//   1. Extrai o MLB ID da URL (wid > /p/ > /up/ > slug)
+//   2. Se houver token ML disponível → busca /items/{id} para pegar
+//      nome real, preço, imagem e categoria da API
+//   3. Fallback: extrai nome do slug da URL (sem chamada à API)
+//   4. Sempre salva ml_item_id — nunca fica vazio
 ml.post('/import-url', async (c) => {
   const body = await c.req.json().catch(() => ({})) as any
   const urls: string[]       = Array.isArray(body.urls)  ? body.urls  : []
@@ -910,33 +970,122 @@ ml.post('/import-url', async (c) => {
 
   const { DB } = c.env
 
+  // Tenta obter token ML para enriquecer dados via API
+  const mlToken = await getStoredToken(c.env).catch(() => null)
+
+  // Helper: busca dados reais do item via API ML (/items/{id})
+  // Retorna { name, price, image, category, permalink } ou null se falhar
+  async function fetchItemData(mlId: string, nameHint = ''): Promise<{
+    name: string; price: number | null; image: string | null
+    category: string | null; permalink: string | null
+  } | null> {
+    if (!mlToken) return null
+
+    const headers = {
+      'Authorization': `Bearer ${mlToken}`,
+      'Accept':        'application/json',
+      'User-Agent':    'KainowRadar/1.0',
+    }
+
+    // Helper: mapeia category_id ML → slug local
+    function mapCategory(categoryId: string | null): string | null {
+      if (!categoryId) return null
+      const entry = Object.entries(ML_CATEGORIES).find(
+        ([, v]) => categoryId === v.mlId || categoryId.startsWith(v.mlId.substring(0, 6))
+      )
+      return entry?.[0] || null
+    }
+
+    // Helper: normaliza thumbnail
+    function thumb(t: string | null | undefined): string | null {
+      return t ? (t as string).replace('-I.jpg', '-O.jpg') : null
+    }
+
+    // ── Estratégia 1: /items/{id} ─────────────────────────────
+    try {
+      const res = await fetch(
+        `${ML_API}/items/${mlId}?attributes=id,title,price,thumbnail,permalink,category_id`,
+        { headers }
+      )
+      if (res.ok) {
+        const d: any = await res.json().catch(() => null)
+        if (d?.title) {
+          return { name: d.title.trim(), price: d.price || null,
+                   image: thumb(d.thumbnail), category: mapCategory(d.category_id),
+                   permalink: d.permalink || null }
+        }
+      }
+    } catch { /* tenta próxima */ }
+
+    // ── Estratégia 2: search por ID exato ────────────────────
+    try {
+      const res = await fetch(`${ML_API}/sites/MLB/search?q=${mlId}&limit=3`, { headers })
+      if (res.ok) {
+        const d: any = await res.json().catch(() => null)
+        const results: any[] = d?.results || []
+        const match = results.find((r: any) => r.id === mlId) || null
+        if (match?.title) {
+          return { name: match.title.trim(), price: match.price || null,
+                   image: thumb(match.thumbnail), category: mapCategory(match.category_id),
+                   permalink: match.permalink || null }
+        }
+      }
+    } catch { /* tenta próxima */ }
+
+    // ── Estratégia 3: search por nome do slug ────────────────
+    if (nameHint) {
+      try {
+        const q = encodeURIComponent(nameHint)
+        const res = await fetch(`${ML_API}/sites/MLB/search?q=${q}&limit=5`, { headers })
+        if (res.ok) {
+          const d: any = await res.json().catch(() => null)
+          const results: any[] = d?.results || []
+          // Prefere o que tiver id == mlId; senão pega o primeiro com preço
+          const match = results.find((r: any) => r.id === mlId)
+                     || results.find((r: any) => r.price)
+                     || results[0]
+          if (match?.title) {
+            return { name: match.title.trim(), price: match.price || null,
+                     image: thumb(match.thumbnail), category: mapCategory(match.category_id),
+                     permalink: match.permalink || null }
+          }
+        }
+      } catch { /* sem dados */ }
+    }
+
+    return null
+  }
+
   // Helper: extrai título legível do slug da URL
-  // "MLB-3990393083-apple-iphone-15-128gb-azul-_JM" → "Apple Iphone 15 128gb Azul"
+  // "/tapete-borracha-protetor.../up/MLBU..." → "Tapete Borracha Protetor ..."
+  // "/MLB-3990393083-apple-iphone-15-128gb-azul-_JM" → "Apple Iphone 15 128gb Azul"
   function titleFromSlug(url: string): string {
     try {
       const path = new URL(url).pathname
-      // Pega a parte após o ID: /MLB-3990393083-apple-iphone-15-...
+      // Formato /up/: extrai segmento anterior ao /up/
+      const upM = path.match(/\/(.+?)\/up\//i)
+      if (upM) {
+        const seg = upM[1].split('/').pop() || ''
+        return seg.replace(/-/g, ' ').trim()
+          .split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+      }
+      // Formato /MLB-ID-slug
       const m = path.match(/\/MLB-?\d+[-_](.+?)(?:-_JM|_JM|$)/i)
       if (!m) return ''
       return m[1]
-        .replace(/-/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .split(' ')
-        .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(' ')
+        .replace(/-/g, ' ').replace(/\s+/g, ' ').trim()
+        .split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
     } catch { return '' }
   }
 
-  // Helper: monta permalink canônico do produto
-  // MLB3990393083 → https://www.mercadolivre.com.br/p/MLB3990393083
+  // Helper: monta permalink canônico
   function buildPermalink(mlId: string): string {
     return `https://www.mercadolivre.com.br/p/${mlId}`
   }
 
-  // Helper: monta link afiliado com rastreamento
+  // Helper: monta link afiliado
   function buildAffUrl(permalink: string): string {
-    return `${permalink}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+    return `${permalink.split('?')[0]}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
   }
 
   // Expande todas as entradas em linhas individuais
@@ -946,11 +1095,12 @@ ml.post('/import-url', async (c) => {
     allLines.push(...lines)
   }
 
-  // Resolve encurtadores (meli.la/xxx → URL real)
+  // Resolve encurtadores e links afiliados (meli.la, go.mercadolivre.com.br → URL real)
   const resolvedLines = await Promise.all(
     allLines.map(async (line) => {
       if (line.startsWith('http') && isShortUrl(line)) {
-        return await resolveShortUrl(line)
+        const resolved = await resolveShortUrl(line)
+        return resolved
       }
       return line
     })
@@ -960,115 +1110,200 @@ ml.post('/import-url', async (c) => {
   let created = 0, updated = 0, skipped = 0
   const details: any[] = []
 
+  // ── Pré-processa linhas: detecta pares (produto + /social/ afiliado)
+  // O painel ML exporta: linha 1 = URL do produto, linha 2 = /social/publisher?...
+  // Quando o /social/ segue um produto, é o link afiliado desse produto.
+  // Monta array de objetos { productLine, affLine }
+  interface PairEntry { productLine: string; origProductLine: string; affLine: string | null }
+  const pairs: PairEntry[] = []
+
   for (let i = 0; i < resolvedLines.length; i++) {
     const line = resolvedLines[i]
+    const orig = allLines[i]
 
-    // Detecta URL de perfil de afiliado
-    if (/mercadolivre\.com\.br\/social\//.test(line)) {
-      parseErrors.push(`URL de perfil (não produto): ${line.substring(0, 60)}`)
+    const isSocial = /mercadolivre\.com\.br\/social\//.test(line)
+
+    if (isSocial) {
+      // Se há um produto pendente no par anterior → associa como afiliado
+      if (pairs.length > 0 && pairs[pairs.length - 1].affLine === null) {
+        pairs[pairs.length - 1].affLine = line
+      } else {
+        // /social/ sozinho sem produto antes → ignora
+        parseErrors.push(`URL de perfil ignorada (sem produto par): ${line.substring(0, 80)}`)
+      }
       continue
     }
 
+    // Linha normal de produto
+    pairs.push({ productLine: line, origProductLine: orig, affLine: null })
+  }
+
+  for (const { productLine: line, origProductLine: origLine, affLine } of pairs) {
+    // ── Extrai MLB ID (prioridade: wid > /p/ > /up/ > slug)
     const mlId = extractMLBId(line)
     if (!mlId) {
-      parseErrors.push(`ID não encontrado em: ${line.substring(0, 60)}`)
+      parseErrors.push(`ID não encontrado em: ${line.substring(0, 80)}`)
       continue
     }
 
-    // Nome: usa names[i] se fornecido, senão extrai do slug da URL
-    const nameFromUrl   = titleFromSlug(line.startsWith('http') ? line : '')
-    const productName   = (names[i] || nameFromUrl || mlId).trim()
-    const permalink     = buildPermalink(mlId)
-    const aff_url       = buildAffUrl(permalink)
-    const slug          = mlId.toLowerCase()
+    // ── Nome do slug (usado como hint de busca na API)
+    const nameFromUrl = titleFromSlug(line) || titleFromSlug(origLine)
 
-    // Verifica se já existe pelo ml_item_id
+    // ── Tenta buscar dados reais na API ML (passa slug como hint)
+    const apiData = await fetchItemData(mlId, nameFromUrl)
+
+    // ── Nome final: API > slug da URL > mlId
+    const productName  = (
+      apiData?.name ||
+      nameFromUrl   ||
+      ''
+    ).trim()
+
+    // ── Permalink e link afiliado
+    // Prioridade: link /social/ do par > permalink da API > canônico
+    const permalink = (apiData?.permalink ? apiData.permalink.split('?')[0] : null)
+                   || buildPermalink(mlId)
+    const aff_url   = affLine || buildAffUrl(permalink)
+
+    // ── Categoria: API > hint do body
+    const finalCategory = apiData?.category || categoryHint
+
+    // ── Preço e imagem (da API, se disponível)
+    const apiPrice = apiData?.price  ?? null
+    const apiImage = apiData?.image  ?? null
+
+    const slug = slugify(productName || mlId)
+
+    // ── 1. Já existe pelo ml_item_id → atualiza ──────────────
     const existing = await DB.prepare(
       'SELECT id, name FROM products WHERE ml_item_id = ?'
     ).bind(mlId).first<{ id: number; name: string }>()
 
     if (existing) {
-      // Atualiza affiliate_url com o formato correto (matt_word)
       await DB.prepare(`
         UPDATE products
-        SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        SET affiliate_url          = ?,
+            affiliate_updated_at   = CURRENT_TIMESTAMP,
+            updated_at             = CURRENT_TIMESTAMP
+            ${ apiData?.name     ? ', name = ?'      : '' }
+            ${ apiPrice !== null ? ', best_price = ?' : '' }
+            ${ apiImage          ? ', image_url = ?'  : '' }
+            ${ apiData?.category ? ', category = ?'   : '' }
         WHERE ml_item_id = ?
-      `).bind(aff_url, mlId).run()
+      `).bind(
+        aff_url,
+        ...(apiData?.name     ? [apiData.name]     : []),
+        ...(apiPrice !== null ? [apiPrice]          : []),
+        ...(apiImage          ? [apiImage]          : []),
+        ...(apiData?.category ? [apiData.category]  : []),
+        mlId,
+      ).run()
       updated++
-      details.push({ ml_id: mlId, name: existing.name, action: 'updated', product_id: existing.id, affiliate_url: aff_url })
+      details.push({
+        ml_id: mlId, name: apiData?.name || existing.name,
+        action: 'updated', product_id: existing.id,
+        affiliate_url: aff_url,
+        api_enriched: !!apiData,
+      })
       continue
     }
 
-    // Verifica se existe produto sem ml_item_id mas com nome similar
-    // (produtos importados antes sem ID — tenta associar)
+    // ── 2. Existe produto sem ml_item_id com slug igual → associa
     const bySlug = await DB.prepare(
-      'SELECT id, name FROM products WHERE slug = ? AND (ml_item_id IS NULL OR ml_item_id = \"\")'
+      'SELECT id, name FROM products WHERE slug = ? AND (ml_item_id IS NULL OR ml_item_id = "")'
     ).bind(slug).first<{ id: number; name: string }>()
 
     if (bySlug) {
       await DB.prepare(`
         UPDATE products
-        SET ml_item_id = ?, affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        SET ml_item_id           = ?,
+            affiliate_url        = ?,
+            affiliate_updated_at = CURRENT_TIMESTAMP,
+            updated_at           = CURRENT_TIMESTAMP
+            ${ apiPrice !== null ? ', best_price = ?' : '' }
+            ${ apiImage          ? ', image_url = ?'  : '' }
+            ${ apiData?.category ? ', category = ?'   : '' }
         WHERE id = ?
-      `).bind(mlId, aff_url, bySlug.id).run()
+      `).bind(
+        mlId,
+        aff_url,
+        ...(apiPrice !== null ? [apiPrice]         : []),
+        ...(apiImage          ? [apiImage]          : []),
+        ...(apiData?.category ? [apiData.category]  : []),
+        bySlug.id,
+      ).run()
       updated++
-      details.push({ ml_id: mlId, name: bySlug.name, action: 'updated', product_id: bySlug.id, affiliate_url: aff_url })
+      details.push({
+        ml_id: mlId, name: bySlug.name,
+        action: 'updated', product_id: bySlug.id,
+        affiliate_url: aff_url, api_enriched: !!apiData,
+      })
       continue
     }
 
-    // Cria novo produto com dados extraídos da URL
-    if (!productName || productName === mlId) {
-      // Sem nome — registra como pendente (bot vai tentar buscar nome depois)
+    // ── 3. Produto novo ───────────────────────────────────────
+    if (!productName) {
       skipped++
-      parseErrors.push(`Sem nome para ${mlId} — cole a URL completa com slug ou passe names[]`)
+      parseErrors.push(
+        `${mlId}: sem nome (URL sem slug legível, sem token ML e sem names[])` +
+        (mlToken ? ' — API retornou vazio' : ' — sem token ML para buscar nome')
+      )
       continue
     }
 
-    try {
+    const insertProduct = async (finalSlug: string) => {
       const res = await DB.prepare(`
         INSERT INTO products
           (name, slug, ml_item_id, affiliate_url, affiliate_updated_at,
-           best_price, offer_count, is_active, source, category, created_at, updated_at)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, NULL, 0, 1, 'mercadolivre', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).bind(productName, slug, mlId, aff_url, categoryHint).run()
+           best_price, image_url, offer_count, is_active, source, category,
+           created_at, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, 0, 1, 'mercadolivre', ?,
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).bind(
+        productName, finalSlug, mlId, aff_url,
+        apiPrice, apiImage, finalCategory,
+      ).run()
 
       const newId = res.meta?.last_row_id as number
 
-      // Cria offer placeholder para o produto aparecer no site
-      // (sem preço real ainda — será atualizado pelo sync de preços)
+      // Offer placeholder (preço real se vier da API, senão 0)
       await DB.prepare(`
-        INSERT INTO offers (product_id, store_id, external_id, title, price, affiliate_url, is_active, in_stock, source, last_updated)
-        VALUES (?, 3, ?, ?, 0, ?, 1, 1, 'mercadolivre', CURRENT_TIMESTAMP)
-      `).bind(newId, mlId, productName, aff_url).run()
+        INSERT INTO offers
+          (product_id, store_id, external_id, title, price, affiliate_url,
+           is_active, in_stock, source, last_updated)
+        VALUES (?, 3, ?, ?, ?, ?, 1, 1, 'mercadolivre', CURRENT_TIMESTAMP)
+      `).bind(newId, mlId, productName, apiPrice ?? 0, aff_url).run()
 
-      // Atualiza offer_count do produto
-      await DB.prepare(`UPDATE products SET offer_count = 1, best_store_id = 3 WHERE id = ?`).bind(newId).run()
+      // Atualiza offer_count e best_price
+      if (apiPrice) {
+        await DB.prepare(`
+          UPDATE products SET offer_count = 1, best_store_id = 3, best_price = ? WHERE id = ?
+        `).bind(apiPrice, newId).run()
+      } else {
+        await DB.prepare(`UPDATE products SET offer_count = 1, best_store_id = 3 WHERE id = ?`).bind(newId).run()
+      }
 
+      return newId
+    }
+
+    try {
+      const newId = await insertProduct(slug)
       created++
-      details.push({ ml_id: mlId, name: productName, action: 'created', product_id: newId, affiliate_url: aff_url })
-    } catch (e: any) {
+      details.push({
+        ml_id: mlId, name: productName, action: 'created', product_id: newId,
+        affiliate_url: aff_url, price: apiPrice, category: finalCategory,
+        api_enriched: !!apiData,
+      })
+    } catch {
       // Slug duplicado — tenta com sufixo do mlId
       try {
-        const slugUniq = `${slug}-${mlId.toLowerCase()}`
-        const res = await DB.prepare(`
-          INSERT INTO products
-            (name, slug, ml_item_id, affiliate_url, affiliate_updated_at,
-             best_price, offer_count, is_active, source, category, created_at, updated_at)
-          VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, NULL, 0, 1, 'mercadolivre', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        `).bind(productName, slugUniq, mlId, aff_url, categoryHint).run()
-
-        const newId = res.meta?.last_row_id as number
-
-        // Cria offer placeholder
-        await DB.prepare(`
-          INSERT INTO offers (product_id, store_id, external_id, title, price, affiliate_url, is_active, in_stock, source, last_updated)
-          VALUES (?, 3, ?, ?, 0, ?, 1, 1, 'mercadolivre', CURRENT_TIMESTAMP)
-        `).bind(newId, mlId, productName, aff_url).run()
-
-        await DB.prepare(`UPDATE products SET offer_count = 1, best_store_id = 3 WHERE id = ?`).bind(newId).run()
-
+        const newId = await insertProduct(`${slug}-${mlId.toLowerCase()}`)
         created++
-        details.push({ ml_id: mlId, name: productName, action: 'created', product_id: newId, affiliate_url: aff_url })
+        details.push({
+          ml_id: mlId, name: productName, action: 'created', product_id: newId,
+          affiliate_url: aff_url, price: apiPrice, category: finalCategory,
+          api_enriched: !!apiData,
+        })
       } catch (e2: any) {
         parseErrors.push(`Erro ao salvar ${mlId}: ${e2.message}`)
       }
@@ -1083,9 +1318,13 @@ ml.post('/import-url', async (c) => {
     not_found:    [],
     parse_errors: parseErrors,
     items:        details,
+    api_enriched: details.filter(d => d.api_enriched).length,
+    token_used:   !!mlToken,
     message:      `${created} criados, ${updated} atualizados, ${skipped} ignorados` +
                   (parseErrors.length ? ` — ${parseErrors.length} avisos` : ''),
-    note:         'Links gerados diretamente da URL (sem chamada à API ML)',
+    note: mlToken
+      ? 'Dados enriquecidos via API ML (nome, preço, imagem, categoria)'
+      : 'Sem token ML — use /api/ml/auth para ativar enriquecimento automático',
   })
 })
 
@@ -1654,6 +1893,513 @@ ml.get('/item/:id', async (c) => {
     return c.json(payload)
   } catch (e: any) {
     return c.json({ error: e.message || 'Erro interno' }, 500)
+  }
+})
+
+// ── POST /admin/api/ml/enrich-products ───────────────────
+// Busca imagem, preço e categoria via scraping HTML da página do ML
+// (o Worker roda no edge do Cloudflare — passa pelo bot check do ML)
+// Body: { product_ids: number[] }  ← IDs do banco (products.id)
+//   ou: { ml_ids: string[] }       ← IDs do ML diretamente (MLB...)
+// Atualiza image_url, best_price, category e offer.price no banco
+ml.post('/enrich-products', async (c) => {
+  const { DB } = c.env
+  const body: any = await c.req.json().catch(() => ({}))
+
+  // Aceita product_ids (IDs do banco) ou ml_ids (IDs do ML)
+  const productIds: number[] = Array.isArray(body.product_ids) ? body.product_ids : []
+  const mlIdsRaw:  string[]  = Array.isArray(body.ml_ids)      ? body.ml_ids      : []
+
+  // Resolve produtos a enriquecer
+  let toProcess: Array<{ id: number; ml_item_id: string; name: string; affiliate_url: string | null }> = []
+
+  if (productIds.length) {
+    const placeholders = productIds.map(() => '?').join(',')
+    const { results } = await DB.prepare(
+      `SELECT id, ml_item_id, name, affiliate_url FROM products WHERE id IN (${placeholders}) AND ml_item_id IS NOT NULL AND ml_item_id != ''`
+    ).bind(...productIds).all<{ id: number; ml_item_id: string; name: string; affiliate_url: string | null }>()
+    toProcess = results
+  } else if (mlIdsRaw.length) {
+    const placeholders = mlIdsRaw.map(() => '?').join(',')
+    const { results } = await DB.prepare(
+      `SELECT id, ml_item_id, name, affiliate_url FROM products WHERE ml_item_id IN (${placeholders})`
+    ).bind(...mlIdsRaw).all<{ id: number; ml_item_id: string; name: string; affiliate_url: string | null }>()
+    toProcess = results
+  } else {
+    // Sem filtro: pega todos que têm ml_item_id mas não têm imagem ou preço
+    const { results } = await DB.prepare(
+      `SELECT id, ml_item_id, name, affiliate_url FROM products
+       WHERE ml_item_id IS NOT NULL AND ml_item_id != ''
+         AND (image_url IS NULL OR image_url = '' OR best_price IS NULL OR best_price = 0)
+       ORDER BY id DESC LIMIT 50`
+    ).all<{ id: number; ml_item_id: string; name: string; affiliate_url: string | null }>()
+    toProcess = results
+  }
+
+  if (!toProcess.length) {
+    return c.json({ ok: true, message: 'Nenhum produto para enriquecer', enriched: 0 })
+  }
+
+  // ── Helper: scraping HTML da página do produto no ML ─────
+  // O Worker roda no edge do Cloudflare — IP não é datacenter,
+  // então passa pelo bot check do ML melhor que servidores tradicionais
+  async function scrapeMLPage(mlId: string): Promise<{
+    image: string | null
+    price: number | null
+    category: string | null
+    title: string | null
+  }> {
+    // Mapa de category_id ML → slug local (via breadcrumb no HTML)
+    const CAT_KEYWORDS: Array<[RegExp, string]> = [
+      [/smartphone|celular|iphone|galaxy/i,          'smartphones'],
+      [/notebook|laptop/i,                           'notebooks'],
+      [/tablet|ipad/i,                               'tablets'],
+      [/tv|tele|smart.*tv/i,                         'tv'],
+      [/game|console|playstation|xbox|nintendo/i,    'games'],
+      [/fone|headphone|caixa.*som|audio|speaker/i,   'audio'],
+      [/câmera|camera|drone/i,                       'cameras'],
+      [/eletrodoméstic|geladeira|fogão|lavadora/i,   'eletrodomesticos'],
+      [/informática|computador|desktop|monitor|teclado|mouse|impressora/i, 'informatica'],
+      [/moda|roupa|sapato|tênis|calçado/i,           'moda-calcados'],
+      [/acessório.*auto|pneu|rodas?|aplique.*roda|tapete.*carro|cacamba|strada/i, 'acessorios-automotivos'],
+      [/beleza|perfume|cosmético|maquiagem|cabelo|shampoo/i, 'beleza'],
+      [/saúde|suplemento|vitamina|medicamento/i,     'saude'],
+    ]
+
+    try {
+      // Tenta pelo item_id real (MLB + 10 dígitos)
+      const pageUrl = `https://www.mercadolivre.com.br/p/${mlId}`
+      const res = await fetch(pageUrl, {
+        headers: {
+          'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Cache-Control':   'no-cache',
+          'Referer':         'https://www.mercadolivre.com.br/',
+        },
+        redirect: 'follow',
+      })
+
+      if (!res.ok) return { image: null, price: null, category: null, title: null }
+
+      const html = await res.text()
+      if (html.length < 5000) return { image: null, price: null, category: null, title: null }
+
+      // ── Imagem: og:image meta tag ────────────────────────
+      const imgMatch = html.match(/property="og:image"\s+content="([^"]+)"/)
+                    || html.match(/content="([^"]+)"\s+property="og:image"/)
+      const image = imgMatch?.[1]?.replace('-OO.', '-O.') || null
+
+      // ── Preço: várias estratégias ────────────────────────
+      let price: number | null = null
+
+      // 1. meta og:price:amount
+      const ogPrice = html.match(/property="og:price:amount"\s+content="([^"]+)"/)
+                   || html.match(/content="([^"]+)"\s+property="og:price:amount"/)
+      if (ogPrice) price = parseFloat(ogPrice[1].replace(',', '.')) || null
+
+      // 2. itemprop="price"
+      if (!price) {
+        const itemPrice = html.match(/itemprop="price"\s+content="([^"]+)"/)
+        if (itemPrice) price = parseFloat(itemPrice[1]) || null
+      }
+
+      // 3. JSON-LD price
+      if (!price) {
+        const jsonLd = html.match(/"price"\s*:\s*([\d.]+)/)
+        if (jsonLd) price = parseFloat(jsonLd[1]) || null
+      }
+
+      // 4. Padrão visual "R$\s*XXX" no HTML
+      if (!price) {
+        const visPrice = html.match(/R\$\s*([\d]{2,4}(?:[.,]\d{3})*(?:[.,]\d{2})?)/)
+        if (visPrice) {
+          price = parseFloat(visPrice[1].replace(/\./g, '').replace(',', '.')) || null
+        }
+      }
+
+      // ── Título ────────────────────────────────────────────
+      const titleMatch = html.match(/<title>([^<]+)<\/title>/)
+      const title = titleMatch?.[1]?.split('|')[0]?.trim() || null
+
+      // ── Categoria: via título + breadcrumb + keywords ────
+      let category: string | null = null
+
+      // Breadcrumb no HTML
+      const breadText = html.match(/andes-breadcrumb[^>]*>([\s\S]{0,500})<\/nav>/)?.[1]
+                     || html.match(/breadcrumb[^>]*>([\s\S]{0,300})<\/[ou]l>/)?.[1]
+                     || ''
+      const breadClean = breadText.replace(/<[^>]+>/g, ' ').toLowerCase()
+
+      // Testa keywords no breadcrumb + título
+      const testText = (breadClean + ' ' + (title || '')).toLowerCase()
+      for (const [regex, slug] of CAT_KEYWORDS) {
+        if (regex.test(testText)) { category = slug; break }
+      }
+
+      return { image, price, category, title }
+    } catch {
+      return { image: null, price: null, category: null, title: null }
+    }
+  }
+
+  // ── Processa cada produto ─────────────────────────────────
+  const enriched: any[] = []
+  const failed:   any[] = []
+
+  for (const product of toProcess) {
+    try {
+      const data = await scrapeMLPage(product.ml_item_id)
+
+      // Monta SET dinâmico — só atualiza campos que vieram
+      const updates: string[] = []
+      const values:  any[]    = []
+
+      if (data.image) {
+        updates.push('image_url = ?')
+        values.push(data.image)
+      }
+      if (data.price && data.price > 0) {
+        updates.push('best_price = ?')
+        values.push(data.price)
+      }
+      if (data.category) {
+        updates.push('category = ?')
+        values.push(data.category)
+      }
+      if (data.title && (!product.name || product.name === product.ml_item_id)) {
+        updates.push('name = ?')
+        values.push(data.title)
+      }
+
+      if (updates.length) {
+        updates.push('updated_at = CURRENT_TIMESTAMP')
+        values.push(product.id)
+        await DB.prepare(
+          `UPDATE products SET ${updates.join(', ')} WHERE id = ?`
+        ).bind(...values).run()
+
+        // Atualiza offer com preço e imagem se tiver
+        if (data.price && data.price > 0) {
+          await DB.prepare(`
+            UPDATE offers SET price = ?, image_url = COALESCE(?, image_url),
+              in_stock = 1, last_updated = CURRENT_TIMESTAMP
+            WHERE product_id = ? AND store_id = 3
+          `).bind(data.price, data.image || null, product.id).run()
+
+          await DB.prepare(`
+            UPDATE products SET best_price = ?, best_store_id = 3,
+              offer_count = 1, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND (best_price IS NULL OR best_price = 0)
+          `).bind(data.price, product.id).run()
+        }
+
+        enriched.push({
+          product_id: product.id,
+          ml_id:      product.ml_item_id,
+          name:       product.name,
+          image:      data.image,
+          price:      data.price,
+          category:   data.category,
+        })
+      } else {
+        failed.push({ product_id: product.id, ml_id: product.ml_item_id, reason: 'sem dados no HTML' })
+      }
+
+      // Delay entre requisições para não ser bloqueado
+      await new Promise(r => setTimeout(r, 500))
+    } catch (e: any) {
+      failed.push({ product_id: product.id, ml_id: product.ml_item_id, reason: e.message })
+    }
+  }
+
+  return c.json({
+    ok:       true,
+    enriched: enriched.length,
+    failed:   failed.length,
+    items:    enriched,
+    failures: failed,
+    message:  `${enriched.length} enriquecidos, ${failed.length} sem dados`,
+  })
+})
+
+// ── POST /admin/api/ml/price-sync ────────────────────────
+// Busca preço via scraping HTML da página pública do ML — sem API, sem token
+// Body: { product_ids?: number[], ml_ids?: string[] }
+// Sem filtro: processa todos sem preço (best_price NULL ou 0), limit 30
+ml.post('/price-sync', async (c) => {
+  const { DB } = c.env
+  const body: any        = await c.req.json().catch(() => ({}))
+  const productIds: number[] = Array.isArray(body.product_ids) ? body.product_ids : []
+  const mlIdsRaw: string[]   = Array.isArray(body.ml_ids)      ? body.ml_ids      : []
+
+  // ── 1. Monta lista de produtos ────────────────────────────
+  let rows: Array<{ id: number; ml_item_id: string; name: string; affiliate_url: string | null }> = []
+
+  if (productIds.length) {
+    const ph = productIds.map(() => '?').join(',')
+    const { results } = await DB.prepare(
+      `SELECT id, ml_item_id, name, affiliate_url FROM products
+       WHERE id IN (${ph}) AND ml_item_id IS NOT NULL AND ml_item_id != ''`
+    ).bind(...productIds).all<any>()
+    rows = results
+  } else if (mlIdsRaw.length) {
+    const ph = mlIdsRaw.map(() => '?').join(',')
+    const { results } = await DB.prepare(
+      `SELECT id, ml_item_id, name, affiliate_url FROM products
+       WHERE ml_item_id IN (${ph})`
+    ).bind(...mlIdsRaw).all<any>()
+    rows = results
+  } else {
+    const { results } = await DB.prepare(`
+      SELECT id, ml_item_id, name, affiliate_url FROM products
+      WHERE ml_item_id IS NOT NULL AND ml_item_id != ''
+        AND (best_price IS NULL OR best_price = 0)
+      ORDER BY id DESC LIMIT 30
+    `).all<any>()
+    rows = results
+  }
+
+  if (!rows.length) {
+    return c.json({ ok: true, message: 'Nenhum produto para sincronizar', updated: 0 })
+  }
+
+  // ── 2. Scraper HTML — extrai preço e imagem da página pública ──
+  async function scrapePriceFromML(mlId: string, affUrl: string | null): Promise<{
+    price: number | null
+    image: string | null
+    title: string | null
+  }> {
+    // item_id real = MLB + 10 dígitos → URL correta é /MLB-XXXXXXXXXX-_JM
+    // catalog_id   = MLB + 5-9 dígitos → URL correta é /p/MLB...
+    const numDigits = mlId.replace(/^MLB/i, '').length
+    const isItemId  = numDigits >= 10
+
+    // Monta URL base correta conforme tipo de ID
+    let pageUrl: string
+    if (isItemId) {
+      // Item real — acessível em mercadolivre.com.br/MLB-XXXXXXXXXX-_JM
+      pageUrl = `https://www.mercadolivre.com.br/${mlId}-_JM`
+    } else if (affUrl && !/\/p\//.test(affUrl)) {
+      // affiliate_url que não aponta pra catálogo — usa direto
+      pageUrl = affUrl.split('?')[0]
+    } else {
+      // Catálogo
+      pageUrl = `https://www.mercadolivre.com.br/p/${mlId}`
+    }
+
+    try {
+      const res = await fetch(pageUrl, {
+        headers: {
+          'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+          'Cache-Control':   'no-cache',
+          'Referer':         'https://www.mercadolivre.com.br/',
+        },
+        redirect: 'follow',
+      })
+
+      if (!res.ok) return { price: null, image: null, title: null }
+
+      const html = await res.text()
+      if (html.length < 5000) return { price: null, image: null, title: null }
+
+      // ── Preço: 4 estratégias em cascata ─────────────────────
+      let price: number | null = null
+
+      // 1) og:price:amount
+      const ogPrice = html.match(/property="og:price:amount"\s+content="([^"]+)"/)
+                   || html.match(/content="([^"]+)"\s+property="og:price:amount"/)
+      if (ogPrice) price = parseFloat(ogPrice[1].replace(',', '.')) || null
+
+      // 2) itemprop="price" content="..."
+      if (!price) {
+        const itemProp = html.match(/itemprop="price"\s+content="([^"]+)"/)
+                      || html.match(/content="([^"]+)"\s+itemprop="price"/)
+        if (itemProp) price = parseFloat(itemProp[1].replace(',', '.')) || null
+      }
+
+      // 3) JSON-LD "price": 123.45
+      if (!price) {
+        const jsonLd = html.match(/"price"\s*:\s*([\d]+(?:\.\d+)?)/)
+        if (jsonLd) price = parseFloat(jsonLd[1]) || null
+      }
+
+      // 4) Padrão visual "R$ 1.234,56" — fallback
+      if (!price) {
+        const visPrice = html.match(/R\$\s*([\d]{1,4}(?:[.,]\d{3})*(?:[.,]\d{2}))/)
+        if (visPrice) {
+          price = parseFloat(visPrice[1].replace(/\./g, '').replace(',', '.')) || null
+        }
+      }
+
+      // ── Imagem: og:image ─────────────────────────────────────
+      const imgMatch = html.match(/property="og:image"\s+content="([^"]+)"/)
+                    || html.match(/content="([^"]+)"\s+property="og:image"/)
+      const image = imgMatch?.[1]?.replace('-OO.', '-O.') || null
+
+      // ── Título ───────────────────────────────────────────────
+      const titleMatch = html.match(/<title>([^<]+)<\/title>/)
+      const title = titleMatch?.[1]?.split('|')[0]?.trim() || null
+
+      return { price, image, title }
+    } catch {
+      return { price: null, image: null, title: null }
+    }
+  }
+
+  // ── 3. Processa cada produto ──────────────────────────────
+  const mlStore = await DB.prepare(`SELECT id FROM stores WHERE slug = 'mercadolivre' LIMIT 1`).first<{ id: number }>()
+  const storeId = mlStore?.id ?? 3
+
+  const updated: any[] = []
+  const failed:  any[] = []
+
+  for (const row of rows) {
+    try {
+      const { price, image, title } = await scrapePriceFromML(row.ml_item_id, row.affiliate_url)
+
+      if (!price) {
+        failed.push({ product_id: row.id, ml_id: row.ml_item_id, name: row.name, reason: 'preço não encontrado no HTML' })
+        await new Promise(r => setTimeout(r, 300))
+        continue
+      }
+
+      // Upsert na tabela offers
+      const existing = await DB.prepare(
+        `SELECT id FROM offers WHERE product_id = ? AND store_id = ? LIMIT 1`
+      ).bind(row.id, storeId).first<{ id: number }>()
+
+      if (existing) {
+        await DB.prepare(`
+          UPDATE offers SET
+            price        = ?,
+            image_url    = COALESCE(?, image_url),
+            in_stock     = 1,
+            last_updated = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(price, image, existing.id).run()
+      } else {
+        await DB.prepare(`
+          INSERT INTO offers
+            (product_id, store_id, external_id, title, price, product_url, image_url, is_active, in_stock, last_updated)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, CURRENT_TIMESTAMP)
+        `).bind(row.id, storeId, row.ml_item_id, title || row.name, price, row.affiliate_url, image).run()
+      }
+
+      // Atualiza produto
+      await DB.prepare(`
+        UPDATE products SET
+          best_price    = ?,
+          best_store_id = ?,
+          offer_count   = COALESCE(offer_count, 0) + CASE WHEN (SELECT COUNT(*) FROM offers WHERE product_id = ? AND store_id = ?) = 0 THEN 1 ELSE 0 END,
+          image_url     = COALESCE(NULLIF(image_url, ''), ?),
+          updated_at    = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(price, storeId, row.id, storeId, image, row.id).run()
+
+      updated.push({ product_id: row.id, ml_id: row.ml_item_id, name: row.name, price })
+      await new Promise(r => setTimeout(r, 400))
+
+    } catch (e: any) {
+      failed.push({ product_id: row.id, ml_id: row.ml_item_id, name: row.name, reason: e?.message || 'exception' })
+    }
+  }
+
+  return c.json({
+    ok:      true,
+    updated: updated.length,
+    failed:  failed.length,
+    items:   updated,
+    errors:  failed,
+    message: `${updated.length} preços atualizados via scraping, ${failed.length} falhas`,
+  })
+})
+
+// ── GET /admin/api/ml/debug-item?id=MLB... ───────────────
+// Testa vários endpoints do ML com token real para diagnóstico
+ml.get('/debug-item', async (c) => {
+  const mlId = c.req.query('id') || 'MLB2627750560'
+  const token = await getStoredToken(c.env).catch(() => null)
+
+  const results: any = { ml_id: mlId, token_available: !!token, endpoints: [] }
+
+  const authHeaders: Record<string, string> = token
+    ? { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'User-Agent': 'KainowRadar/1.0' }
+    : { 'Accept': 'application/json' }
+
+  // Testa vários endpoints
+  const endpoints = [
+    `https://api.mercadolibre.com/users/me`,
+    `https://api.mercadolibre.com/items/${mlId}`,
+    `https://api.mercadolibre.com/items?ids=${mlId}`,
+    `https://api.mercadolibre.com/sites/MLB/search?q=${mlId}&limit=1`,
+    `https://api.mercadolibre.com/sites/MLB/search?q=calca+social+gabardine&limit=2`,
+  ]
+
+  for (const ep of endpoints) {
+    try {
+      const r = await fetch(ep, { headers: authHeaders })
+      const body = await r.text()
+      results.endpoints.push({ url: ep, status: r.status, body: body.slice(0, 400) })
+    } catch (e: any) {
+      results.endpoints.push({ url: ep, error: e.message })
+    }
+  }
+
+  return c.json(results)
+})
+
+// ── GET /admin/api/ml/debug-scrape?url=... ───────────────
+// Retorna HTML bruto + extrações para diagnóstico
+ml.get('/debug-scrape', async (c) => {
+  const url = c.req.query('url') || 'https://www.mercadolivre.com.br/MLB2627750560-_JM'
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+        'Cache-Control':   'no-cache',
+        'Referer':         'https://www.mercadolivre.com.br/',
+      },
+      redirect: 'follow',
+    })
+
+    const html   = await res.text()
+    const size   = html.length
+    const status = res.status
+    const finalUrl = res.url
+
+    const ogPrice   = html.match(/property="og:price:amount"\s+content="([^"]+)"/)
+                   || html.match(/content="([^"]+)"\s+property="og:price:amount"/)
+    const itemProp  = html.match(/itemprop="price"\s+content="([^"]+)"/)
+                   || html.match(/content="([^"]+)"\s+itemprop="price"/)
+    const jsonLd    = html.match(/"price"\s*:\s*([\d]+(?:\.\d+)?)/)
+    const visPrice  = html.match(/R\$\s*([\d]{1,4}(?:[.,]\d{3})*(?:[.,]\d{2}))/)
+    const ogImage   = html.match(/property="og:image"\s+content="([^"]+)"/)
+                   || html.match(/content="([^"]+)"\s+property="og:image"/)
+    const title     = html.match(/<title>([^<]+)<\/title>/)
+
+    // Amostra do HTML para ver o que chegou
+    const sample = html.slice(0, 2000)
+
+    return c.json({
+      status, final_url: finalUrl, size,
+      extractions: {
+        og_price:   ogPrice?.[1]   || null,
+        item_prop:  itemProp?.[1]  || null,
+        json_ld:    jsonLd?.[1]    || null,
+        vis_price:  visPrice?.[1]  || null,
+        og_image:   ogImage?.[1]   || null,
+        title:      title?.[1]     || null,
+      },
+      html_sample: sample,
+    })
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500)
   }
 })
 
