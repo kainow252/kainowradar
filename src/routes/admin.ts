@@ -5682,6 +5682,476 @@ admin.put('/api/ml-linkbuilder/products/:id', async (c) => {
   return c.json({ ok: true, id, affiliate_url })
 })
 
+// ============================================================
+// FEED INGESTION — Buffer raw_links + matching engine
+// ============================================================
+
+// ── POST /api/feed/ingest ─────────────────────────────────
+// Recebe array de links (JSON) ou texto CSV, insere em raw_links
+// e cria o registro feed_batches.
+// Body: { store_id, network?, notes?, items: [...] }
+// items: { name, affiliate_url, price?, original_price?,
+//          external_id?, ean?, image_url?, product_url?,
+//          category?, brand?, description? }
+admin.post('/api/feed/ingest', async (c) => {
+  const db = c.env.DB
+  let body: any
+  const ct = c.req.header('content-type') || ''
+
+  if (ct.includes('application/json')) {
+    body = await c.req.json()
+  } else {
+    // Aceita texto/CSV simples: name,affiliate_url,price,external_id
+    const text = await c.req.text()
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+    const isHeader = (l: string) => /name|titulo|produto/i.test(l.split(',')[0])
+    const dataLines = isHeader(lines[0]) ? lines.slice(1) : lines
+    body = {
+      store_id: Number(c.req.query('store_id') || 0),
+      network: c.req.query('network') || 'manual',
+      items: dataLines.map(line => {
+        const [name, affiliate_url, price, external_id, ean, brand, category] = line.split(',').map(s => s.trim())
+        return { name, affiliate_url, price: price ? parseFloat(price) : undefined, external_id, ean, brand, category }
+      }).filter(i => i.name && i.affiliate_url)
+    }
+  }
+
+  const { store_id, network = 'manual', notes = null, items } = body
+
+  if (!store_id) return c.json({ error: 'store_id obrigatório' }, 400)
+  if (!Array.isArray(items) || items.length === 0) return c.json({ error: 'items[] não pode ser vazio' }, 400)
+  if (items.length > 5000) return c.json({ error: 'Máximo 5000 itens por lote' }, 400)
+
+  // Valida que a loja existe
+  const store = await db.prepare('SELECT id FROM stores WHERE id = ?').bind(store_id).first<{ id: number }>()
+  if (!store) return c.json({ error: 'Loja não encontrada' }, 404)
+
+  // Gera ID do lote (timestamp + random)
+  const batchId = `batch_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`
+
+  // Insere registro do lote
+  await db.prepare(`
+    INSERT INTO feed_batches (id, store_id, network, source, total_links, status, notes)
+    VALUES (?, ?, ?, 'manual', ?, 'processing', ?)
+  `).bind(batchId, store_id, network, items.length, notes).run()
+
+  // Insere raw_links em chunks de 100 (D1 suporta ~100 statements por batch)
+  let insertedCount = 0
+  const chunkSize = 100
+
+  for (let i = 0; i < items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize)
+    const stmts = chunk.map(item =>
+      db.prepare(`
+        INSERT INTO raw_links
+          (batch_id, store_id, network, external_id, ean, name, price,
+           original_price, image_url, affiliate_url, product_url,
+           category, brand, description, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+      `).bind(
+        batchId,
+        store_id,
+        network,
+        item.external_id || null,
+        item.ean || null,
+        item.name,
+        item.price || null,
+        item.original_price || null,
+        item.image_url || null,
+        item.affiliate_url,
+        item.product_url || null,
+        item.category || null,
+        item.brand || null,
+        item.description || null
+      )
+    )
+    await db.batch(stmts)
+    insertedCount += chunk.length
+  }
+
+  return c.json({
+    ok: true,
+    batch_id: batchId,
+    total_queued: insertedCount,
+    message: `${insertedCount} links enfileirados. Use POST /api/feed/process?batch_id=${batchId} para processar.`
+  })
+})
+
+// ── POST /api/feed/process ────────────────────────────────
+// Processa raw_links pendentes: matching → cria/atualiza products + offers
+// Query params: batch_id (opcional), limit (default 200)
+admin.post('/api/feed/process', async (c) => {
+  const db = c.env.DB
+  const batchId = c.req.query('batch_id') || null
+  const limit = Math.min(parseInt(c.req.query('limit') || '200'), 500)
+
+  const started = Date.now()
+
+  // Busca raw_links pendentes
+  const query = batchId
+    ? `SELECT * FROM raw_links WHERE batch_id = ? AND status = 'pending' ORDER BY id ASC LIMIT ?`
+    : `SELECT * FROM raw_links WHERE status = 'pending' ORDER BY imported_at ASC LIMIT ?`
+
+  const { results: pending } = batchId
+    ? await db.prepare(query).bind(batchId, limit).all<any>()
+    : await db.prepare(query).bind(limit).all<any>()
+
+  if (pending.length === 0) {
+    // Se batch_id, atualiza status do lote para 'done'
+    if (batchId) {
+      await db.prepare(`UPDATE feed_batches SET status = 'done', finished_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(batchId).run()
+    }
+    return c.json({ ok: true, processed: 0, message: 'Nenhum link pendente' })
+  }
+
+  // Contadores por lote
+  const batchStats: Record<string, { matched: number; created: number; updated: number; skipped: number; errors: number }> = {}
+
+  const getStats = (bid: string) => {
+    if (!batchStats[bid]) batchStats[bid] = { matched: 0, created: 0, updated: 0, skipped: 0, errors: 0 }
+    return batchStats[bid]
+  }
+
+  // Cache de produtos por EAN e external_id
+  const eanCache: Record<string, number> = {}
+  const extIdCache: Record<string, number> = {}
+
+  for (const link of pending) {
+    try {
+      let productId: number | null = null
+      let matchMethod: string | null = null
+      let matchScore = 0
+
+      // ── 1. Match por EAN ──────────────────────────────
+      if (link.ean && !eanCache[link.ean]) {
+        const prod = await db.prepare(`SELECT id FROM products WHERE ean = ? AND is_active = 1 LIMIT 1`)
+          .bind(link.ean).first<{ id: number }>()
+        if (prod) eanCache[link.ean] = prod.id
+      }
+      if (link.ean && eanCache[link.ean]) {
+        productId = eanCache[link.ean]
+        matchMethod = 'ean'
+        matchScore = 1.0
+      }
+
+      // ── 2. Match por external_id (mesma loja) ─────────
+      if (!productId && link.external_id) {
+        const cacheKey = `${link.store_id}:${link.external_id}`
+        if (!extIdCache[cacheKey]) {
+          const prod = await db.prepare(`
+            SELECT p.id FROM products p
+            JOIN offers o ON o.product_id = p.id
+            WHERE o.external_id = ? AND o.store_id = ? AND p.is_active = 1
+            LIMIT 1
+          `).bind(link.external_id, link.store_id).first<{ id: number }>()
+          if (prod) extIdCache[cacheKey] = prod.id
+        }
+        if (extIdCache[cacheKey]) {
+          productId = extIdCache[cacheKey]
+          matchMethod = 'external_id'
+          matchScore = 0.95
+        }
+      }
+
+      // ── 3. Match por ml_item_id no campo offers ───────
+      if (!productId && link.external_id && link.network === 'meli-api') {
+        const prod = await db.prepare(`
+          SELECT p.id FROM products p
+          WHERE p.ml_item_id = ? AND p.is_active = 1
+          LIMIT 1
+        `).bind(link.external_id).first<{ id: number }>()
+        if (prod) {
+          productId = prod.id
+          matchMethod = 'ml_item_id'
+          matchScore = 0.98
+        }
+      }
+
+      // ── 4. Match por nome (similaridade) ─────────────
+      if (!productId && link.name) {
+        // Importa a lógica de nome normalizado inline
+        const normalize = (s: string) => s.toLowerCase()
+          .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
+
+        const linkNorm = normalize(link.name)
+
+        // Extrai tokens relevantes
+        const stopwords = new Set(['de','do','da','com','para','por','em','no','na','the','with','for','and','or','in'])
+        const tokens = linkNorm.split(' ').filter(t => t.length > 2 && !stopwords.has(t))
+
+        if (tokens.length > 0) {
+          // Busca candidatos filtrando por marca ou categoria para limitar comparações
+          const candidateQuery = link.brand
+            ? `SELECT id, name FROM products WHERE (brand = ? OR category = ?) AND is_active = 1 LIMIT 300`
+            : `SELECT id, name FROM products WHERE is_active = 1 LIMIT 500`
+
+          const { results: candidates } = link.brand
+            ? await db.prepare(candidateQuery).bind(link.brand, link.category || '').all<{ id: number; name: string }>()
+            : await db.prepare(candidateQuery).all<{ id: number; name: string }>()
+
+          let bestId: number | null = null
+          let bestScore = 0
+
+          for (const cand of candidates) {
+            const candNorm = normalize(cand.name)
+            const candTokens = new Set(candNorm.split(' ').filter(t => t.length > 2 && !stopwords.has(t)))
+            const inter = tokens.filter(t => candTokens.has(t)).length
+            const union = new Set([...tokens, ...candTokens]).size
+            const jaccard = union > 0 ? inter / union : 0
+
+            if (jaccard > bestScore && jaccard >= 0.72) {
+              bestScore = jaccard
+              bestId = cand.id
+            }
+          }
+
+          if (bestId) {
+            productId = bestId
+            matchMethod = 'name_fuzzy'
+            matchScore = bestScore
+          }
+        }
+      }
+
+      // ── 5. Cria produto novo se não encontrou ─────────
+      let status: string
+      if (!productId) {
+        // Gera slug único
+        const slugBase = (link.brand ? `${link.brand} ${link.name}` : link.name)
+          .toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^\w\s]/g, ' ').replace(/\s+/g, '-').replace(/-+/g, '-').substring(0, 80)
+        const slug = `${slugBase}-${Math.random().toString(36).substring(2, 7)}`
+
+        const res = await db.prepare(`
+          INSERT OR IGNORE INTO products (ean, name, slug, brand, category, image_url, best_price, offer_count, source)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+        `).bind(
+          link.ean || null, link.name, slug,
+          link.brand || null, link.category || 'outros',
+          link.image_url || null, link.price || null, link.network || 'manual'
+        ).run()
+
+        productId = res.meta.last_row_id as number
+        matchMethod = 'new'
+        matchScore = 0
+        status = 'created'
+        getStats(link.batch_id).created++
+      } else {
+        status = 'matched'
+        getStats(link.batch_id).matched++
+      }
+
+      // ── 6. Upsert da oferta ───────────────────────────
+      const existingOffer = await db.prepare(`
+        SELECT id FROM offers WHERE product_id = ? AND store_id = ? AND external_id IS NOT DISTINCT FROM ?
+        LIMIT 1
+      `).bind(productId, link.store_id, link.external_id || null).first<{ id: number }>()
+
+      const discount = link.original_price && link.original_price > link.price
+        ? Math.round(((link.original_price - link.price) / link.original_price) * 1000) / 10
+        : 0
+
+      let offerId: number
+
+      if (existingOffer) {
+        await db.prepare(`
+          UPDATE offers SET
+            price = ?, original_price = ?, discount_percent = ?,
+            image_url = ?, last_updated = CURRENT_TIMESTAMP,
+            cache_expires_at = datetime('now', '+2 hours')
+          WHERE id = ?
+        `).bind(link.price, link.original_price || null, discount, link.image_url || null, existingOffer.id).run()
+        offerId = existingOffer.id
+        if (status === 'matched') {
+          getStats(link.batch_id).matched--
+          getStats(link.batch_id).updated++
+          status = 'updated'
+        }
+      } else {
+        const offerRes = await db.prepare(`
+          INSERT INTO offers
+            (product_id, store_id, external_id, title, price, original_price,
+             discount_percent, free_shipping, in_stock, product_url, image_url,
+             cache_expires_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, datetime('now', '+2 hours'))
+        `).bind(
+          productId, link.store_id, link.external_id || null, link.name,
+          link.price, link.original_price || null, discount,
+          link.product_url || null, link.image_url || null
+        ).run()
+        offerId = offerRes.meta.last_row_id as number
+      }
+
+      // ── 7. Atualiza best_price do produto ─────────────
+      await db.prepare(`
+        UPDATE products SET
+          best_price = (SELECT MIN(price) FROM offers WHERE product_id = ? AND is_active = 1 AND in_stock = 1),
+          best_store_id = (SELECT store_id FROM offers WHERE product_id = ? AND is_active = 1 AND in_stock = 1 ORDER BY price ASC LIMIT 1),
+          offer_count = (SELECT COUNT(*) FROM offers WHERE product_id = ? AND is_active = 1),
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(productId, productId, productId, productId).run()
+
+      // ── 8. Atualiza raw_link com resultado ────────────
+      await db.prepare(`
+        UPDATE raw_links SET
+          status = ?, match_method = ?, match_score = ?,
+          product_id = ?, offer_id = ?, processed_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(status, matchMethod, matchScore, productId, offerId, link.id).run()
+
+    } catch (err: any) {
+      // Marca como erro
+      await db.prepare(`
+        UPDATE raw_links SET status = 'error', error_msg = ?, processed_at = CURRENT_TIMESTAMP WHERE id = ?
+      `).bind(String(err?.message || err).substring(0, 500), link.id).run()
+      getStats(link.batch_id).errors++
+    }
+  }
+
+  // Atualiza contadores de cada feed_batch afetado
+  for (const [bid, s] of Object.entries(batchStats)) {
+    // Conta o que realmente está no banco para esse batch
+    const counts = await db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+        SUM(CASE WHEN status = 'matched' THEN 1 ELSE 0 END) as matched,
+        SUM(CASE WHEN status = 'created' THEN 1 ELSE 0 END) as created,
+        SUM(CASE WHEN status = 'updated' THEN 1 ELSE 0 END) as updated,
+        SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) as skipped,
+        SUM(CASE WHEN status = 'error'   THEN 1 ELSE 0 END) as errors
+      FROM raw_links WHERE batch_id = ?
+    `).bind(bid).first<any>()
+
+    const batchStatus = counts.pending > 0 ? 'processing' : (counts.errors > 0 ? 'partial' : 'done')
+
+    await db.prepare(`
+      UPDATE feed_batches SET
+        matched = ?, created = ?, updated = ?, skipped = ?, errors = ?,
+        status = ?, finished_at = CASE WHEN ? = 'done' OR ? = 'partial' THEN CURRENT_TIMESTAMP ELSE finished_at END
+      WHERE id = ?
+    `).bind(
+      counts.matched || 0, counts.created || 0, counts.updated || 0,
+      counts.skipped || 0, counts.errors || 0,
+      batchStatus, batchStatus, batchStatus, bid
+    ).run()
+  }
+
+  return c.json({
+    ok: true,
+    processed: pending.length,
+    duration_ms: Date.now() - started,
+    batches: batchStats
+  })
+})
+
+// ── GET /api/feed/batches ─────────────────────────────────
+// Lista histórico de lotes com paginação
+admin.get('/api/feed/batches', async (c) => {
+  const db = c.env.DB
+  const page = Math.max(1, parseInt(c.req.query('page') || '1'))
+  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 100)
+  const offset = (page - 1) * limit
+  const storeFilter = c.req.query('store_id')
+
+  const where = storeFilter ? 'WHERE fb.store_id = ?' : ''
+  const binds = storeFilter ? [parseInt(storeFilter), limit, offset] : [limit, offset]
+
+  const { results } = await db.prepare(`
+    SELECT
+      fb.*,
+      s.name as store_name,
+      s.logo_url as store_logo,
+      (fb.matched + fb.created + fb.updated) as total_processed
+    FROM feed_batches fb
+    LEFT JOIN stores s ON s.id = fb.store_id
+    ${where}
+    ORDER BY fb.started_at DESC
+    LIMIT ? OFFSET ?
+  `).bind(...binds).all<any>()
+
+  const total = await db.prepare(`SELECT COUNT(*) as n FROM feed_batches ${where}`)
+    .bind(...binds.slice(0, storeFilter ? 1 : 0)).first<{ n: number }>()
+
+  // Conta pendentes globais
+  const pending = await db.prepare(
+    `SELECT COUNT(*) as n FROM raw_links WHERE status = 'pending'`
+  ).first<{ n: number }>()
+
+  return c.json({
+    batches: results,
+    total: total?.n || 0,
+    page,
+    limit,
+    pending_links: pending?.n || 0
+  })
+})
+
+// ── GET /api/feed/batches/:id ─────────────────────────────
+// Detalhe de um lote com amostras de resultados
+admin.get('/api/feed/batches/:id', async (c) => {
+  const db = c.env.DB
+  const id = c.req.param('id')
+
+  const batch = await db.prepare(`
+    SELECT fb.*, s.name as store_name
+    FROM feed_batches fb
+    LEFT JOIN stores s ON s.id = fb.store_id
+    WHERE fb.id = ?
+  `).bind(id).first<any>()
+
+  if (!batch) return c.json({ error: 'Lote não encontrado' }, 404)
+
+  // Distribuição de status
+  const { results: statusDist } = await db.prepare(`
+    SELECT status, COUNT(*) as count FROM raw_links WHERE batch_id = ? GROUP BY status
+  `).bind(id).all<{ status: string; count: number }>()
+
+  // Últimos 50 links com detalhes
+  const { results: links } = await db.prepare(`
+    SELECT
+      rl.id, rl.name, rl.price, rl.status,
+      rl.match_method, rl.match_score, rl.error_msg,
+      rl.external_id, rl.ean, rl.network,
+      p.name as product_name, p.id as product_id
+    FROM raw_links rl
+    LEFT JOIN products p ON p.id = rl.product_id
+    WHERE rl.batch_id = ?
+    ORDER BY rl.id DESC
+    LIMIT 50
+  `).bind(id).all<any>()
+
+  // Amostra de erros
+  const { results: errors } = await db.prepare(`
+    SELECT id, name, error_msg FROM raw_links WHERE batch_id = ? AND status = 'error' LIMIT 10
+  `).bind(id).all<any>()
+
+  return c.json({ batch, status_distribution: statusDist, links, errors })
+})
+
+// ── DELETE /api/feed/batches/:id ──────────────────────────
+// Remove lote + seus raw_links (cleanup de testes)
+admin.delete('/api/feed/batches/:id', async (c) => {
+  const db = c.env.DB
+  const id = c.req.param('id')
+  await db.prepare('DELETE FROM raw_links WHERE batch_id = ?').bind(id).run()
+  await db.prepare('DELETE FROM feed_batches WHERE id = ?').bind(id).run()
+  return c.json({ ok: true })
+})
+
+// ── GET /api/feed/pending ─────────────────────────────────
+// Conta quantos raw_links estão pendentes (para polling do SPA)
+admin.get('/api/feed/pending', async (c) => {
+  const db = c.env.DB
+  const batchId = c.req.query('batch_id')
+  const where = batchId ? 'WHERE batch_id = ?' : ''
+  const row = await db.prepare(`SELECT COUNT(*) as n FROM raw_links WHERE status = 'pending' ${where}`)
+    .bind(...(batchId ? [batchId] : [])).first<{ n: number }>()
+  return c.json({ pending: row?.n || 0 })
+})
+
 // ── Página HTML do Admin (SPA) ────────────────────────────
 admin.get('*', async (c) => {
   const path = new URL(c.req.url).pathname
@@ -5823,6 +6293,9 @@ function renderAdminSPA(): string {
       </div>
       <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Integrações</div>
       <!-- ml-import, ml-categories, ml-search, ml-crawl, ml-linkbuilder ocultos do menu -->
+      <div onclick="showSection('feed-ingestion')" class="sidebar-link" data-section="feed-ingestion">
+        <span class="text-lg">📥</span> Feed Ingestion
+      </div>
       <div onclick="showSection('api-keys')" class="sidebar-link" data-section="api-keys">
         <span class="text-lg">🔑</span> API Keys
       </div>
@@ -5884,7 +6357,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260513h"><\/script>
+<script src="/static/admin-spa.js?v=20260514a"><\/script>
 </body>
 </html>`
 }

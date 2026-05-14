@@ -144,6 +144,7 @@ async function loadSection(name) {
     'buscape-import': renderBuscapeImport,
     'lomadee-import': renderLomadeeImport,
     'ml-linkbuilder': renderMLLinkBuilder,
+    'feed-ingestion': renderFeedIngestion,
   }
   if (sections[name]) await sections[name](area)
 }
@@ -8849,4 +8850,630 @@ async function akShowUsage(id, name) {
       </div>
     </div>
   `
+}
+
+// ── FEED INGESTION ────────────────────────────────────────
+async function renderFeedIngestion(area) {
+  // Carrega lista de lojas e lotes em paralelo
+  const [storesRes, batchRes] = await Promise.all([
+    api('GET', '/admin/api/stores?limit=100'),
+    api('GET', '/admin/api/feed/batches?limit=10')
+  ])
+  const stores = storesRes?.stores || []
+  const batches = batchRes?.batches || []
+  const pendingLinks = batchRes?.pending_links || 0
+
+  area.innerHTML = `
+    <div class="section space-y-6">
+
+      <!-- Header -->
+      <div class="flex items-center justify-between">
+        <div>
+          <h3 class="text-xl font-bold text-slate-800">📥 Feed Ingestion</h3>
+          <p class="text-sm text-slate-500 mt-0.5">Importe links de afiliados de qualquer rede — CSV, JSON ou colagem direta</p>
+        </div>
+        <div class="flex items-center gap-3">
+          ${pendingLinks > 0 ? `
+            <span class="inline-flex items-center gap-1.5 bg-amber-50 text-amber-700 border border-amber-200 text-sm font-medium px-3 py-1.5 rounded-lg">
+              <span class="w-2 h-2 bg-amber-500 rounded-full animate-pulse"></span>
+              ${pendingLinks} links pendentes
+            </span>
+          ` : ''}
+          <button onclick="feedProcessPending()" class="btn-primary text-sm">
+            ▶ Processar Pendentes
+          </button>
+        </div>
+      </div>
+
+      <!-- Upload / Ingestion Card -->
+      <div class="stat-card">
+        <h4 class="font-semibold text-slate-700 mb-4">➕ Novo Lote</h4>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+
+          <!-- Loja -->
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">Loja *</label>
+            <select id="fi-store" class="input-field w-full">
+              <option value="">— selecione —</option>
+              ${stores.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
+            </select>
+          </div>
+
+          <!-- Rede -->
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">Rede de Afiliados</label>
+            <select id="fi-network" class="input-field w-full">
+              <option value="manual">Manual</option>
+              <option value="meli-api">Mercado Livre API</option>
+              <option value="lomadee">Lomadee</option>
+              <option value="hotmart">Hotmart</option>
+              <option value="monetizze">Monetizze</option>
+              <option value="amazon">Amazon Associates</option>
+              <option value="magalu">Magalu Parceiros</option>
+              <option value="shopee">Shopee Afiliados</option>
+              <option value="csv">CSV / Feed Genérico</option>
+            </select>
+          </div>
+
+          <!-- Notas -->
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">Notas (opcional)</label>
+            <input id="fi-notes" type="text" class="input-field w-full" placeholder="Ex: Importação semanal Lomadee">
+          </div>
+        </div>
+
+        <!-- Tabs de formato -->
+        <div class="border-b border-slate-200 mb-4">
+          <div class="flex gap-0">
+            <button onclick="feedSwitchTab('json')" id="fi-tab-json"
+              class="fi-tab px-4 py-2 text-sm font-medium border-b-2 border-blue-500 text-blue-600">
+              JSON Array
+            </button>
+            <button onclick="feedSwitchTab('csv')" id="fi-tab-csv"
+              class="fi-tab px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-700">
+              CSV / Texto
+            </button>
+          </div>
+        </div>
+
+        <!-- Área JSON -->
+        <div id="fi-panel-json">
+          <label class="block text-xs font-medium text-slate-600 mb-1">
+            JSON Array de itens
+            <span class="text-slate-400 font-normal ml-1">— campos: name*, affiliate_url*, price, original_price, external_id, ean, image_url, product_url, brand, category</span>
+          </label>
+          <textarea id="fi-json" rows="8"
+            class="w-full font-mono text-xs border border-slate-200 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-blue-300 resize-y"
+            placeholder='[
+  {
+    "name": "iPhone 15 Pro Max 256GB",
+    "affiliate_url": "https://loja.com/go/produto123",
+    "price": 8999.90,
+    "original_price": 9999.00,
+    "external_id": "produto123",
+    "ean": "0194253708582",
+    "brand": "Apple",
+    "category": "smartphones",
+    "image_url": "https://loja.com/img/produto123.jpg"
+  }
+]'></textarea>
+        </div>
+
+        <!-- Área CSV -->
+        <div id="fi-panel-csv" class="hidden">
+          <label class="block text-xs font-medium text-slate-600 mb-1">
+            CSV com cabeçalho
+            <span class="text-slate-400 font-normal ml-1">— colunas: name, affiliate_url, price, external_id, ean, brand, category</span>
+          </label>
+          <textarea id="fi-csv" rows="8"
+            class="w-full font-mono text-xs border border-slate-200 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-blue-300 resize-y"
+            placeholder="name,affiliate_url,price,external_id,ean,brand,category
+iPhone 15 Pro Max 256GB,https://loja.com/go/prod1,8999.90,prod1,0194253708582,Apple,smartphones
+Galaxy S24 Ultra 512GB,https://loja.com/go/prod2,6999.00,prod2,,Samsung,smartphones"></textarea>
+        </div>
+
+        <!-- Botões -->
+        <div class="flex items-center gap-3 mt-4">
+          <button onclick="feedIngest()" class="btn-primary">
+            📥 Enfileirar Links
+          </button>
+          <button onclick="feedIngestAndProcess()" class="bg-green-600 hover:bg-green-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+            ⚡ Enfileirar + Processar Agora
+          </button>
+          <button onclick="feedLoadExample()" class="btn-secondary text-sm">
+            Ver Exemplo
+          </button>
+          <span id="fi-status" class="text-sm text-slate-500 ml-auto"></span>
+        </div>
+
+        <!-- Barra de progresso -->
+        <div id="fi-progress" class="hidden mt-4">
+          <div class="flex items-center justify-between text-xs text-slate-600 mb-1">
+            <span id="fi-progress-label">Processando...</span>
+            <span id="fi-progress-pct">0%</span>
+          </div>
+          <div class="w-full bg-slate-100 rounded-full h-2">
+            <div id="fi-progress-bar" class="bg-blue-500 h-2 rounded-full transition-all duration-300" style="width:0%"></div>
+          </div>
+          <div id="fi-progress-stats" class="grid grid-cols-4 gap-2 mt-3 text-center"></div>
+        </div>
+      </div>
+
+      <!-- Histórico de Lotes -->
+      <div class="stat-card">
+        <div class="flex items-center justify-between mb-4">
+          <h4 class="font-semibold text-slate-700">📋 Histórico de Lotes</h4>
+          <button onclick="renderFeedIngestion(document.getElementById('content-area'))"
+            class="btn-secondary text-xs">↻ Atualizar</button>
+        </div>
+
+        ${batches.length === 0 ? `
+          <p class="text-sm text-slate-400 text-center py-8">Nenhum lote importado ainda.</p>
+        ` : `
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-slate-100">
+                  <th class="text-left py-2 px-3 text-xs font-semibold text-slate-500">Lote</th>
+                  <th class="text-left py-2 px-3 text-xs font-semibold text-slate-500">Loja</th>
+                  <th class="text-left py-2 px-3 text-xs font-semibold text-slate-500">Rede</th>
+                  <th class="text-right py-2 px-3 text-xs font-semibold text-slate-500">Total</th>
+                  <th class="text-right py-2 px-3 text-xs font-semibold text-slate-500">Criados</th>
+                  <th class="text-right py-2 px-3 text-xs font-semibold text-slate-500">Atualizados</th>
+                  <th class="text-right py-2 px-3 text-xs font-semibold text-slate-500">Erros</th>
+                  <th class="text-left py-2 px-3 text-xs font-semibold text-slate-500">Status</th>
+                  <th class="text-left py-2 px-3 text-xs font-semibold text-slate-500">Data</th>
+                  <th class="py-2 px-3"></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${batches.map(b => {
+                  const statusColor = {
+                    done: 'bg-green-100 text-green-700',
+                    processing: 'bg-blue-100 text-blue-700',
+                    partial: 'bg-amber-100 text-amber-700',
+                    error: 'bg-red-100 text-red-700'
+                  }[b.status] || 'bg-slate-100 text-slate-600'
+                  const pct = b.total_links > 0
+                    ? Math.round(((b.matched + b.created + b.updated) / b.total_links) * 100)
+                    : 0
+                  return `
+                    <tr class="border-b border-slate-50 hover:bg-slate-50 cursor-pointer" onclick="feedShowBatch('${b.id}')">
+                      <td class="py-2 px-3 font-mono text-xs text-slate-400">${b.id.replace('batch_','').substring(0,16)}…</td>
+                      <td class="py-2 px-3 text-slate-700">${b.store_name || '—'}</td>
+                      <td class="py-2 px-3">
+                        <span class="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">${b.network}</span>
+                      </td>
+                      <td class="py-2 px-3 text-right font-medium">${b.total_links}</td>
+                      <td class="py-2 px-3 text-right text-green-600">${b.created}</td>
+                      <td class="py-2 px-3 text-right text-blue-600">${b.matched + b.updated}</td>
+                      <td class="py-2 px-3 text-right ${b.errors > 0 ? 'text-red-500 font-medium' : 'text-slate-400'}">${b.errors}</td>
+                      <td class="py-2 px-3">
+                        <span class="text-xs font-medium px-2 py-0.5 rounded-full ${statusColor}">
+                          ${b.status}${b.status === 'processing' ? ` (${pct}%)` : ''}
+                        </span>
+                      </td>
+                      <td class="py-2 px-3 text-xs text-slate-400">
+                        ${new Date(b.started_at).toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}
+                      </td>
+                      <td class="py-2 px-3">
+                        <button onclick="event.stopPropagation(); feedDeleteBatch('${b.id}')"
+                          class="text-xs text-red-400 hover:text-red-600">✕</button>
+                      </td>
+                    </tr>
+                  `
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        `}
+
+        ${(batchRes?.total || 0) > 10 ? `
+          <div class="mt-3 text-center">
+            <button onclick="feedLoadMoreBatches()" class="btn-secondary text-xs">
+              Ver todos os ${batchRes.total} lotes
+            </button>
+          </div>
+        ` : ''}
+      </div>
+
+    </div>
+  `
+
+  // Inicializa tab ativa
+  feedSwitchTab('json')
+}
+
+// ── Troca aba JSON / CSV ───────────────────────────────────
+function feedSwitchTab(tab) {
+  document.getElementById('fi-panel-json').classList.toggle('hidden', tab !== 'json')
+  document.getElementById('fi-panel-csv').classList.toggle('hidden', tab !== 'csv')
+  document.getElementById('fi-tab-json').className = `fi-tab px-4 py-2 text-sm font-medium border-b-2 ${
+    tab === 'json' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+  }`
+  document.getElementById('fi-tab-csv').className = `fi-tab px-4 py-2 text-sm font-medium border-b-2 ${
+    tab === 'csv' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+  }`
+}
+
+// ── Exemplo de preenchimento ──────────────────────────────
+function feedLoadExample() {
+  document.getElementById('fi-json').value = JSON.stringify([
+    {
+      name: "iPhone 15 Pro Max 256GB Natural Titanium",
+      affiliate_url: "https://exemplo.com/go/iphone15pm",
+      price: 8999.90,
+      original_price: 9999.00,
+      external_id: "MLB123456789",
+      ean: "0194253708582",
+      brand: "Apple",
+      category: "smartphones",
+      image_url: "https://http2.mlstatic.com/D_NQ_NP_iphone15.jpg"
+    },
+    {
+      name: "Samsung Galaxy S24 Ultra 512GB Titanium Black",
+      affiliate_url: "https://exemplo.com/go/s24ultra",
+      price: 6999.00,
+      external_id: "MLB987654321",
+      brand: "Samsung",
+      category: "smartphones"
+    }
+  ], null, 2)
+  feedSwitchTab('json')
+  toast('Exemplo carregado!', 'success')
+}
+
+// ── Parseia o formulário e retorna { storeId, network, notes, items } ──
+function feedParseForm() {
+  const storeId = parseInt(document.getElementById('fi-store')?.value || '0')
+  const network = document.getElementById('fi-network')?.value || 'manual'
+  const notes   = document.getElementById('fi-notes')?.value?.trim() || null
+
+  if (!storeId) { toast('Selecione uma loja', 'error'); return null }
+
+  // Detecta aba ativa
+  const csvPanel = document.getElementById('fi-panel-csv')
+  const isCSV = csvPanel && !csvPanel.classList.contains('hidden')
+
+  let items = []
+  if (isCSV) {
+    const text = document.getElementById('fi-csv')?.value?.trim()
+    if (!text) { toast('Cole o CSV no campo de texto', 'error'); return null }
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+    const isHeader = /name|titulo|produto/i.test(lines[0]?.split(',')[0] || '')
+    const dataLines = isHeader ? lines.slice(1) : lines
+    items = dataLines.map(line => {
+      const cols = line.split(',').map(s => s.trim().replace(/^"|"$/g, ''))
+      const [name, affiliate_url, price, external_id, ean, brand, category] = cols
+      return { name, affiliate_url, price: price ? parseFloat(price) : undefined, external_id: external_id || undefined, ean: ean || undefined, brand: brand || undefined, category: category || undefined }
+    }).filter(i => i.name && i.affiliate_url)
+  } else {
+    const text = document.getElementById('fi-json')?.value?.trim()
+    if (!text) { toast('Cole o JSON no campo de texto', 'error'); return null }
+    try {
+      items = JSON.parse(text)
+      if (!Array.isArray(items)) { toast('O JSON deve ser um array [ ... ]', 'error'); return null }
+    } catch(e) { toast('JSON inválido: ' + e.message, 'error'); return null }
+  }
+
+  if (items.length === 0) { toast('Nenhum item válido encontrado', 'error'); return null }
+  if (items.length > 5000) { toast('Máximo 5000 itens por lote', 'error'); return null }
+
+  return { storeId, network, notes, items }
+}
+
+// ── Enfileira links (sem processar) ──────────────────────
+async function feedIngest() {
+  const form = feedParseForm()
+  if (!form) return
+
+  const status = document.getElementById('fi-status')
+  if (status) status.textContent = `⏳ Enfileirando ${form.items.length} links...`
+
+  const res = await api('POST', '/admin/api/feed/ingest', {
+    store_id: form.storeId,
+    network: form.network,
+    notes: form.notes,
+    items: form.items
+  })
+
+  if (!res) return
+  if (status) status.textContent = ''
+  toast(`✅ ${res.total_queued} links enfileirados! Lote: ${res.batch_id}`, 'success')
+  // Recarrega seção após 1s para mostrar o novo lote
+  setTimeout(() => renderFeedIngestion(document.getElementById('content-area')), 1000)
+}
+
+// ── Enfileira + processa imediatamente ───────────────────
+async function feedIngestAndProcess() {
+  const form = feedParseForm()
+  if (!form) return
+
+  const status = document.getElementById('fi-status')
+  const progress = document.getElementById('fi-progress')
+  const progBar  = document.getElementById('fi-progress-bar')
+  const progLabel = document.getElementById('fi-progress-label')
+  const progPct  = document.getElementById('fi-progress-pct')
+  const progStats = document.getElementById('fi-progress-stats')
+
+  if (status) status.textContent = `⏳ Enfileirando ${form.items.length} links...`
+  if (progress) progress.classList.remove('hidden')
+  if (progBar)  progBar.style.width = '10%'
+  if (progLabel) progLabel.textContent = 'Enfileirando links...'
+
+  // 1. Ingest
+  const ingestRes = await api('POST', '/admin/api/feed/ingest', {
+    store_id: form.storeId,
+    network: form.network,
+    notes: form.notes,
+    items: form.items
+  })
+  if (!ingestRes) { if (progress) progress.classList.add('hidden'); return }
+
+  const batchId = ingestRes.batch_id
+  if (progBar)  progBar.style.width = '30%'
+  if (progLabel) progLabel.textContent = `Processando ${form.items.length} links...`
+  if (status) status.textContent = `Lote ${batchId} — processando...`
+
+  // 2. Process em rounds até zerar pendentes
+  let round = 0
+  let totalProcessed = 0
+  let done = false
+
+  while (!done && round < 20) {
+    round++
+    const procRes = await api('POST', `/admin/api/feed/process?batch_id=${batchId}&limit=200`)
+    if (!procRes) break
+
+    totalProcessed += procRes.processed || 0
+    const batchStat = procRes.batches?.[batchId] || {}
+
+    // Atualiza barra
+    const pct = form.items.length > 0
+      ? Math.min(99, Math.round((totalProcessed / form.items.length) * 100))
+      : 99
+    if (progBar) progBar.style.width = pct + '%'
+    if (progPct) progPct.textContent = pct + '%'
+
+    // Stats visuais
+    if (progStats) {
+      progStats.innerHTML = `
+        <div class="bg-green-50 rounded p-2">
+          <div class="text-green-700 font-bold text-lg">${batchStat.created || 0}</div>
+          <div class="text-green-600 text-xs">Criados</div>
+        </div>
+        <div class="bg-blue-50 rounded p-2">
+          <div class="text-blue-700 font-bold text-lg">${(batchStat.matched || 0) + (batchStat.updated || 0)}</div>
+          <div class="text-blue-600 text-xs">Atualizados</div>
+        </div>
+        <div class="bg-slate-50 rounded p-2">
+          <div class="text-slate-700 font-bold text-lg">${batchStat.skipped || 0}</div>
+          <div class="text-slate-600 text-xs">Ignorados</div>
+        </div>
+        <div class="bg-red-50 rounded p-2">
+          <div class="text-red-700 font-bold text-lg">${batchStat.errors || 0}</div>
+          <div class="text-red-600 text-xs">Erros</div>
+        </div>
+      `
+    }
+
+    if ((procRes.processed || 0) === 0) done = true
+    if (!done) await new Promise(r => setTimeout(r, 300))
+  }
+
+  // Finaliza UI
+  if (progBar) progBar.style.width = '100%'
+  if (progPct) progPct.textContent = '100%'
+  if (progLabel) progLabel.textContent = '✅ Processamento concluído!'
+  if (status) status.textContent = ''
+
+  toast(`✅ ${totalProcessed} links processados com sucesso!`, 'success')
+  setTimeout(() => renderFeedIngestion(document.getElementById('content-area')), 1500)
+}
+
+// ── Processa links pendentes globais ─────────────────────
+async function feedProcessPending() {
+  const btn = event?.target
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Processando...' }
+
+  let round = 0, total = 0
+  while (round < 30) {
+    round++
+    const res = await api('POST', '/admin/api/feed/process?limit=200')
+    if (!res || res.processed === 0) break
+    total += res.processed
+    await new Promise(r => setTimeout(r, 200))
+  }
+
+  if (btn) { btn.disabled = false; btn.textContent = '▶ Processar Pendentes' }
+  toast(total > 0 ? `✅ ${total} links processados!` : 'Nenhum link pendente.', total > 0 ? 'success' : 'info')
+  setTimeout(() => renderFeedIngestion(document.getElementById('content-area')), 800)
+}
+
+// ── Detalhe de um lote (modal) ────────────────────────────
+async function feedShowBatch(id) {
+  const res = await api('GET', `/admin/api/feed/batches/${id}`)
+  if (!res) return
+
+  const b = res.batch
+  const dist = res.status_distribution || []
+  const links = res.links || []
+  const errors = res.errors || []
+
+  const statusColor = {
+    done: 'bg-green-100 text-green-700',
+    processing: 'bg-blue-100 text-blue-700',
+    partial: 'bg-amber-100 text-amber-700',
+    error: 'bg-red-100 text-red-700'
+  }
+
+  const methodBadge = {
+    ean: '🔵 EAN',
+    external_id: '🟣 ID Externo',
+    ml_item_id: '🟡 ML Item',
+    name_fuzzy: '🟠 Nome ~',
+    name_exact: '🟢 Nome =',
+    new: '⭐ Novo'
+  }
+
+  document.getElementById('modal-container').innerHTML = `
+    <div class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onclick="if(event.target===this)this.remove()">
+      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[85vh] overflow-y-auto">
+
+        <!-- Header -->
+        <div class="flex items-center justify-between p-6 border-b border-slate-100">
+          <div>
+            <h3 class="text-lg font-bold text-slate-800">📋 Detalhe do Lote</h3>
+            <p class="text-xs font-mono text-slate-400 mt-0.5">${b.id}</p>
+          </div>
+          <div class="flex items-center gap-2">
+            ${b.status === 'processing' ? `
+              <button onclick="feedProcessBatch('${b.id}')" class="btn-primary text-sm">
+                ▶ Continuar processamento
+              </button>
+            ` : ''}
+            <button onclick="this.closest('.fixed').remove()" class="text-slate-400 hover:text-slate-600 text-xl">✕</button>
+          </div>
+        </div>
+
+        <div class="p-6 space-y-5">
+
+          <!-- Resumo -->
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div class="bg-slate-50 rounded-xl p-3 text-center">
+              <div class="text-2xl font-bold text-slate-800">${b.total_links}</div>
+              <div class="text-xs text-slate-500">Total</div>
+            </div>
+            <div class="bg-green-50 rounded-xl p-3 text-center">
+              <div class="text-2xl font-bold text-green-700">${b.created}</div>
+              <div class="text-xs text-green-600">Produtos criados</div>
+            </div>
+            <div class="bg-blue-50 rounded-xl p-3 text-center">
+              <div class="text-2xl font-bold text-blue-700">${b.matched + b.updated}</div>
+              <div class="text-xs text-blue-600">Atualizados</div>
+            </div>
+            <div class="bg-red-50 rounded-xl p-3 text-center">
+              <div class="text-2xl font-bold text-red-700">${b.errors}</div>
+              <div class="text-xs text-red-600">Erros</div>
+            </div>
+          </div>
+
+          <!-- Meta -->
+          <div class="flex flex-wrap gap-3 text-sm text-slate-600">
+            <span>🏪 <strong>${b.store_name || '—'}</strong></span>
+            <span>🔗 <strong>${b.network}</strong></span>
+            <span>📅 ${new Date(b.started_at).toLocaleString('pt-BR')}</span>
+            <span class="px-2 py-0.5 rounded-full text-xs font-medium ${statusColor[b.status] || 'bg-slate-100 text-slate-600'}">${b.status}</span>
+            ${b.notes ? `<span class="italic text-slate-400">${b.notes}</span>` : ''}
+          </div>
+
+          <!-- Distribuição de status -->
+          ${dist.length > 0 ? `
+            <div>
+              <h5 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Distribuição por Status</h5>
+              <div class="flex gap-2 flex-wrap">
+                ${dist.map(d => `
+                  <span class="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-600">
+                    <strong>${d.count}</strong> ${d.status}
+                  </span>
+                `).join('')}
+              </div>
+            </div>
+          ` : ''}
+
+          <!-- Erros -->
+          ${errors.length > 0 ? `
+            <div>
+              <h5 class="text-xs font-semibold text-red-500 uppercase tracking-wide mb-2">⚠ Primeiros Erros</h5>
+              <div class="space-y-1 max-h-32 overflow-y-auto">
+                ${errors.map(e => `
+                  <div class="text-xs bg-red-50 border border-red-100 rounded p-2">
+                    <span class="font-medium text-red-700 truncate block">${e.name}</span>
+                    <span class="text-red-400">${e.error_msg}</span>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          ` : ''}
+
+          <!-- Tabela de links (últimos 50) -->
+          <div>
+            <h5 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+              Últimos links processados (máx 50)
+            </h5>
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs">
+                <thead>
+                  <tr class="border-b border-slate-100">
+                    <th class="text-left py-1.5 px-2 text-slate-500">Nome do Link</th>
+                    <th class="text-left py-1.5 px-2 text-slate-500">Produto Casado</th>
+                    <th class="text-left py-1.5 px-2 text-slate-500">Método</th>
+                    <th class="text-right py-1.5 px-2 text-slate-500">Score</th>
+                    <th class="text-right py-1.5 px-2 text-slate-500">Preço</th>
+                    <th class="text-left py-1.5 px-2 text-slate-500">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${links.map(l => {
+                    const sc = { matched:'bg-blue-50 text-blue-700', created:'bg-green-50 text-green-700',
+                      updated:'bg-indigo-50 text-indigo-700', error:'bg-red-50 text-red-600',
+                      pending:'bg-slate-50 text-slate-500', skipped:'bg-slate-50 text-slate-400' }
+                    return `
+                      <tr class="border-b border-slate-50 hover:bg-slate-50">
+                        <td class="py-1.5 px-2 max-w-xs truncate text-slate-700" title="${l.name}">${l.name}</td>
+                        <td class="py-1.5 px-2 max-w-xs truncate text-slate-500" title="${l.product_name || ''}">
+                          ${l.product_name ? `<a href="/produto/${l.product_id}" target="_blank" class="hover:text-blue-600">${l.product_name}</a>` : '—'}
+                        </td>
+                        <td class="py-1.5 px-2">${methodBadge[l.match_method] || (l.match_method || '—')}</td>
+                        <td class="py-1.5 px-2 text-right font-mono">${l.match_score != null ? (l.match_score * 100).toFixed(0) + '%' : '—'}</td>
+                        <td class="py-1.5 px-2 text-right">${l.price != null ? 'R$' + l.price.toFixed(2) : '—'}</td>
+                        <td class="py-1.5 px-2">
+                          <span class="px-1.5 py-0.5 rounded text-xs font-medium ${sc[l.status] || 'bg-slate-100 text-slate-500'}">${l.status}</span>
+                          ${l.error_msg ? `<span class="text-red-400 ml-1" title="${l.error_msg}">⚠</span>` : ''}
+                        </td>
+                      </tr>
+                    `
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  `
+}
+
+// ── Processa um lote específico ───────────────────────────
+async function feedProcessBatch(batchId) {
+  toast('Processando lote...', 'info')
+  let round = 0, total = 0
+  while (round < 20) {
+    round++
+    const res = await api('POST', `/admin/api/feed/process?batch_id=${batchId}&limit=200`)
+    if (!res || res.processed === 0) break
+    total += res.processed
+    await new Promise(r => setTimeout(r, 300))
+  }
+  toast(`✅ ${total} links processados!`, 'success')
+  document.getElementById('modal-container').innerHTML = ''
+  setTimeout(() => renderFeedIngestion(document.getElementById('content-area')), 500)
+}
+
+// ── Carrega mais lotes ────────────────────────────────────
+async function feedLoadMoreBatches() {
+  const res = await api('GET', '/admin/api/feed/batches?limit=100')
+  // Substitui apenas a tabela de histórico
+  const container = document.getElementById('content-area')
+  if (container) renderFeedIngestion(container)
+}
+
+// ── Remove lote ────────────────────────────────────────────
+async function feedDeleteBatch(id) {
+  if (!confirm('Remover este lote e todos os seus raw_links?')) return
+  await api('DELETE', `/admin/api/feed/batches/${id}`)
+  toast('Lote removido.', 'success')
+  setTimeout(() => renderFeedIngestion(document.getElementById('content-area')), 500)
 }
