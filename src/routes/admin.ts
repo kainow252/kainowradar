@@ -2530,6 +2530,7 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
     name: string
     price: number | null
     image_url: string | null
+    hint_mlb_id: string | null   // MLB-ID passado pelo frontend como hint (campo 5: "mlb:XXXXXXXX")
   }
 
   function parseLine(line: string): ParsedItem | null {
@@ -2538,11 +2539,16 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       const parts = line.split('|').map(p => p.trim())
       const url = parts[0]
       if (!url.startsWith('http')) return null
+      // Campo 5 opcional: "mlb:XXXXXXXX" — hint de MLB-ID passado pelo frontend
+      // Usado quando saveUrl é /social/ (sem MLB na URL) mas o produto tem MLB-ID conhecido
+      const hintPart = parts[4] || ''
+      const hintMlb = hintPart.match(/^mlb:(.+)$/i)
       return {
         url,
         name: parts[1] || '',
         price: parts[2] ? parseFloat(parts[2].replace(/[^0-9.,]/g, '').replace(',', '.')) || null : null,
         image_url: parts[3] && parts[3].startsWith('http') ? parts[3] : null,
+        hint_mlb_id: hintMlb ? hintMlb[1].trim() : null,
       }
     }
     // Tenta separar por , (CSV)
@@ -2555,11 +2561,12 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
         name: parts[1] || '',
         price: parts[2] ? parseFloat(parts[2].replace(/[^0-9.,]/g, '').replace(',', '.')) || null : null,
         image_url: parts[3] && parts[3].startsWith('http') ? parts[3] : null,
+        hint_mlb_id: null,
       }
     }
     // Só URL
     if (line.startsWith('http')) {
-      return { url: line, name: '', price: null, image_url: null }
+      return { url: line, name: '', price: null, image_url: null, hint_mlb_id: null }
     }
     return null
   }
@@ -2579,10 +2586,17 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
 
   // ── Pré-processa pares: produto + link afiliado (com cfegdhabc31955)
   // Cenários:
-  //   A) Frontend enviou "socialUrl | Nome | Preço | Img"  → linha ÚNICA completa com /social/
+  //   A) Frontend enviou "socialUrl | Nome | Preço | Img | mlb:XXXXXXXX" → linha com /social/ + hint
   //   B) Duas linhas separadas: linha produto + linha /social/ pura (sem |)
   //   C) Linha normal de produto sem /social/
-  interface PairItem { productUrl: string; affiliateUrl: string | null; name: string; price: number | null; image_url: string | null }
+  interface PairItem {
+    productUrl: string
+    affiliateUrl: string | null
+    name: string
+    price: number | null
+    image_url: string | null
+    hint_mlb_id: string | null  // MLB-ID fornecido pelo frontend como hint de deduplicação
+  }
   const pairedItems: PairItem[] = []
 
   for (let i = 0; i < dataLines.length; i++) {
@@ -2598,13 +2612,13 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       continue
     }
 
-    // Caso A ou C: linha completa (tem nome) — cria item normalmente
-    // Se a URL já é /social/, ela própria vira o affiliateUrl (não precisa de "par")
+    // Caso A: linha completa com /social/ (tem nome) — socialUrl É o affiliate_url
+    // O frontend passa hint_mlb_id no 5º campo para deduplicação correta
     if (isSocialLink && item.name) {
-      // Linha completa com /social/ → o socialUrl É o affiliate_url
-      pairedItems.push({ productUrl: item.url, affiliateUrl: item.url, name: item.name, price: item.price, image_url: item.image_url })
+      pairedItems.push({ productUrl: item.url, affiliateUrl: item.url, name: item.name, price: item.price, image_url: item.image_url, hint_mlb_id: item.hint_mlb_id })
     } else {
-      pairedItems.push({ productUrl: item.url, affiliateUrl: null, name: item.name, price: item.price, image_url: item.image_url })
+      // Caso C: produto normal
+      pairedItems.push({ productUrl: item.url, affiliateUrl: null, name: item.name, price: item.price, image_url: item.image_url, hint_mlb_id: item.hint_mlb_id })
     }
   }
 
@@ -2615,7 +2629,7 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
   let errors   = 0
 
   for (const item of pairedItems) {
-    const { productUrl, affiliateUrl: affUrl, name: rawName, price: rawPrice, image_url } = item
+    const { productUrl, affiliateUrl: affUrl, name: rawName, price: rawPrice, image_url, hint_mlb_id } = item
     // Usa o link afiliado correto (/social/ com ref=) se disponível, senão usa a URL do produto
     const finalAffiliateUrl = affUrl || productUrl
     if (!finalAffiliateUrl) { skipped++; continue }
@@ -2639,34 +2653,38 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       let productId: number | null = null
 
       // ── DEDUPLICAÇÃO: localiza offer existente com chave precisa ────────
-      // Ordem de prioridade para encontrar o produto:
-      //   1) MLB-ID na URL do produto (mais preciso)
-      //   2) ref= da URL /social/ (único por produto, serve de fingerprint)
-      //   3) URL exata sem query string (fallback genérico)
-      // NUNCA usar LIKE %cfegdhabc31955% — é o publisher_id, igual em todos os links.
+      // Ordem de prioridade (do mais confiável ao menos):
+      //   0) hint_mlb_id passado pelo frontend — MLB-ID resolvido pelo resolve-url (PRIORIDADE MÁXIMA)
+      //      Usado quando saveUrl é /social/ mas o produto tem MLB-ID conhecido via url1
+      //   1) MLB-ID extraído da URL (produto ou affiliateUrl com MLB na path)
+      //   2) ref= da URL /social/ como fingerprint (quando nenhum MLB disponível)
+      //   3) URL exata sem query string (fallback último recurso)
+      // NUNCA usar LIKE %cfegdhabc31955% — publisher_id é igual em TODOS os links.
 
-      // Extrai MLB-ID de qualquer URL que o tenha (produto, permalink, etc.)
-      const mlbMatchProd = productUrl.match(/MLB[\-_]?(\d+)/i)
-      const mlbMatchAff  = affiliateUrl.match(/MLB[\-_]?(\d+)/i)
-      const mlbId = (mlbMatchProd || mlbMatchAff)?.[1] ?? null
+      // Prioridade 0: hint do frontend (MLB-ID resolvido via url1 quando saveUrl=/social/)
+      const effectiveMlbId: string | null =
+        hint_mlb_id                                            // frontend resolveu via url1
+        ?? productUrl.match(/MLB[\-_]?(\d+)/i)?.[1]           // MLB na url do produto
+        ?? affiliateUrl.match(/MLB[\-_]?(\d+)/i)?.[1]         // MLB no affiliateUrl
+        ?? null
 
-      // Extrai ref= da URL /social/ — fingerprint único por produto
+      // Extrai ref= da URL /social/ — fingerprint único por produto (fallback)
       const refMatch = affiliateUrl.match(/[?&]ref=([^&]+)/)
       const socialRef = refMatch ? refMatch[1] : null
 
       let existingAnyStore: any = null
 
-      if (mlbId) {
-        // Caso 1: temos MLB-ID → busca exata por MLB-XXXXXXXX (ignora formato /p/ vs direto)
+      if (effectiveMlbId) {
+        // Temos MLB-ID → busca precisa por MLB-XXXXXXXX (cobre todos os formatos de URL)
         existingAnyStore = await DB.prepare(
           `SELECT o.id, o.product_id, o.title, o.store_id, o.affiliate_url, s.name as store_name
            FROM offers o
            LEFT JOIN stores s ON s.id = o.store_id
            WHERE o.affiliate_url LIKE ? OR o.affiliate_url LIKE ?
            LIMIT 1`
-        ).bind(`%MLB-${mlbId}%`, `%MLB${mlbId}%`).first<any>()
+        ).bind(`%MLB-${effectiveMlbId}%`, `%MLB${effectiveMlbId}%`).first<any>()
       } else if (socialRef) {
-        // Caso 2: URL /social/ sem MLB visível → usa ref= como fingerprint único
+        // /social/ sem MLB visível → ref= é fingerprint único por produto
         existingAnyStore = await DB.prepare(
           `SELECT o.id, o.product_id, o.title, o.store_id, o.affiliate_url, s.name as store_name
            FROM offers o
@@ -2675,7 +2693,7 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
            LIMIT 1`
         ).bind(`%ref=${socialRef}%`).first<any>()
       } else {
-        // Caso 3: fallback — URL exata sem query string
+        // Fallback: URL exata sem query string
         const baseUrl = affiliateUrl.split('?')[0]
         existingAnyStore = await DB.prepare(
           `SELECT o.id, o.product_id, o.title, o.store_id, o.affiliate_url, s.name as store_name

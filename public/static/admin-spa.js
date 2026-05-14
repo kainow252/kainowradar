@@ -1309,6 +1309,9 @@ async function siImportDual(storeId, pairs) {
       let line = saveUrl + ' | ' + m.name
       if (m.price) line += ' | ' + m.price
       if (m.image) line += ' | ' + m.image
+      // Passa mlbId como 5º campo quando temos /social/ como saveUrl mas mlbId do produto
+      // Isso permite ao backend deduplcar corretamente pelo MLB-ID mesmo sem ele na URL /social/
+      if (m.mlbId && pairs[i].url2) line += ' | mlb:' + m.mlbId
       lines.push(line)
     })
 
@@ -1456,8 +1459,8 @@ async function siFetchMetaClientSide(originalUrl, affiliateUrl) {
     }
   }
 
-  // Retorna se temos ao menos nome
-  if (name) return { name, price, image, affiliateUrl: builtAffUrl }
+  // Retorna se temos ao menos nome — inclui mlbId para deduplicação correta no backend
+  if (name) return { name, price, image, affiliateUrl: builtAffUrl, mlbId }
 
   // ── CAMADA 4: fallback allorigins.win (links não-ML) ────────────
   if (!isML) {
