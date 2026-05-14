@@ -96,6 +96,19 @@ export async function loadFooterConfig(DB: D1Database): Promise<FooterConfigData
   }
 }
 
+// ── Helper: detecta usuário logado pelo cookie sc_token ──
+async function getCurrentUser(c: any): Promise<{ full_name?: string; email?: string; avatar_url?: string } | null> {
+  try {
+    const cookie = c.req.header('Cookie') || ''
+    const token  = cookie.match(/sc_token=([^;]+)/)?.[1] || ''
+    if (!token) return null
+    const user = await c.env.DB.prepare(
+      `SELECT full_name, email, avatar_url FROM oauth_users WHERE session_token = ? AND session_expires_at > CURRENT_TIMESTAMP LIMIT 1`
+    ).bind(token).first<any>()
+    return user || null
+  } catch { return null }
+}
+
 const pages = new Hono<{ Bindings: Bindings }>()
 
 // ── Middleware: nunca cachear páginas dinâmicas no CDN ────
@@ -183,7 +196,7 @@ pages.get('/produto/:slug', async (c) => {
         <p class="text-gray-500 mb-6">O produto que você procura pode ter sido removido.</p>
         <a href="/" class="btn-primary">Voltar ao início</a>
       </div>
-    `, { navCategories: navCatsNotFound, footerConfig: footerCfgNotFound }), 404)
+    `, { navCategories: navCatsNotFound, footerConfig: footerCfgNotFound, currentUser: await getCurrentUser(c) }), 404)
   }
 
   // Busca histórico + relacionados em paralelo
@@ -527,6 +540,7 @@ pages.get('/produto/:slug', async (c) => {
     DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>(),
     loadFooterConfig(DB),
   ])
+  const currentUserProduto = await getCurrentUser(c)
   return c.html(renderLayout(seoTitle, content, {
     description: seoDesc,
     ogImage: seoImg,
@@ -534,6 +548,7 @@ pages.get('/produto/:slug', async (c) => {
     jsonLd,
     navCategories: navCatsProduto,
     footerConfig: footerCfgProduto,
+    currentUser: currentUserProduto,
   }))
 })
 
@@ -654,10 +669,11 @@ pages.get('/loja/:slug', async (c) => {
     </div>
   `
 
-  const footerCfgLoja = await loadFooterConfig(DB)
+  const [footerCfgLoja, currentUserLoja] = await Promise.all([loadFooterConfig(DB), getCurrentUser(c)])
   return c.html(renderLayout(`${store.name} — Produtos | KainowRadar`, content, {
     navCategories: navCatsLoja,
     footerConfig: footerCfgLoja,
+    currentUser: currentUserLoja,
   }))
 })
 
@@ -707,8 +723,8 @@ pages.get('/categoria/:slug', async (c) => {
       <div class="product-grid">${products.map(renderProductCard).join('')}</div>
     </div>
   `
-  const footerCfgCategoria = await loadFooterConfig(DB)
-  return c.html(renderLayout(`${catName} — Melhores Preços | KainowRadar`, content, { navCategories: navCatsCategoria, footerConfig: footerCfgCategoria }))
+  const [footerCfgCategoria, currentUserCat] = await Promise.all([loadFooterConfig(DB), getCurrentUser(c)])
+  return c.html(renderLayout(`${catName} — Melhores Preços | KainowRadar`, content, { navCategories: navCatsCategoria, footerConfig: footerCfgCategoria, currentUser: currentUserCat }))
 })
 
 // ── Página de busca (/busca?q=...&store=...) ─────────────
@@ -863,9 +879,11 @@ pages.get('/busca', async (c) => {
     ? `"${q}" — Busca | KainowRadar`
     : 'Buscar Produtos | KainowRadar'
 
+  const currentUserBusca = await getCurrentUser(c)
   return c.html(renderLayout(pageTitle, content, {
     navCategories: navCatsBusca,
     footerConfig: footerCfgBusca,
+    currentUser: currentUserBusca,
   }))
 })
 
@@ -904,7 +922,8 @@ function renderProductCard(p: Product): string {
   `
 }
 
-export function renderLayout(title: string, content: string, opts: { hideHeader?: boolean; description?: string; ogImage?: string; canonical?: string; jsonLd?: string; navCategories?: { name: string; slug: string; icon?: string }[]; navStores?: { name: string; slug: string; color?: string; textColor?: string; initial?: string }[]; footerConfig?: FooterConfigData } = {}): string {
+export function renderLayout(title: string, content: string, opts: { hideHeader?: boolean; description?: string; ogImage?: string; canonical?: string; jsonLd?: string; navCategories?: { name: string; slug: string; icon?: string }[]; navStores?: { name: string; slug: string; color?: string; textColor?: string; initial?: string }[]; footerConfig?: FooterConfigData; currentUser?: { full_name?: string; email?: string; avatar_url?: string } | null } = {}): string {
+  const u = opts.currentUser || null
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -1253,8 +1272,8 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
             <span class="hidden lg:inline">Alertas</span>
           </a>
 
-          <!-- Entrar -->
-          <div id="user-area" class="hidden md:block shrink-0">
+          <!-- Entrar / Menu usuário — server-side rendering pelo cookie -->
+          <div id="user-area" class="${u ? 'hidden' : 'hidden md:block'} shrink-0">
             <button onclick="openAuthModal('login')"
                class="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-black px-5 py-2 rounded-xl transition-all whitespace-nowrap shadow-md hover:shadow-lg">
               Entrar
@@ -1262,10 +1281,13 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
           </div>
 
           <!-- Menu usuário logado -->
-          <div id="user-menu" class="hidden shrink-0 relative">
+          <div id="user-menu" class="${u ? 'flex' : 'hidden'} shrink-0 relative">
             <button onclick="toggleUserMenu()" class="flex items-center gap-2 hover:bg-gray-100 rounded-xl px-2 py-1.5 transition-all">
-              <img id="user-avatar" src="" class="w-8 h-8 rounded-full object-cover border-2 border-blue-200" alt="">
-              <span id="user-name" class="text-sm font-semibold text-gray-700 hidden md:block max-w-[100px] truncate"></span>
+              ${u?.avatar_url
+                ? `<img id="user-avatar" src="${u.avatar_url}" class="w-8 h-8 rounded-full object-cover border-2 border-blue-200" alt="">`
+                : `<div id="user-avatar" class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white font-bold text-sm">${(u?.full_name || u?.email || '?')[0].toUpperCase()}</div>`
+              }
+              <span id="user-name" class="text-sm font-semibold text-gray-700 hidden md:block max-w-[100px] truncate">${u ? (u.full_name?.split(' ')[0] || u.email || '') : ''}</span>
               <svg class="w-3.5 h-3.5 text-gray-400 hidden md:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
             </button>
             <div id="user-dropdown" class="hidden absolute right-0 top-full mt-2 w-52 bg-white rounded-2xl shadow-xl border border-gray-100 py-2 z-50">
@@ -1764,10 +1786,12 @@ pages.get('/meus-alertas', async (c) => {
     DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>(),
     loadFooterConfig(DB),
   ])
+  const currentUserAlertas = await getCurrentUser(c)
   return c.html(renderLayout('Meus Alertas de Preço', content, {
     description: 'Gerencie seus alertas de preço. Receba emails quando o produto baixar de preço.',
     navCategories: navCatsAlertas,
     footerConfig: footerCfgAlertas,
+    currentUser: currentUserAlertas,
   }))
 })
 

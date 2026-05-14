@@ -1268,7 +1268,19 @@ app.get('/', async (c) => {
     initial:   s.initial,
   }))
 
-  return c.html(renderLayout('KainowRadar — Seu radar inteligente de ofertas', content, { navCategories: categories, navStores, footerConfig: footerCfg }))
+  // Detecta usuário logado server-side pelo cookie
+  const cookie = c.req.header('Cookie') || ''
+  const scToken = cookie.match(/sc_token=([^;]+)/)?.[1] || ''
+  let currentUser = null
+  if (scToken) {
+    try {
+      currentUser = await (c.env as any).DB.prepare(
+        `SELECT full_name, email, avatar_url FROM oauth_users WHERE session_token = ? AND session_expires_at > CURRENT_TIMESTAMP LIMIT 1`
+      ).bind(scToken).first<any>()
+    } catch {}
+  }
+
+  return c.html(renderLayout('KainowRadar — Seu radar inteligente de ofertas', content, { navCategories: categories, navStores, footerConfig: footerCfg, currentUser }))
 })
 
 // ── 404 ───────────────────────────────────────────────────
