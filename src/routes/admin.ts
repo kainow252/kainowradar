@@ -2625,14 +2625,16 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       let productId: number | null = null
 
       // ── DEDUPLICAÇÃO: checa se este link já foi importado ──────────
-      // Busca por affiliate_url exato em QUALQUER loja (não só esta)
+      // Se temos um link /social/ (affUrl), busca por productUrl OU pelo affiliate_url atual
+      // para garantir que o /social/ sempre seja salvo
+      const searchUrl = affUrl ? productUrl : affiliateUrl
       const existingAnyStore = await DB.prepare(
-        `SELECT o.id, o.product_id, o.title, o.store_id, s.name as store_name
+        `SELECT o.id, o.product_id, o.title, o.store_id, o.affiliate_url, s.name as store_name
          FROM offers o
          LEFT JOIN stores s ON s.id = o.store_id
-         WHERE o.affiliate_url = ?
+         WHERE o.affiliate_url = ? OR o.affiliate_url LIKE ?
          LIMIT 1`
-      ).bind(affiliateUrl).first<any>()
+      ).bind(searchUrl, `%${searchUrl.split('?')[0].split('/').pop()}%`).first<any>()
 
       if (existingAnyStore) {
         const isSameStore = existingAnyStore.store_id === storeId

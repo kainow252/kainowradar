@@ -1162,10 +1162,11 @@ async function siImportAuto(storeId) {
 
     // Filtra apenas URLs que têm nome (o backend exige nome)
     // Usa affiliateUrl montado pelo backend (permalink?matt_word=...) quando disponível
-    const lines = urls.map(function(u) {
+    const lines = urls.map(function(u, i) {
       const m = metaMap[u]
       if (!m || !m.name) return null   // sem nome = pula
-      const saveUrl = m.affiliateUrl || u
+      // PRIORIDADE: url2 = link /social/ colado pelo usuário → sempre usa esse!
+      const saveUrl = (items[i] && items[i].url2) || m.affiliateUrl || u
       let line = saveUrl + ' | ' + m.name
       if (m.price) line += ' | ' + m.price
       if (m.image) line += ' | ' + m.image
@@ -1302,8 +1303,9 @@ async function siImportDual(storeId, pairs) {
     metaArr.forEach((m, i) => {
       if (!m || !m.name) return
       const u = pairs[i].url1
-      // Usa affiliateUrl montado pelo backend (permalink?matt_word=...) quando disponível
-      const saveUrl = m.affiliateUrl || u
+      // PRIORIDADE: url2 = link /social/ colado pelo usuário → sempre usa esse!
+      // Fallback: affiliateUrl do backend → URL do produto
+      const saveUrl = pairs[i].url2 || m.affiliateUrl || u
       let line = saveUrl + ' | ' + m.name
       if (m.price) line += ' | ' + m.price
       if (m.image) line += ' | ' + m.image
