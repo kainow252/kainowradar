@@ -1808,58 +1808,121 @@ async function toggleStore(id, active) {
   toast(active ? 'Loja ativada ✓' : 'Loja desativada', active ? 'success' : 'info')
 }
 
-function openStoreModal(id) {
-  const card = document.getElementById(`store-card-${id}`)
-  const name = card?.querySelector('.font-bold')?.textContent || ''
+async function openStoreModal(id) {
+  // Busca dados atuais da loja antes de abrir o modal
+  const all = await api('GET', '/admin/api/stores')
+  const s = (all || []).find(x => x.id === id) || {}
   const modal = document.getElementById('modal-container')
+
+  const networkOptions = [
+    ['','— nenhuma —'],
+    ['amazon-pa-api','Amazon PA-API'],
+    ['meli-api','Mercado Livre'],
+    ['magalu-api','Magalu API'],
+    ['shopee-api','Shopee'],
+    ['aliexpress-portals','AliExpress Portals'],
+    ['lomadee','SocialSoul/Lomadee'],
+    ['hotmart-api','Hotmart'],
+    ['eduzz-api','Eduzz'],
+    ['monetizze-api','Monetizze'],
+    ['rakuten','Rakuten'],
+    ['shein-api','Shein'],
+    ['dafiti-api','Dafiti'],
+    ['tiktok-shop','TikTok Shop'],
+    ['kwai-shop','Kwai Shop'],
+    ['instagram-shop','Instagram Shopping'],
+    ['youtube-shop','YouTube Shopping'],
+    ['facebook-shop','Facebook Shops'],
+    ['manual','Manual'],
+    ['csv','CSV / Genérico'],
+  ].map(([v,l]) => `<option value="${v}" ${s.affiliate_network === v ? 'selected' : ''}>${l}</option>`).join('')
+
   modal.innerHTML = `
     <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
       <div class="modal max-w-lg">
-        <h3 class="font-bold text-slate-800 text-lg mb-4">✏️ Editar loja: ${name}</h3>
-        <div class="space-y-3">
-          <div>
-            <label class="block text-sm font-medium text-slate-600 mb-1">Logo URL</label>
-            <input type="url" id="store-logo-url" class="input" placeholder="https://logo.clearbit.com/loja.com.br">
+
+        <!-- Header -->
+        <div class="flex items-center gap-3 mb-5">
+          <div id="sm-logo-preview"
+            class="w-16 h-16 rounded-2xl border-2 border-slate-100 bg-slate-50 flex items-center justify-center overflow-hidden shadow-sm flex-shrink-0">
+            ${s.logo_url
+              ? `<img src="${s.logo_url}" class="w-full h-full object-contain p-1" onerror="this.parentElement.innerHTML='<span class=\\'text-2xl\\'>🏪</span>'">`
+              : `<span class="text-2xl">🏪</span>`}
           </div>
           <div>
-            <label class="block text-sm font-medium text-slate-600 mb-1">Rede de afiliados</label>
-            <select id="store-network" class="input">
-              <option value="amazon-pa-api">Amazon PA-API</option>
-              <option value="meli-api">Mercado Livre</option>
-              <option value="magalu-api">Magalu API</option>
-              <option value="shopee-api">Shopee</option>
-              <option value="aliexpress-portals">AliExpress Portals</option>
-              <option value="lomadee">SocialSoul/Lomadee</option>
-              <option value="hotmart-api">Hotmart</option>
-              <option value="eduzz-api">Eduzz</option>
-              <option value="monetizze-api">Monetizze</option>
-              <option value="rakuten">Rakuten</option>
-              <option value="shein-api">Shein</option>
-              <option value="dafiti-api">Dafiti</option>
-              <option value="tiktok-shop">TikTok Shop</option>
-              <option value="kwai-shop">Kwai Shop</option>
-              <option value="instagram-shop">Instagram Shopping</option>
-              <option value="youtube-shop">YouTube Shopping</option>
-              <option value="facebook-shop">Facebook Shops</option>
-              <option value="ltk-api">LTK (LikeToKnow.it)</option>
-              <option value="impact-api">Impact.com</option>
-              <option value="twitch-api">Twitch</option>
-              <option value="pinterest-api">Pinterest Shopping</option>
-              <option value="woocommerce-api">WooCommerce Affiliates</option>
-              <option value="shopify-store-api">Shopify Multi-vendor</option>
-            </select>
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-slate-600 mb-1">Padrão de checkout</label>
-            <input type="text" id="store-checkout" class="input" placeholder="https://loja.com/produto/{ID}">
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-slate-600 mb-1">Comissão (%)</label>
-            <input type="number" id="store-commission" class="input" placeholder="5.0" step="0.1" min="0" max="100">
+            <h3 class="font-bold text-slate-800 text-lg leading-tight">✏️ ${s.name || 'Editar loja'}</h3>
+            <p class="text-xs text-slate-400 mt-0.5">ID #${id} · ${s.offer_count || 0} ofertas cadastradas</p>
           </div>
         </div>
+
+        <div class="space-y-4">
+
+          <!-- ── LOGO ─────────────────────────────────── -->
+          <div class="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+            <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Logo da loja</p>
+
+            <!-- Zona de upload (drag & drop visual) -->
+            <label for="sm-logo-file"
+              class="flex flex-col items-center justify-center gap-2 w-full h-24 rounded-xl border-2 border-dashed border-slate-200 bg-white cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-all group">
+              <span class="text-2xl group-hover:scale-110 transition-transform">📁</span>
+              <span class="text-xs font-medium text-slate-500 group-hover:text-blue-600">
+                Clique para escolher imagem <span class="text-slate-400">(PNG, JPG, SVG, WebP — máx 500 KB)</span>
+              </span>
+              <input type="file" id="sm-logo-file" accept="image/*" class="hidden"
+                onchange="storeLogoFileChanged(this)">
+            </label>
+
+            <!-- Separador -->
+            <div class="flex items-center gap-2 my-3">
+              <div class="flex-1 h-px bg-slate-200"></div>
+              <span class="text-xs text-slate-400 font-medium">ou cole uma URL</span>
+              <div class="flex-1 h-px bg-slate-200"></div>
+            </div>
+
+            <!-- URL manual -->
+            <div class="flex gap-2">
+              <input type="url" id="store-logo-url"
+                class="input flex-1 text-sm"
+                placeholder="https://logo.clearbit.com/mercadolivre.com.br"
+                value="${s.logo_url || ''}"
+                oninput="storeLogoUrlChanged(this.value)">
+              <button onclick="storeLogoUrlChanged(document.getElementById('store-logo-url').value)"
+                class="btn-secondary text-xs px-3 flex-shrink-0">
+                👁 Preview
+              </button>
+            </div>
+
+            <!-- Dica Clearbit -->
+            <p class="text-xs text-slate-400 mt-2">
+              💡 Dica: <code class="bg-slate-100 px-1 rounded">https://logo.clearbit.com/<strong>dominio.com.br</strong></code> funciona para a maioria das lojas
+            </p>
+          </div>
+
+          <!-- ── CONFIGURAÇÕES ──────────────────────── -->
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Rede de afiliados</label>
+              <select id="store-network" class="input text-sm">${networkOptions}</select>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Comissão (%)</label>
+              <input type="number" id="store-commission" class="input text-sm"
+                placeholder="5.0" step="0.1" min="0" max="100"
+                value="${s.commission_rate || ''}">
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Padrão de checkout</label>
+            <input type="text" id="store-checkout" class="input text-sm"
+              placeholder="https://loja.com/produto/{ID}"
+              value="${s.checkout_pattern || ''}">
+          </div>
+
+        </div>
+
         <div class="flex gap-3 mt-5 pt-4 border-t border-slate-100">
-          <button onclick="saveStore(${id})" class="btn-primary flex-1">💾 Salvar</button>
+          <button onclick="saveStore(${id})" class="btn-primary flex-1">💾 Salvar alterações</button>
           <button onclick="closeModal()" class="btn-secondary">Cancelar</button>
         </div>
       </div>
@@ -1867,14 +1930,59 @@ function openStoreModal(id) {
   `
 }
 
-async function saveStore(id) {
-  const body = {
-    logo_url:           document.getElementById('store-logo-url')?.value.trim() || undefined,
-    affiliate_network:  document.getElementById('store-network')?.value || undefined,
-    checkout_pattern:   document.getElementById('store-checkout')?.value.trim() || undefined,
-    commission_rate:    parseFloat(document.getElementById('store-commission')?.value) || undefined,
+// ── Converte arquivo local em base64 e atualiza preview ──
+function storeLogoFileChanged(input) {
+  const file = input.files?.[0]
+  if (!file) return
+
+  // Valida tamanho (500 KB)
+  if (file.size > 512 * 1024) {
+    toast('Imagem muito grande. Máximo 500 KB.', 'error')
+    input.value = ''
+    return
   }
-  Object.keys(body).forEach(k => body[k] === undefined && delete body[k])
+
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    const dataUrl = e.target.result
+    // Atualiza campo URL com o base64
+    const urlInput = document.getElementById('store-logo-url')
+    if (urlInput) urlInput.value = dataUrl
+    // Atualiza preview
+    _updateLogoPreview(dataUrl)
+  }
+  reader.readAsDataURL(file)
+}
+
+// ── Atualiza preview ao digitar URL ─────────────────────
+function storeLogoUrlChanged(url) {
+  if (!url) return
+  const urlInput = document.getElementById('store-logo-url')
+  if (urlInput) urlInput.value = url
+  _updateLogoPreview(url)
+}
+
+function _updateLogoPreview(src) {
+  const preview = document.getElementById('sm-logo-preview')
+  if (!preview) return
+  preview.innerHTML = `<img src="${src}"
+    class="w-full h-full object-contain p-1"
+    onerror="this.parentElement.innerHTML='<span class=\\'text-red-400 text-xs text-center px-1\\'>Imagem inválida</span>'">`
+}
+
+async function saveStore(id) {
+  const logoUrl = document.getElementById('store-logo-url')?.value.trim() || undefined
+  const body = {
+    logo_url:          logoUrl,
+    affiliate_network: document.getElementById('store-network')?.value || undefined,
+    checkout_pattern:  document.getElementById('store-checkout')?.value.trim() || undefined,
+    commission_rate:   parseFloat(document.getElementById('store-commission')?.value) || undefined,
+  }
+  Object.keys(body).forEach(k => (body[k] === undefined || body[k] === '') && delete body[k])
+
+  const btn = document.querySelector('#modal-container .btn-primary')
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvando...' }
+
   await api('PATCH', `/admin/api/stores/${id}`, body)
   toast('Loja atualizada ✓', 'success')
   closeModal()
