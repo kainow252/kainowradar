@@ -25,20 +25,22 @@ type MLBindings = Bindings & {
 const ml = new Hono<{ Bindings: MLBindings }>()
 
 const PUBLISHER_ID = 'cfegdhabc31955'
-const MATT_TOOL    = '38524122'
+const MATT_TOOL    = '61674414'
 const ML_API       = 'https://api.mercadolibre.com'
 const APP_ID       = '3098423019766450'
 
-// ── Converte qualquer permalink ML para formato afiliado /p/MLB canônico ─
-// produto.mercadolivre.com.br/MLB-XXXXXXX → /p/MLBXXXXXXX
-// www.mercadolivre.com.br/MLB-XXXXXXX      → /p/MLBXXXXXXX
-// /p/MLB... ou /social/...                 → mantém como está
+// ── Converte qualquer permalink ML para link afiliado direto ─────────────
+// produto.mercadolivre.com.br/MLB-XXXXXXX → MLB-XXXXXXXX (direto, sempre funciona)
+// /p/MLB... ou /social/...                → mantém como está
+// NOTA: /p/MLB só funciona para produtos com ficha técnica unificada no ML.
+//       O formato direto MLB-XXXXXXXX funciona para TODOS os produtos.
 function toAffUrl(permalink: string): string {
   if (!permalink) return ''
   const clean = permalink.split('?')[0]
-  const m = clean.match(/mercadolivre\.com\.br\/MLB-(\d+)/i)
+  // Extrai MLB ID de qualquer formato de URL do ML
+  const m = clean.match(/MLB[\-_]?(\d+)/i)
   if (m) {
-    return `https://www.mercadolivre.com.br/p/MLB${m[1]}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
+    return `https://www.mercadolivre.com.br/MLB-${m[1]}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
   }
   return `${clean}?matt_word=${PUBLISHER_ID}&matt_tool=${MATT_TOOL}&forceInApp=true`
 }
@@ -1135,15 +1137,20 @@ ml.post('/import-url', async (c) => {
     const line = resolvedLines[i]
     const orig = allLines[i]
 
-    const isSocial = /mercadolivre\.com\.br\/social\//.test(line)
+    // Detecta link afiliado: qualquer URL que contenha o publisher ID (cfegdhabc31955)
+    // Exemplos válidos:
+    //   https://www.mercadolivre.com.br/social/cfegdhabc31955?matt_word=...
+    //   https://www.mercadolivre.com.br/MLB-123?matt_word=cfegdhabc31955&...
+    //   qualquer URL com cfegdhabc31955 no path ou query string
+    const isAffiliateLink = line.includes(PUBLISHER_ID)
 
-    if (isSocial) {
-      // Se há um produto pendente no par anterior → associa como afiliado
+    if (isAffiliateLink) {
+      // Se há um produto pendente no par anterior → associa como link afiliado
       if (pairs.length > 0 && pairs[pairs.length - 1].affLine === null) {
         pairs[pairs.length - 1].affLine = line
       } else {
-        // /social/ sozinho sem produto antes → ignora
-        parseErrors.push(`URL de perfil ignorada (sem produto par): ${line.substring(0, 80)}`)
+        // link afiliado sozinho sem produto antes → ignora
+        parseErrors.push(`Link afiliado ignorado (sem produto par): ${line.substring(0, 80)}`)
       }
       continue
     }
