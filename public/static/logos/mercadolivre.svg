@@ -1,6 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 50" width="200" height="50">
-  <!-- Fundo amarelo ML -->
-  <rect width="200" height="50" fill="#FFE600" rx="6"/>
-  <!-- Texto Mercado Livre em azul escuro -->
-  <text x="100" y="33" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#333" text-anchor="middle" letter-spacing="-0.5">Mercado Livre</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Fundo amarelo -->
+  <rect width="200" height="200" fill="#FFE600" rx="20"/>
+  <!-- Escudo azul -->
+  <path d="M100 28 C100 28 50 50 50 90 L50 118 C50 152 100 174 100 174 C100 174 150 152 150 118 L150 90 C150 50 100 28 100 28Z" fill="#3483FA"/>
+  <!-- Estrela amarela no escudo -->
+  <polygon points="100,68 108,92 134,92 113,107 121,131 100,116 79,131 87,107 66,92 92,92" fill="#FFE600"/>
 </svg>

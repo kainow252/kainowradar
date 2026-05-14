@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Fundo verde Fast Shop -->
+  <rect width="200" height="200" fill="#00843D" rx="20"/>
+  <!-- Raio/seta de velocidade -->
+  <polygon points="120,20 75,100 108,100 80,180 155,86 118,86" fill="#fff"/>
+  <!-- "fast shop" texto -->
+  <text x="100" y="188" font-family="Arial,sans-serif" font-size="18" font-weight="900" fill="#fff" text-anchor="middle">fast shop</text>
+</svg>

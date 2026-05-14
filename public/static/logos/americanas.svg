@@ -1,4 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 50" width="200" height="50">
-  <rect width="200" height="50" fill="#F80032" rx="6"/>
-  <text x="100" y="34" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#fff" text-anchor="middle">americanas</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Fundo vermelho -->
+  <rect width="200" height="200" fill="#E60014" rx="20"/>
+  <!-- "a" minúsculo bold gigante — símbolo característico -->
+  <text x="100" y="142" font-family="Arial Black,sans-serif" font-size="130" font-weight="900" fill="#fff" text-anchor="middle">a</text>
 </svg>

@@ -1,4 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 50" width="200" height="50">
-  <rect width="200" height="50" fill="#0086FF" rx="6"/>
-  <text x="100" y="33" font-family="Arial, sans-serif" font-size="17" font-weight="bold" fill="#fff" text-anchor="middle">Magazine Luiza</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Fundo azul -->
+  <rect width="200" height="200" fill="#0086FF" rx="20"/>
+  <!-- Círculo branco Lu -->
+  <circle cx="100" cy="78" r="42" fill="#fff"/>
+  <!-- Lu em azul -->
+  <text x="100" y="94" font-family="Arial Black,sans-serif" font-size="34" font-weight="900" fill="#0086FF" text-anchor="middle">Lu</text>
+  <!-- magalu embaixo -->
+  <text x="100" y="158" font-family="Arial Black,sans-serif" font-size="28" font-weight="900" fill="#fff" text-anchor="middle">magalu</text>
 </svg>
