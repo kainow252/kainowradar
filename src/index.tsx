@@ -346,37 +346,283 @@ app.get('/', async (c) => {
   const eBannerSec2 = editorials.find((e: any) => e.slot === 'banner_sec2')
   const eInsights   = editorials.filter((e: any) => e.type === 'insight')
 
-  // Logos SVG inline por slug — 100% confiáveis, sem depender de URL externa
+  // Logos SVG inline por slug — alta fidelidade visual, sem depender de URL externa
+  // Cada SVG replica os elementos visuais característicos do logo real da marca
   const STORE_LOGO_SVG: Record<string, string> = {
-    'mercadolivre': `<svg viewBox="0 0 120 40" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="120" height="40" rx="6" fill="#FFE600"/><text x="60" y="27" font-family="Arial,sans-serif" font-size="11" font-weight="900" fill="#333" text-anchor="middle">Mercado</text><text x="60" y="38" font-family="Arial,sans-serif" font-size="9" font-weight="700" fill="#333" text-anchor="middle">Livre</text></svg>`,
-    'amazon':       `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><text x="50" y="22" font-family="Arial,sans-serif" font-size="18" font-weight="900" fill="#FF9900" text-anchor="middle">amazon</text><path d="M20 28 Q50 36 80 28" stroke="#FF9900" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg>`,
-    'magalu':       `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#0086FF"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="13" font-weight="900" fill="#fff" text-anchor="middle">magalu</text></svg>`,
-    'shopee':       `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#EE4D2D"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="12" font-weight="900" fill="#fff" text-anchor="middle">shopee</text></svg>`,
-    'americanas':   `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#E60014"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">americanas</text></svg>`,
-    'casasbahia':   `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#0057A8"/><text x="50" y="15" font-family="Arial,sans-serif" font-size="9" font-weight="900" fill="#fff" text-anchor="middle">Casas</text><text x="50" y="28" font-family="Arial,sans-serif" font-size="9" font-weight="900" fill="#FFD700" text-anchor="middle">Bahia</text></svg>`,
-    'kabum':        `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#F47920"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="13" font-weight="900" fill="#fff" text-anchor="middle">KaBuM!</text></svg>`,
-    'aliexpress':   `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#FF6600"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">AliExpress</text></svg>`,
-    'submarino':    `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#0057A8"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">submarino</text></svg>`,
-    'netshoes':     `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#003DA5"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">netshoes</text></svg>`,
-    'pichau':       `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#1a1a2e"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="12" font-weight="900" fill="#00CFFF" text-anchor="middle">pichau</text></svg>`,
-    'terabyte':     `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#e60000"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">Terabyte</text></svg>`,
-    'fastshop':     `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#00843D"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">Fast Shop</text></svg>`,
-    'carrefour':    `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#0066CC"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">Carrefour</text></svg>`,
-    'extra':        `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#E30613"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="14" font-weight="900" fill="#fff" text-anchor="middle">extra</text></svg>`,
-    'pontofrio':    `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#00AAFF"/><text x="50" y="15" font-family="Arial,sans-serif" font-size="9" font-weight="900" fill="#fff" text-anchor="middle">Ponto</text><text x="50" y="28" font-family="Arial,sans-serif" font-size="9" font-weight="900" fill="#fff" text-anchor="middle">Frio</text></svg>`,
-    'centauro':     `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#FF6B00"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="11" font-weight="900" fill="#fff" text-anchor="middle">centauro</text></svg>`,
-    'dafiti':       `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#5C068C"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="12" font-weight="900" fill="#fff" text-anchor="middle">dafiti</text></svg>`,
-    'shein':        `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#000"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="13" font-weight="900" fill="#fff" text-anchor="middle">SHEIN</text></svg>`,
-    'renner':       `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#E30613"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="12" font-weight="900" fill="#fff" text-anchor="middle">renner</text></svg>`,
-    'riachuelo':    `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#E30613"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">riachuelo</text></svg>`,
-    'leroy':        `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#00843D"/><text x="50" y="15" font-family="Arial,sans-serif" font-size="8" font-weight="900" fill="#fff" text-anchor="middle">Leroy</text><text x="50" y="28" font-family="Arial,sans-serif" font-size="8" font-weight="900" fill="#fff" text-anchor="middle">Merlin</text></svg>`,
-    'madeiramadeira': `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#00833E"/><text x="50" y="15" font-family="Arial,sans-serif" font-size="8" font-weight="900" fill="#fff" text-anchor="middle">Madeira</text><text x="50" y="28" font-family="Arial,sans-serif" font-size="8" font-weight="900" fill="#fff" text-anchor="middle">Madeira</text></svg>`,
-    'havan':        `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#0057A8"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="13" font-weight="900" fill="#FFD700" text-anchor="middle">havan</text></svg>`,
-    'tok_stok':     `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#E63329"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle">Tok&amp;Stok</text></svg>`,
-    'samsung':      `<svg viewBox="0 0 100 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="36" rx="6" fill="#1428A0"/><text x="50" y="24" font-family="Arial,sans-serif" font-size="11" font-weight="900" fill="#fff" text-anchor="middle">SAMSUNG</text></svg>`,
-    'apple':        `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#555"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="12" font-weight="900" fill="#fff" text-anchor="middle"> Apple</text></svg>`,
-    'zattini':      `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#1a1a1a"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="12" font-weight="900" fill="#fff" text-anchor="middle">zattini</text></svg>`,
-    'hotmart':      `<svg viewBox="0 0 80 36" class="w-10 h-7 object-contain" xmlns="http://www.w3.org/2000/svg"><rect width="80" height="36" rx="6" fill="#FF4D0D"/><text x="40" y="24" font-family="Arial,sans-serif" font-size="11" font-weight="900" fill="#fff" text-anchor="middle">hotmart</text></svg>`,
+
+    // ── Mercado Livre — amarelo + escudo azul com estrela ──
+    'mercadolivre': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#FFE600"/>
+      <!-- escudo azul -->
+      <path d="M28 10 C28 10 14 16 14 26 L14 34 C14 42 28 48 28 48 C28 48 42 42 42 34 L42 26 C42 16 28 10 28 10Z" fill="#3483FA"/>
+      <!-- estrela branca -->
+      <polygon points="28,20 30.4,26.6 37.4,26.6 31.9,30.7 33.8,37.6 28,33.8 22.2,37.6 24.1,30.7 18.6,26.6 25.6,26.6" fill="#FFE600"/>
+    </svg>`,
+
+    // ── Amazon — texto preto + seta-sorriso laranja ──
+    'amazon': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#fff"/>
+      <text x="28" y="26" font-family="Arial,sans-serif" font-size="11" font-weight="900" fill="#221F1F" text-anchor="middle" letter-spacing="-0.3">amazon</text>
+      <!-- seta sorriso laranja -->
+      <path d="M14 34 Q28 42 42 34" stroke="#FF9900" stroke-width="3" fill="none" stroke-linecap="round"/>
+      <path d="M39 31 L42 34 L38 35.5" fill="#FF9900"/>
+    </svg>`,
+
+    // ── Magazine Luiza — fundo azul royal + "magalu" branco + ícone Lu ──
+    'magalu': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#0086FF"/>
+      <!-- círculo Lu -->
+      <circle cx="28" cy="20" r="9" fill="#fff"/>
+      <text x="28" y="24" font-family="Arial Black,sans-serif" font-size="11" font-weight="900" fill="#0086FF" text-anchor="middle">Lu</text>
+      <!-- nome -->
+      <text x="28" y="45" font-family="Arial,sans-serif" font-size="10" font-weight="900" fill="#fff" text-anchor="middle" letter-spacing="0.3">magalu</text>
+    </svg>`,
+
+    // ── Shopee — laranja-vermelho + sacola de compras ──
+    'shopee': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#EE4D2D"/>
+      <!-- alça sacola -->
+      <path d="M20 22 Q20 14 28 14 Q36 14 36 22" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round"/>
+      <!-- corpo sacola -->
+      <rect x="14" y="22" width="28" height="22" rx="4" fill="#fff"/>
+      <!-- texto -->
+      <text x="28" y="38" font-family="Arial,sans-serif" font-size="9" font-weight="900" fill="#EE4D2D" text-anchor="middle">shopee</text>
+    </svg>`,
+
+    // ── Americanas — vermelho + "a" minúsculo estilizado ──
+    'americanas': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#E60014"/>
+      <!-- "a" bold centralizado -->
+      <text x="28" y="36" font-family="Arial Black,sans-serif" font-size="30" font-weight="900" fill="#fff" text-anchor="middle">a</text>
+    </svg>`,
+
+    // ── Casas Bahia — azul + casa branca + texto amarelo ──
+    'casasbahia': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#0057A8"/>
+      <!-- telhado casa -->
+      <polygon points="28,10 44,24 12,24" fill="#fff"/>
+      <!-- corpo casa -->
+      <rect x="16" y="24" width="24" height="16" fill="#fff"/>
+      <!-- porta -->
+      <rect x="23" y="30" width="10" height="10" fill="#0057A8"/>
+      <!-- texto CB -->
+      <text x="28" y="52" font-family="Arial,sans-serif" font-size="8" font-weight="900" fill="#FFD700" text-anchor="middle">CASAS BAHIA</text>
+    </svg>`,
+
+    // ── KaBuM! — laranja + raio ──
+    'kabum': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#F47920"/>
+      <!-- raio -->
+      <polygon points="32,8 20,30 27,30 24,48 36,26 29,26" fill="#fff"/>
+      <text x="28" y="54" font-family="Arial Black,sans-serif" font-size="8" font-weight="900" fill="#fff" text-anchor="middle">KaBuM!</text>
+    </svg>`,
+
+    // ── AliExpress — laranja + texto "Ali" ──
+    'aliexpress': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#FF6600"/>
+      <text x="28" y="24" font-family="Arial Black,sans-serif" font-size="12" font-weight="900" fill="#fff" text-anchor="middle">Ali</text>
+      <text x="28" y="40" font-family="Arial,sans-serif" font-size="9" font-weight="700" fill="#fff" text-anchor="middle">Express</text>
+    </svg>`,
+
+    // ── Submarino — azul escuro + submarino ──
+    'submarino': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#0057A8"/>
+      <!-- corpo submarino -->
+      <ellipse cx="28" cy="30" rx="18" ry="8" fill="#fff"/>
+      <!-- torre -->
+      <rect x="22" y="18" width="12" height="12" rx="3" fill="#fff"/>
+      <!-- periscópio -->
+      <line x1="28" y1="10" x2="28" y2="18" stroke="#fff" stroke-width="3"/>
+      <line x1="28" y1="10" x2="34" y2="10" stroke="#fff" stroke-width="3"/>
+    </svg>`,
+
+    // ── Netshoes — azul escuro + tênis ──
+    'netshoes': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#003DA5"/>
+      <!-- tênis estilizado -->
+      <path d="M10 36 Q18 28 26 30 Q30 26 40 28 L42 34 Q36 38 28 38 L10 38Z" fill="#fff"/>
+      <path d="M26 30 L28 22 L32 24 L30 30" fill="#ccc"/>
+      <text x="28" y="50" font-family="Arial,sans-serif" font-size="7" font-weight="900" fill="#fff" text-anchor="middle">netshoes</text>
+    </svg>`,
+
+    // ── Pichau — dark + gradiente ciano ──
+    'pichau': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="pgr" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#0D1B2A"/>
+          <stop offset="100%" stop-color="#1a1a3e"/>
+        </linearGradient>
+      </defs>
+      <rect width="56" height="56" rx="12" fill="url(#pgr)"/>
+      <!-- "P" estilizado com detalhe ciano -->
+      <text x="22" y="38" font-family="Arial Black,sans-serif" font-size="28" font-weight="900" fill="#00CFFF" text-anchor="middle">P</text>
+      <text x="38" y="38" font-family="Arial,sans-serif" font-size="9" font-weight="700" fill="#fff" text-anchor="middle">ichau</text>
+      <!-- linha ciano embaixo -->
+      <rect x="8" y="44" width="40" height="2" rx="1" fill="#00CFFF"/>
+    </svg>`,
+
+    // ── Terabyte — vermelho + chip ──
+    'terabyte': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#e60000"/>
+      <!-- chip CPU -->
+      <rect x="16" y="16" width="24" height="24" rx="3" fill="#fff"/>
+      <rect x="20" y="20" width="16" height="16" rx="2" fill="#e60000"/>
+      <!-- pinos -->
+      <line x1="20" y1="12" x2="20" y2="16" stroke="#fff" stroke-width="2"/>
+      <line x1="28" y1="12" x2="28" y2="16" stroke="#fff" stroke-width="2"/>
+      <line x1="36" y1="12" x2="36" y2="16" stroke="#fff" stroke-width="2"/>
+      <line x1="20" y1="40" x2="20" y2="44" stroke="#fff" stroke-width="2"/>
+      <line x1="28" y1="40" x2="28" y2="44" stroke="#fff" stroke-width="2"/>
+      <line x1="36" y1="40" x2="36" y2="44" stroke="#fff" stroke-width="2"/>
+      <text x="28" y="52" font-family="Arial,sans-serif" font-size="7" font-weight="700" fill="#fff" text-anchor="middle">Terabyte</text>
+    </svg>`,
+
+    // ── Fast Shop — verde escuro + raio de velocidade ──
+    'fastshop': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#00843D"/>
+      <!-- raio/velocidade -->
+      <polygon points="34,8 22,28 30,28 22,48 42,24 32,24" fill="#fff"/>
+      <!-- "fast" pequeno -->
+      <text x="10" y="52" font-family="Arial,sans-serif" font-size="7" font-weight="900" fill="#fff">fast shop</text>
+    </svg>`,
+
+    // ── Carrefour — azul + "C" vermelho característico ──
+    'carrefour': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#fff"/>
+      <!-- fundo azul e vermelho dividido ──  -->
+      <path d="M28 4 L52 4 L52 52 L28 52Z" fill="#0066CC"/>
+      <path d="M4 4 L28 4 L28 52 L4 52Z" fill="#E60014"/>
+      <!-- "C" branco no meio -->
+      <path d="M36 18 Q22 18 22 28 Q22 38 36 38" stroke="#fff" stroke-width="7" fill="none" stroke-linecap="round"/>
+    </svg>`,
+
+    // ── Extra — vermelho + "extra" bold ──
+    'extra': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#E30613"/>
+      <!-- "e" estilizado grande -->
+      <text x="28" y="38" font-family="Arial Black,sans-serif" font-size="22" font-weight="900" fill="#fff" text-anchor="middle">extra</text>
+    </svg>`,
+
+    // ── Ponto Frio — azul claro + floco de neve ──
+    'pontofrio': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#00AAFF"/>
+      <!-- floco de neve -->
+      <line x1="28" y1="10" x2="28" y2="46" stroke="#fff" stroke-width="3"/>
+      <line x1="10" y1="28" x2="46" y2="28" stroke="#fff" stroke-width="3"/>
+      <line x1="16" y1="16" x2="40" y2="40" stroke="#fff" stroke-width="3"/>
+      <line x1="40" y1="16" x2="16" y2="40" stroke="#fff" stroke-width="3"/>
+      <circle cx="28" cy="28" r="4" fill="#00AAFF" stroke="#fff" stroke-width="2"/>
+    </svg>`,
+
+    // ── Centauro — laranja + símbolo esportivo ──
+    'centauro': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#FF6B00"/>
+      <!-- "C" bold -->
+      <path d="M38 16 Q18 16 18 28 Q18 40 38 40" stroke="#fff" stroke-width="7" fill="none" stroke-linecap="round"/>
+      <text x="28" y="52" font-family="Arial,sans-serif" font-size="7" font-weight="700" fill="#fff" text-anchor="middle">centauro</text>
+    </svg>`,
+
+    // ── Dafiti — roxo + cabide ──
+    'dafiti': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#5C068C"/>
+      <!-- cabide -->
+      <path d="M28 14 A6 6 0 0 1 34 20 L44 32 L12 32 Z" fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"/>
+      <line x1="28" y1="14" x2="28" y2="10" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+      <text x="28" y="46" font-family="Arial,sans-serif" font-size="10" font-weight="700" fill="#fff" text-anchor="middle">dafiti</text>
+    </svg>`,
+
+    // ── Shein — preto + tipografia característica ──
+    'shein': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#000"/>
+      <!-- "S" estilizado -->
+      <path d="M34 18 Q20 18 20 24 Q20 29 28 29 Q36 29 36 35 Q36 41 22 41" stroke="#fff" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+      <text x="28" y="53" font-family="Arial Black,sans-serif" font-size="8" font-weight="900" fill="#fff" text-anchor="middle">SHEIN</text>
+    </svg>`,
+
+    // ── Renner — vermelho + "R" estilizado ──
+    'renner': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#E30613"/>
+      <text x="28" y="40" font-family="Arial Black,sans-serif" font-size="30" font-weight="900" fill="#fff" text-anchor="middle">R</text>
+    </svg>`,
+
+    // ── Riachuelo — vermelho + âncora/onda ──
+    'riachuelo': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#E30613"/>
+      <!-- onda -->
+      <path d="M8 32 Q14 26 20 32 Q26 38 32 32 Q38 26 48 32" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round"/>
+      <text x="28" y="48" font-family="Arial,sans-serif" font-size="7" font-weight="700" fill="#fff" text-anchor="middle">riachuelo</text>
+    </svg>`,
+
+    // ── Leroy Merlin — verde + casa + folha ──
+    'leroy': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#00843D"/>
+      <!-- casa -->
+      <polygon points="28,10 44,24 12,24" fill="#fff"/>
+      <rect x="16" y="24" width="24" height="16" fill="#fff"/>
+      <rect x="23" y="28" width="10" height="12" fill="#00843D"/>
+      <!-- folha verde -->
+      <ellipse cx="40" cy="14" rx="6" ry="10" fill="#7DC900" transform="rotate(-30,40,14)"/>
+    </svg>`,
+
+    // ── Madeira Madeira — verde + prateleira ──
+    'madeiramadeira': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#00833E"/>
+      <!-- prateleiras -->
+      <rect x="10" y="16" width="36" height="4" rx="2" fill="#fff"/>
+      <rect x="10" y="26" width="36" height="4" rx="2" fill="#fff"/>
+      <rect x="10" y="36" width="36" height="4" rx="2" fill="#fff"/>
+      <!-- livros/objetos em cima -->
+      <rect x="14" y="10" width="6" height="6" rx="1" fill="#7DC900"/>
+      <rect x="22" y="10" width="4" height="6" rx="1" fill="#fff"/>
+      <rect x="28" y="12" width="5" height="4" rx="1" fill="#7DC900"/>
+    </svg>`,
+
+    // ── Havan — azul + bandeira BR ──
+    'havan': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#0057A8"/>
+      <!-- losango verde -->
+      <polygon points="28,12 48,28 28,44 8,28" fill="#009B3A"/>
+      <!-- círculo azul -->
+      <circle cx="28" cy="28" r="9" fill="#002776"/>
+      <!-- faixa branca -->
+      <path d="M18 28 Q28 25 38 28" stroke="#fff" stroke-width="2" fill="none"/>
+      <text x="28" y="52" font-family="Arial Black,sans-serif" font-size="8" font-weight="900" fill="#FFD700" text-anchor="middle">havan</text>
+    </svg>`,
+
+    // ── Tok&Stok — vermelho + ponto geométrico ──
+    'tok_stok': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#E63329"/>
+      <text x="28" y="26" font-family="Arial Black,sans-serif" font-size="11" font-weight="900" fill="#fff" text-anchor="middle">tok</text>
+      <text x="28" y="41" font-family="Arial Black,sans-serif" font-size="11" font-weight="900" fill="#fff" text-anchor="middle">&amp;stok</text>
+    </svg>`,
+
+    // ── Samsung — azul Samsung + elipse característica ──
+    'samsung': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#1428A0"/>
+      <text x="28" y="32" font-family="Arial,sans-serif" font-size="9" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0.5">SAMSUNG</text>
+    </svg>`,
+
+    // ── Apple — prata + maçã mordida ──
+    'apple': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#f5f5f7"/>
+      <!-- maçã -->
+      <path d="M34 14 Q30 8 26 14 Q18 14 16 22 Q12 34 20 42 Q24 46 28 42 Q32 46 36 42 Q44 34 40 22 Q38 14 34 14Z" fill="#555"/>
+      <!-- folha -->
+      <path d="M30 10 Q32 6 36 8 Q34 12 30 10Z" fill="#555"/>
+    </svg>`,
+
+    // ── Zattini — dark + "Z" ──
+    'zattini': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#1a1a1a"/>
+      <text x="28" y="40" font-family="Arial Black,sans-serif" font-size="28" font-weight="900" fill="#fff" text-anchor="middle">Z</text>
+    </svg>`,
+
+    // ── Hotmart — laranja-vermelho + chama ──
+    'hotmart': `<svg viewBox="0 0 56 56" class="w-12 h-12 object-contain" xmlns="http://www.w3.org/2000/svg">
+      <rect width="56" height="56" rx="12" fill="#FF4D0D"/>
+      <!-- chama -->
+      <path d="M28 10 Q36 20 32 28 Q38 22 36 34 Q40 26 38 36 Q38 46 28 48 Q18 46 18 36 Q16 26 20 34 Q18 22 24 28 Q20 20 28 10Z" fill="#fff"/>
+    </svg>`,
   }
 
   // Monta lista de lojas com dados visuais reais do banco + fallbacks
@@ -513,17 +759,17 @@ app.get('/', async (c) => {
   // Duplica o array para criar loop contínuo no marquee
   const storeCards = (arr: typeof stores) => arr.map(s => `
     <a href="/loja/${s.slug}"
-       class="store-pill-card flex-shrink-0 flex flex-col items-center gap-1.5 w-20 cursor-pointer group"
+       class="store-pill-card flex-shrink-0 flex flex-col items-center gap-2 w-[76px] cursor-pointer group"
        title="Comparar preços na ${s.name}">
-      <div class="store-logo-circle w-14 h-14 rounded-2xl flex items-center justify-center border-2 shadow-sm transition-all duration-200 group-hover:scale-110 group-hover:shadow-md overflow-hidden"
-           style="background:${s.bg}; border-color:${s.color};">
+      <div class="store-logo-circle w-16 h-16 rounded-2xl flex items-center justify-center shadow-md transition-all duration-200 group-hover:scale-110 group-hover:shadow-xl overflow-hidden ring-2 ring-transparent group-hover:ring-blue-200"
+           style="${s.logoSvg ? 'background:transparent;' : `background:${s.bg};border:2px solid ${s.color};`}">
         ${s.logoSvg
           ? s.logoSvg
-          : `<span class="font-black text-base leading-none" style="color:${s.color}">${s.initial}</span>`
+          : `<span class="font-black text-xl leading-none" style="color:${s.color}">${s.initial}</span>`
         }
       </div>
-      <span class="text-xs text-gray-600 font-semibold text-center leading-tight w-full truncate group-hover:text-gray-900 transition-colors">${s.name}</span>
-      <span class="text-[10px] font-bold px-1.5 py-0.5 rounded-full" style="color:${s.color}; background:${s.bg}">${s.text}</span>
+      <span class="text-xs text-gray-700 font-bold text-center leading-tight w-full truncate group-hover:text-blue-700 transition-colors">${s.name}</span>
+      <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full border" style="color:${s.color}; background:${s.bg}; border-color:${s.color}33">${s.text}</span>
     </a>
   `).join('')
 
