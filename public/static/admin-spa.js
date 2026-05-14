@@ -1077,9 +1077,9 @@ async function siImportAuto(storeId) {
 
 // ── Fetch de metadados — estratégia em camadas ──────────────────
 // Para links Mercado Livre:
-//   1) Backend resolve-url → mlbId + og:title + og:image (mas sem preço — IP bloqueado)
-//   2) Browser busca HTML da página ML (sem bloqueio de IP) e envia para extract-ml-price
-//   3) API ML direto do browser como fallback (só funciona para Item IDs)
+//   1) Backend resolve-url → mlbId + og:title + og:image + preço via /social/ (pares com #wid=)
+//   2) Browser busca HTML da página ML como fallback (sem bloqueio de IP)
+//   3) API ML direto do browser como fallback (só funciona para Item IDs ≥11 dígitos)
 // Para outros links: allorigins.win como fallback
 // ── siImportDual: importa pares url1+url2 (também usado pelo modo simples quando detecta pares) ──
 async function siImportDual(storeId, pairs) {
@@ -1275,7 +1275,6 @@ async function siFetchMetaClientSide(originalUrl, affiliateUrl) {
               if (img.includes('mlstatic')) image = img
             }
           }
-          console.log('[browser-fetch-ML] OK →', mlbId || mlUrl, '| price:', price, '| html:', html.length + 'B')
         }
       }
     } catch(e) {
@@ -1350,7 +1349,6 @@ async function siFetchMlApi(mlbId) {
     const img = rawImg ? siProxyImg(rawImg) : null
 
     const price = (d.price && d.price > 0) ? d.price : null
-    console.log('[siFetchMlApi] OK', mlbId, '→ preço:', price, 'img:', rawImg?.slice(0,60))
     return { name: d.title || '', price, image: img || null }
   } catch(e) {
     console.warn('[siFetchMlApi] erro:', mlbId, e?.message)
