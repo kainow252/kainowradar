@@ -1093,14 +1093,14 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
         <div id="mob-stores-list" class="mt-1 pb-1" style="display:none">
           <div class="flex flex-col gap-0.5 px-1">
             ${[
-              { name:'Amazon',      color:'#FF9900', textColor:'#fff', initial:'A',  slug:'amazon'    },
-              { name:'Magalu',      color:'#0086FF', textColor:'#fff', initial:'M',  slug:'magalu'    },
-              { name:'Mercado Livre', color:'#FFE600', textColor:'#333', initial:'ML', slug:'mercado' },
-              { name:'Americanas',  color:'#E60014', textColor:'#fff', initial:'Am', slug:'americana' },
-              { name:'Casas Bahia', color:'#0057A8', textColor:'#fff', initial:'CB', slug:'cbahia'   },
-              { name:'KaBuM!',      color:'#F47920', textColor:'#fff', initial:'K',  slug:'kabum'     },
-              { name:'FastShop',    color:'#00843D', textColor:'#fff', initial:'FS', slug:'fastshop'  },
-              { name:'Ponto Frio',  color:'#00AAFF', textColor:'#fff', initial:'PF', slug:'pontofrio' },
+              { name:'Amazon',       color:'#FF9900', textColor:'#fff', initial:'A',  slug:'amazon'       },
+              { name:'Magalu',       color:'#0086FF', textColor:'#fff', initial:'M',  slug:'magalu'       },
+              { name:'Mercado Livre',color:'#FFE600', textColor:'#333', initial:'ML', slug:'mercadolivre' },
+              { name:'Americanas',   color:'#E60014', textColor:'#fff', initial:'Am', slug:'americanas'   },
+              { name:'Casas Bahia',  color:'#0057A8', textColor:'#fff', initial:'CB', slug:'casasbahia'   },
+              { name:'KaBuM!',       color:'#F47920', textColor:'#fff', initial:'K',  slug:'kabum'        },
+              { name:'Shopee',       color:'#EE4D2D', textColor:'#fff', initial:'S',  slug:'shopee'       },
+              { name:'Fast Shop',    color:'#00843D', textColor:'#fff', initial:'FS', slug:'fastshop'     },
             ].map(s => `
               <a href="/loja/${s.slug}" onclick="closeHamburger()"
                 class="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-blue-50 transition-colors group">
