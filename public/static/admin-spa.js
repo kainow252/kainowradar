@@ -1277,7 +1277,15 @@ function siExtractUrlsFromText(text) {
     .split(/(?=https?:\/\/)/g)
     .map(s => s.trim())
     .filter(s => /^https?:\/\//i.test(s))
-    .map(u => u.replace(/[.,;)>\]]+$/, '').trim())
+    .map(u => {
+      u = u.replace(/[.,;)>\]]+$/, '').trim()
+      // Remove fragmento #...&wid=MLB... de URLs do ML — o wid é variante de cor/tamanho
+      // a URL base do produto já é suficiente para importar
+      if (/mercadolivre\.com\.br/i.test(u) && u.includes('#')) {
+        u = u.split('#')[0]
+      }
+      return u
+    })
     .filter(Boolean)
 }
 
@@ -1332,17 +1340,9 @@ function siCountLinks() {
   if (pairs) parts.push(pairs + (pairs === 1 ? ' par produto+afiliado' : ' pares produto+afiliado'))
   if (solo)  parts.push(solo  + (solo  === 1 ? ' link'                  : ' links'))
   el.textContent = parts.join(' + ') + ' detectado' + (items.length === 1 ? '' : 's')
-  // Avisa se há links solo com #wid= (precisam de par /social/ para funcionar)
-  const widSolo = items.filter(i => !i.url2 && /[#&]wid=MLB/i.test(i.url1)).length
-  const warnEl  = document.getElementById('si-wid-warn')
-  if (warnEl) {
-    if (widSolo > 0) {
-      warnEl.textContent = '⚠️ ' + widSolo + (widSolo === 1 ? ' link tem #wid= mas está sem o link /social/ — cole os dois juntos na mesma linha.' : ' links têm #wid= mas estão sem o link /social/ — cole cada par junto na mesma linha.')
-      warnEl.classList.remove('hidden')
-    } else {
-      warnEl.classList.add('hidden')
-    }
-  }
+  // wid= já é removido no parser — nenhum aviso necessário
+  const warnEl = document.getElementById('si-wid-warn')
+  if (warnEl) warnEl.classList.add('hidden')
 }
 
 // ── IMPORTAÇÃO AUTOMÁTICA COMPLETA ───────────────────────────────
