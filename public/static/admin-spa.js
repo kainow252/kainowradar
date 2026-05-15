@@ -1019,7 +1019,7 @@ async function siImportCsvItems() {
   }
   if (!liveArea) return
 
-  const CHUNK_SIZE = 200  // pares por lote
+  const CHUNK_SIZE = 50  // pares por lote — menor = mais seguro contra timeout
   const chunks = []
   for (let i = 0; i < items.length; i += CHUNK_SIZE) {
     chunks.push(items.slice(i, i + CHUNK_SIZE))
@@ -1080,8 +1080,31 @@ async function siImportCsvItems() {
     const raw = textLines.join('\n')
 
     try {
-      const data = await api('POST', `/admin/api/stores/${storeId}/import-links`, { links: raw }, 60000)
-      if (data && !data.error) {
+      if (log) {
+        const li = document.createElement('div')
+        li.className = 'text-slate-400'
+        li.textContent = `⏳ Lote ${ci+1}: enviando ${chunk.length} itens...`
+        log.appendChild(li)
+        log.scrollTop = log.scrollHeight
+      }
+
+      const data = await api('POST', `/admin/api/stores/${storeId}/import-links`, { links: raw }, 90000)
+
+      // Remove o ⏳ do log
+      if (log && log.lastChild) log.removeChild(log.lastChild)
+
+      if (data === null) {
+        // api() retorna null em caso de timeout ou 401
+        totalErr += chunk.length
+        if (countErr) countErr.textContent = totalErr
+        if (log) {
+          const li = document.createElement('div')
+          li.className = 'text-red-500'
+          li.textContent = `❌ Lote ${ci+1}: sem resposta (timeout ou erro de rede)`
+          log.appendChild(li)
+          log.scrollTop = log.scrollHeight
+        }
+      } else if (data && !data.error) {
         totalOk  += data.imported  || 0
         totalDup += data.duplicates|| 0
         totalErr += data.errors    || 0
