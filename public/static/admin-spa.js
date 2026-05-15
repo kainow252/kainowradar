@@ -829,44 +829,18 @@ function _buildStoreCard(s) {
   )
 }
 
-// ── Atualiza o card da loja no grid sem re-renderizar tudo ──────
-// Chamado após import bem-sucedido para reflectir o novo product_count
+// ── Atualiza a seção Lojas após import bem-sucedido ─────────────
+// Sempre re-renderiza se a seção estiver ativa; senão, renderStores
+// buscará dados frescos automaticamente quando o usuário navegar para lá.
 async function _refreshStoreCard(storeId) {
   try {
-    const id  = parseInt(storeId, 10)          // garante número — storeId pode vir como string do onclick
-    const all = await api('GET', '/admin/api/stores')
-    if (!Array.isArray(all)) return
-    const s   = all.find(x => parseInt(x.id, 10) === id)
-    if (!s) return
-    const card = document.getElementById('store-card-' + id)
-    if (!card) {
-      // Card não existe no DOM — se a seção Lojas estiver ativa, re-renderiza tudo
-      if (App.currentSection === 'stores') {
-        renderStores(document.getElementById('content-area'))
-      }
-      return
+    if (App.currentSection === 'stores') {
+      const area = document.getElementById('content-area')
+      if (area) await renderStores(area)
     }
-    // substitui o card inteiro com dados frescos
-    const tmp = document.createElement('div')
-    tmp.innerHTML = _buildStoreCard(s)
-    const newCard = tmp.firstElementChild
-    card.parentNode.replaceChild(newCard, card)
-    // atualiza também os totais do cabeçalho da seção (se visível)
-    _updateStoreSectionTotals(all)
-  } catch (e) { console.warn('[_refreshStoreCard]', e) }
-}
-
-// Atualiza os números do cabeçalho da seção Lojas sem re-renderizar
-function _updateStoreSectionTotals(storesArr) {
-  try {
-    const totalProds  = storesArr.reduce((s, x) => s + (x.product_count || 0), 0)
-    const totalOffers = storesArr.reduce((s, x) => s + (x.offer_count  || 0), 0)
-    // Atualiza via IDs diretos (mais confiável que buscar por texto)
-    const elProds  = document.getElementById('stores-stat-prods')
-    const elOffers = document.getElementById('stores-stat-offers')
-    if (elProds)  elProds.textContent  = totalProds
-    if (elOffers) elOffers.textContent = totalOffers
-  } catch (_) { /* silencioso */ }
+    // Caso não esteja na seção, não é necessário fazer nada:
+    // renderStores() sempre faz GET /admin/api/stores na abertura da seção.
+  } catch (e) { /* silencioso */ }
 }
 
 // ── IMPORTAR LINKS — universal por loja ─────────────────────────
@@ -2846,11 +2820,11 @@ async function renderStores(area) {
           <div class="text-sm text-slate-500 mt-1">Com produtos</div>
         </div>
         <div class="stat-card text-center border-t-4 border-violet-400">
-          <div class="text-3xl font-black text-violet-700" id="stores-stat-prods">${totalProds}</div>
+          <div class="text-3xl font-black text-violet-700">${totalProds}</div>
           <div class="text-sm text-slate-500 mt-1">Produtos no banco</div>
         </div>
         <div class="stat-card text-center border-t-4 border-sky-400">
-          <div class="text-3xl font-black text-sky-700" id="stores-stat-offers">${totalOffers}</div>
+          <div class="text-3xl font-black text-sky-700">${totalOffers}</div>
           <div class="text-sm text-slate-500 mt-1">Ofertas ativas</div>
         </div>
       </div>
