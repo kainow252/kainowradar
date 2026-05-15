@@ -23,24 +23,62 @@ const admin = new Hono<{ Bindings: AdminBindings }>()
 // Rotas públicas (não precisam de token)
 admin.post('/api/login', async (c) => {
   const { DB } = c.env
-  const { password } = await c.req.json().catch(() => ({ password: '' }))
+  const body = await c.req.json().catch(() => ({} as any))
   const secret = (c.env as any).ADMIN_SECRET || 'admin123'
 
+  const ipHash    = await hashIP(c.req.header('CF-Connecting-IP') || '0')
+  const userAgent = c.req.header('User-Agent') || ''
+  const expiresAt = new Date(Date.now() + 8 * 3600 * 1000).toISOString()
+
+  // ── Modo 1: login com email + senha (admin_users) ──────────
+  if (body.email && body.password) {
+    const user = await DB.prepare(
+      `SELECT * FROM admin_users WHERE email = ? AND status = 'active' LIMIT 1`
+    ).bind(body.email.toLowerCase().trim()).first<any>()
+
+    if (!user) return c.json({ error: 'Email ou senha incorretos' }, 401)
+
+    // Verifica hash: formato "salt:hash"
+    const parts = (user.password_hash || '').split(':')
+    if (parts.length !== 2) return c.json({ error: 'Conta com configuração inválida' }, 401)
+    const [salt, storedHash] = parts
+    const buf  = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(salt + body.password))
+    const hash = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('')
+
+    if (hash !== storedHash) return c.json({ error: 'Email ou senha incorretos' }, 401)
+
+    const token = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+      .map(b => b.toString(16).padStart(2,'0')).join('')
+
+    await DB.prepare(`
+      INSERT INTO admin_sessions (token, admin_user, ip_hash, user_agent, expires_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(token, user.email, ipHash, userAgent, expiresAt).run()
+
+    // Atualiza last_login_at e login_count
+    await DB.prepare(`
+      UPDATE admin_users SET last_login_at = CURRENT_TIMESTAMP, login_count = login_count + 1 WHERE id = ?
+    `).bind(user.id).run().catch(() => {})
+
+    return c.json({
+      ok: true, token, expires_at: expiresAt,
+      user: { id: user.id, name: user.name, email: user.email, role: user.role }
+    })
+  }
+
+  // ── Modo 2: login legado com ADMIN_SECRET (senha única) ────
+  const { password } = body
   if (!password || password !== secret) {
     return c.json({ error: 'Senha incorreta' }, 401)
   }
 
-  // Gera token de sessão
   const token = Array.from(crypto.getRandomValues(new Uint8Array(32)))
     .map(b => b.toString(16).padStart(2, '0')).join('')
-
-  const ipHash = await hashIP(c.req.header('CF-Connecting-IP') || '0')
-  const expiresAt = new Date(Date.now() + 8 * 3600 * 1000).toISOString() // 8h
 
   await DB.prepare(`
     INSERT INTO admin_sessions (token, admin_user, ip_hash, user_agent, expires_at)
     VALUES (?, 'admin', ?, ?, ?)
-  `).bind(token, ipHash, c.req.header('User-Agent') || '', expiresAt).run()
+  `).bind(token, ipHash, userAgent, expiresAt).run()
 
   return c.json({ ok: true, token, expires_at: expiresAt })
 })
@@ -7272,20 +7310,47 @@ function renderAdminSPA(): string {
     <div class="bg-white rounded-2xl p-6 shadow-2xl">
       <h2 class="text-lg font-bold text-slate-800 mb-5">Entrar no painel</h2>
       <div class="space-y-4">
-        <div>
-          <label class="block text-sm font-medium text-slate-600 mb-1.5">Senha de acesso</label>
-          <input type="password" id="login-password" class="input" placeholder="••••••••"
-            onkeydown="if(event.key==='Enter') doLogin()">
+        <!-- Tabs: Usuário / Master -->
+        <div class="flex rounded-xl bg-slate-100 p-1 gap-1">
+          <button id="tab-user" onclick="setLoginMode('user')"
+            class="flex-1 py-2 text-sm font-semibold rounded-lg bg-white shadow-sm text-slate-800 transition-all">
+            👤 Usuário
+          </button>
+          <button id="tab-master" onclick="setLoginMode('master')"
+            class="flex-1 py-2 text-sm font-semibold rounded-lg text-slate-400 hover:text-slate-600 transition-all">
+            🔑 Master
+          </button>
         </div>
+
+        <!-- Login usuário (email + senha) -->
+        <div id="login-user-fields" class="space-y-3">
+          <div>
+            <label class="block text-sm font-medium text-slate-600 mb-1.5">Email</label>
+            <input type="email" id="login-email" class="input" placeholder="seu@email.com"
+              onkeydown="if(event.key==='Enter') doLogin()">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-600 mb-1.5">Senha</label>
+            <input type="password" id="login-password" class="input" placeholder="••••••••"
+              onkeydown="if(event.key==='Enter') doLogin()">
+          </div>
+        </div>
+
+        <!-- Login master (senha única ADMIN_SECRET) -->
+        <div id="login-master-fields" class="space-y-3 hidden">
+          <div>
+            <label class="block text-sm font-medium text-slate-600 mb-1.5">Senha master</label>
+            <input type="password" id="login-master-password" class="input" placeholder="••••••••"
+              onkeydown="if(event.key==='Enter') doLogin()">
+          </div>
+        </div>
+
         <div id="login-error" class="hidden text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2"></div>
         <button onclick="doLogin()" id="login-btn"
           class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl transition-all text-sm">
           Entrar
         </button>
       </div>
-      <p class="text-xs text-slate-400 text-center mt-4">
-        Senha padrão em dev: <code class="bg-slate-100 px-1.5 py-0.5 rounded">admin123</code>
-      </p>
     </div>
   </div>
 </div>

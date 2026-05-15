@@ -9,24 +9,62 @@ const App = {
 }
 
 // ── Auth ─────────────────────────────────────────────────
+let _loginMode = 'user' // 'user' | 'master'
+
+function setLoginMode(mode) {
+  _loginMode = mode
+  const tabUser   = document.getElementById('tab-user')
+  const tabMaster = document.getElementById('tab-master')
+  const userFlds  = document.getElementById('login-user-fields')
+  const masterFlds= document.getElementById('login-master-fields')
+  const active    = 'flex-1 py-2 text-sm font-semibold rounded-lg bg-white shadow-sm text-slate-800 transition-all'
+  const inactive  = 'flex-1 py-2 text-sm font-semibold rounded-lg text-slate-400 hover:text-slate-600 transition-all'
+  if (mode === 'user') {
+    tabUser.className   = active
+    tabMaster.className = inactive
+    userFlds.classList.remove('hidden')
+    masterFlds.classList.add('hidden')
+  } else {
+    tabUser.className   = inactive
+    tabMaster.className = active
+    userFlds.classList.add('hidden')
+    masterFlds.classList.remove('hidden')
+  }
+}
+
 async function doLogin() {
-  const pwd = document.getElementById('login-password').value
   const btn = document.getElementById('login-btn')
   const err = document.getElementById('login-error')
-  if (!pwd) return
+  err.classList.add('hidden')
   btn.textContent = 'Entrando...'
   btn.disabled = true
+
   try {
-    const res = await fetch('/admin/api/login', {
+    let body = {}
+    if (_loginMode === 'user') {
+      const email = document.getElementById('login-email')?.value?.trim()
+      const pwd   = document.getElementById('login-password')?.value
+      if (!email || !pwd) { throw new Error('Preencha email e senha.') }
+      body = { email, password: pwd }
+    } else {
+      const pwd = document.getElementById('login-master-password')?.value
+      if (!pwd) { throw new Error('Digite a senha master.') }
+      body = { password: pwd }
+    }
+
+    const res  = await fetch('/admin/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: pwd })
+      body: JSON.stringify(body)
     })
     const data = await res.json()
-    if (!res.ok) throw new Error(data.error || 'Senha incorreta')
+    if (!res.ok) throw new Error(data.error || 'Credenciais inválidas')
+
     App.token = data.token
     localStorage.setItem('admin_token', data.token)
-    err.classList.add('hidden')
+    // Salva nome do usuário logado se disponível
+    if (data.user) localStorage.setItem('admin_user', JSON.stringify(data.user))
+
     document.getElementById('login-screen').classList.add('hidden')
     document.getElementById('admin-app').classList.remove('hidden')
     loadSection('dashboard')
