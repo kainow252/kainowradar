@@ -278,6 +278,9 @@ npx wrangler pages secret put AWIN_PUBLISHER_ID --project-name shopping-compare
 | `products.image_url` NULL | Enrich salvou nas offers mas não propagou para `products` | Novo endpoint `/api/sync-products-from-offers` |
 | **Top Deals travando ("só carregando")** | **Correlated subquery `SELECT MIN(o3.price)` por linha — O(N²) no D1** | **Reescrita usando `p.best_price` denormalizado — 1 JOIN simples** |
 | **Enrich em loop: "Produto MLB6130836212"** | **Produto com nome inválido (`Produto MLB%`) — parseLine não resolveu** | **Enrich auto-deleta nomes inválidos + fix-names expandido** |
+| **Duplicado rejeitado ("Produto com mesmo nome")** | **import-links rejeitava ao invés de atualizar offer existente** | **Bloco reescrito para UPDATE offer com novos dados (preço, imagem, affiliateUrl)** |
+| **Em Massa 39→20 (19 perdidos)** | **Social links com `hint_mlb_id` caíam no Caso B e eram descartados silenciosamente** | **Caso B exige `!hint_mlb_id`; social links isolados viram Caso A** |
+| **Card da loja mostra contador desatualizado após import** | **`renderStores()` não é chamado após o modal de import fechar — UI fica stale** | **`_refreshStoreCard(storeId)` busca dados frescos via API e atualiza apenas o card afetado** |
 
 ---
 
