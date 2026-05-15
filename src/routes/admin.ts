@@ -2819,7 +2819,47 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
         continue
       }
 
-      // Cria produto novo
+      // Cria produto novo — mas primeiro verifica se já existe produto com mesmo nome
+      // Evita duplicatas quando o mesmo arquivo é importado mais de uma vez
+      const existingByName = await DB.prepare(
+        `SELECT id FROM products WHERE name = ? LIMIT 1`
+      ).bind(name).first<{ id: number }>()
+
+      if (existingByName) {
+        // Produto com mesmo nome já existe — só cria o offer vinculado
+        const prodResult2 = { meta: { last_row_id: existingByName.id } }
+        const productId2  = existingByName.id
+
+        // Verifica se offer já existe para este produto+loja
+        const offerExists = await DB.prepare(
+          `SELECT id FROM offers WHERE product_id = ? AND store_id = ? LIMIT 1`
+        ).bind(productId2, storeId).first<{ id: number }>()
+
+        if (offerExists) {
+          duplicates++
+          results.push({ url: affiliateUrl, status: 'duplicado', product_id: productId2, message: 'Produto com mesmo nome já importado' })
+          continue
+        }
+
+        await DB.prepare(`
+          INSERT INTO offers
+            (product_id, store_id, external_id, title, price, affiliate_url, image_url,
+             is_active, in_stock, free_shipping, source, created_at, last_updated)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, 0, 'manual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `).bind(productId2, storeId, extId, name, price > 0 ? price : 0, affiliateUrl, imgUrl).run()
+
+        await DB.prepare(`
+          UPDATE products SET offer_count = offer_count + 1,
+            best_price = CASE WHEN best_price IS NULL OR (? > 0 AND ? < best_price) THEN ? ELSE best_price END,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(price, price, price, productId2).run()
+
+        imported++
+        results.push({ url: affiliateUrl, status: 'importado', product_id: productId2, name, price })
+        continue
+      }
+
       // Auto-detecta categoria pelo nome + URL do produto
       const detectedCategory = detectCategoryWithFallback(
         name,
@@ -7259,7 +7299,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260515q"><\/script>
+<script src="/static/admin-spa.js?v=20260515r"><\/script>
 </body>
 </html>`
 }
