@@ -872,7 +872,7 @@ function openStoreImport(storeId, storeName) {
           <!-- MODO SIMPLES: textarea com múltiplos links -->
           <div id="si-mode-single-area">
             <p class="text-xs text-slate-500 mb-2">Cole um ou mais links (um por linha). O sistema busca <strong>nome, pre&ccedil;o e imagem automaticamente</strong>.<br>
-              <span class="text-indigo-600 font-semibold">&#9889; Acima de 20 links: modo r&aacute;pido sem limite — importa tudo instantaneamente!</span></p>
+              <span class="text-indigo-600 font-semibold">&#9889; Acima de 20 links (ou pares): modo r&aacute;pido sem limite — importa tudo de uma vez!</span></p>
             <textarea id="si-textarea" rows="6"
               class="w-full rounded-xl border border-slate-200 bg-slate-50 text-sm font-mono p-3 resize-none focus:outline-none focus:border-indigo-400 focus:bg-white transition-all"
               placeholder="https://meli.la/1guaPXV&#10;https://meli.la/1vTGDBn&#10;https://meli.la/1piMeCE"
@@ -1994,6 +1994,74 @@ async function siImportDual(storeId, pairs) {
     btn.disabled = true
     btn.className = 'w-full py-3 rounded-xl bg-indigo-400 text-white text-sm font-bold cursor-not-allowed'
     btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> ' + msg
+  }
+
+  // ── MODO RÁPIDO: >20 pares → envia direto sem buscar metadados ──
+  // url2 = link /social/ já contém imagem e preço; backend resolve tudo
+  if (pairs.length > 20) {
+    try {
+      setBtnLoading('Importando ' + pairs.length + ' pares...')
+      live.innerHTML = `
+        <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-3">
+          <p class="text-sm font-semibold text-indigo-800">⚡ Modo rápido ativado (${pairs.length} pares produto+afiliado)</p>
+          <p class="text-xs text-indigo-600 mt-1">Importando sem buscar metadados individualmente — use <strong>Enriquecer Ofertas</strong> depois para completar nome/preço/imagem.</p>
+          <div class="h-2 bg-indigo-100 rounded-full mt-3 overflow-hidden">
+            <div id="si-fast-bar" class="h-full bg-indigo-500 rounded-full transition-all duration-500" style="width:10%"></div>
+          </div>
+        </div>`
+
+      let fp = 10
+      const fInterval = setInterval(() => {
+        fp = Math.min(fp + 5, 85)
+        const bar = document.getElementById('si-fast-bar')
+        if (bar) bar.style.width = fp + '%'
+      }, 400)
+
+      // Monta linhas: usa url2 (/social/) como URL salva + mlb: hint quando possível
+      const lines = pairs.map(p => {
+        const saveUrl = p.url2 || p.url1
+        // Tenta extrair MLB ID da url1 para hint de deduplicação
+        const mlbMatch = (p.url1 || '').match(/\b(MLB[\-]?\d{8,12})\b/i)
+        const mlbHint  = mlbMatch ? ' | mlb:' + mlbMatch[1].replace('-','').toUpperCase() : ''
+        return saveUrl + mlbHint
+      })
+
+      const data = await api('POST', '/admin/api/stores/' + storeId + '/import-links', { links: lines.join('\n') }, 60000)
+
+      clearInterval(fInterval)
+      const bar = document.getElementById('si-fast-bar')
+      if (bar) bar.style.width = '100%'
+
+      if (data?.ok) {
+        live.innerHTML = `<div class="bg-green-50 border border-green-200 rounded-xl p-4 mb-3">
+          <p class="text-sm font-semibold text-green-800">✅ ${data.imported} produto(s) importados!</p>
+          ${data.skipped ? `<p class="text-xs text-slate-500 mt-1">${data.skipped} ignorados (duplicados)</p>` : ''}
+          <p class="text-xs text-indigo-600 mt-2">💡 Use <strong>Enriquecer Ofertas</strong> para completar preço, nome e imagem.</p>
+        </div>`
+        toast('✓ ' + data.imported + ' importados (modo rápido)!', 'success')
+        if (btn) {
+          btn.disabled = false
+          btn.className = 'w-full py-3 rounded-xl bg-green-600 text-white text-sm font-bold mt-0'
+          btn.innerHTML = '✓ ' + data.imported + ' salvos! Importar mais'
+          btn.onclick = function() {
+            document.getElementById('si-textarea').value = ''
+            siCountLinks()
+            document.getElementById('si-live-area').innerHTML = ''
+            siBtnReset(btn, storeId)
+          }
+        }
+      } else {
+        live.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-xl p-4">
+          <p class="text-sm font-semibold text-red-700">❌ Erro: ${data?.error || 'Falha ao importar'}</p>
+        </div>`
+        toast((data?.error) || 'Erro ao salvar', 'error')
+        siBtnReset(btn, storeId, '⚠ Tentar novamente')
+      }
+    } catch(err) {
+      toast('Erro: ' + (err?.message || String(err)), 'error')
+      siBtnReset(btn, storeId, '⚠ Tentar novamente')
+    }
+    return
   }
 
   // Monta skeleton cards com badge "par" para itens que têm url2
