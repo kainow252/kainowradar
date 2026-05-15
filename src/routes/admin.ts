@@ -2772,10 +2772,17 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       }
 
       // Cria produto novo
+      // Auto-detecta categoria pelo nome + URL do produto
+      const detectedCategory = detectCategoryWithFallback(
+        name,
+        productUrl || affiliateUrl || '',
+        null
+      )
+
       const prodResult = await DB.prepare(`
-        INSERT INTO products (name, slug, source, is_active, created_at, updated_at, best_price, best_store_id)
-        VALUES (?, ?, 'manual', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?)
-      `).bind(name, slug, price > 0 ? price : null, storeId).run()
+        INSERT INTO products (name, slug, category, source, is_active, created_at, updated_at, best_price, best_store_id)
+        VALUES (?, ?, ?, 'manual', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?)
+      `).bind(name, slug, detectedCategory !== 'outros' ? detectedCategory : null, price > 0 ? price : null, storeId).run()
 
       productId = prodResult.meta.last_row_id as number
 
@@ -2805,7 +2812,15 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
         WHERE id = ?
       `).bind(price > 0 ? price : 0, price > 0 ? price : 0, storeId, productId).run()
 
-      results.push({ url: affiliateUrl, status: 'importado', product_id: productId, name })
+      // 4) Incrementa product_count da categoria no banco
+      if (detectedCategory && detectedCategory !== 'outros') {
+        await DB.prepare(`
+          UPDATE categories SET product_count = product_count + 1
+          WHERE slug = ? AND is_active = 1
+        `).bind(detectedCategory).run().catch(() => {})
+      }
+
+      results.push({ url: affiliateUrl, status: 'importado', product_id: productId, name, category: detectedCategory })
       imported++
 
     } catch (e: any) {
@@ -6629,6 +6644,8 @@ admin.post('/api/categories/recategorize', async (c) => {
     { slug: 'moda',             keywords: ['tenis ','sapato','sandalia','bota ','mocassim','chinelo','camiseta','camisa ','calca jeans','vestido','saia ','blusa ','casaco','jaqueta','moletom','shorts ','bermuda ','cueca','calcinha','sutiã','meia ','cinto ','bolsa ','mochila ','carteira couro','oculos ','relogio ','nike','adidas','puma','vans','converse','new balance','havaianas','melissa','zara','lacoste'] },
     // Automotivo — cobre tapetes, lâmpadas, apliques, suportes veiculares, etc.
     { slug: 'automotivo',       keywords: ['tapete borracha','tapete emborrachado','tapete cacamba','tapete caçamba','tapete pvc','jogo de tapete','jogo tapete','tapete inteiriço','tapete traseiro','tapete dianteiro','aplique cromado','aplique moldura','friso lateral','friso cromado','parachoque','grade dianteira','spoiler','moldura','lampada led carro','lampada led moto','lampada farol','lampada t10','lampada ba9s','lampada t15','placa led cob','kit lampadas','kit farol','suporte starlink','case starlink','suporte veicular','suporte magnetico carro','suporte ima carro','ventosa veicular','cabo 3m starlink','correia reboque','correia de reboque','fita reboque','cabo reboque','parafuso tuning','parafuso m6 allen','parafuso inox placa','aplique roda','aplique liga leve','kit aplique','coelho caveira caminhao','bravox','auto falante','falante auto','subwoofer automotivo','modulo amplificador auto','modulo auto','caixa som carro','caixa de som automotivo','caminhao','caminhonete','saveiro','hilux','strada','fiorino','corolla','civic ','gol g','hb20','versa ','palio','siena','sandero','rampage rebel','reboque','caçamba','cacamba'] },
+    // Esportes & Fitness
+    { slug: 'esportes',         keywords: ['estacao de musculacao','estação de musculação','aparelho de ginastica','aparelho ginastica','aparelho de academia','aparelho academia','estacao musculacao','kit musculacao','barra de musculacao','halter ','halteres','anilha ','anilhas','kettlebell','dumbell','dumbbell','banco de supino','banco supino','rack de musculacao','polia fitness','corda de pular','corda battle','battle rope','bola medicinal','medicine ball','prancha abdominal','roda abdominal','rolo abdominal','colchonete','tapete yoga','yoga mat','esteira eletrica','esteira elétrica','bicicleta ergometrica','bicicleta ergométrica','bicicleta spinning','eliptico','elíptico','step fitness','step aerobico','resistance band','faixa elastica','bola de futebol','bola de basquete','bola de volei','bola de tenis','raquete de tenis','raquete de padel','luva de boxe','saco de boxe','chuteira ','prancheta natacao','oculos de natacao','capacete bike','capacete ciclismo','tenis de corrida','roupa de academia','bermuda academia','legging ','top fitness'] },
   ]
 
   const norm = (t: string) => t.toLowerCase()

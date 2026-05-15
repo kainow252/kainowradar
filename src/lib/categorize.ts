@@ -372,6 +372,46 @@ const CATEGORY_RULES: CategoryRule[] = [
       'saveiro', 'hilux', 'strada ', 'fiorino ', 'rampage rebel',
     ],
   },
+
+  // ── Esportes & Fitness ────────────────────────────────────────
+  {
+    slug: 'esportes',
+    keywords: [
+      // musculação / academia
+      'estacao de musculacao', 'estação de musculação',
+      'aparelho de ginastica', 'aparelho de academia',
+      'aparelho ginastica', 'aparelho academia',
+      'estacao musculacao', 'estacao de musculação',
+      'kit musculacao', 'kit musculação',
+      'barra de musculacao', 'barra musculacao',
+      'halter ', 'halteres', 'anilha ', 'anilhas',
+      'kettlebell', 'dumbell', 'dumbbell',
+      'banco de supino', 'banco supino', 'supino reto',
+      'rack de musculacao', 'gaiola musculacao',
+      'polia ', 'polias fitness',
+      'corda de pular', 'corda battle', 'battle rope',
+      'bola medicinal', 'medicine ball',
+      'prancha abdominal', 'roda abdominal', 'rolo abdominal',
+      'colchonete', 'tapete yoga', 'tapete de yoga',
+      'yoga mat', 'yoga block', 'bloco yoga',
+      'esteira eletrica', 'esteira elétrica',
+      'bicicleta ergometrica', 'bicicleta ergométrica', 'bicicleta spinning',
+      'eliptico', 'elíptico', 'transport trainer',
+      'step fitness', 'step aerobico',
+      'resistance band', 'faixa elastica', 'elastico de treino',
+      // esportes em geral
+      'bola de futebol', 'bola de basquete', 'bola de volei',
+      'bola de tenis', 'raquete de tenis', 'raquete de padel',
+      'luva de boxe', 'saco de boxe', 'protetor bocal',
+      'chuteira ', 'chuteiras', 'patins',
+      'prancha de surf', 'prancha surf',
+      'prancheta natacao', 'oculos de natacao', 'óculos natação',
+      'capacete bike', 'capacete ciclismo', 'bike speed',
+      'tenis de corrida', 'roupa de academia', 'bermuda academia',
+      'camisa academia', 'legging ', 'top fitness',
+      'suplemento esportivo', 'whey sport',
+    ],
+  },
 ]
 
 // Normaliza texto: minúsculas + remove acentos + colapsa espaços
