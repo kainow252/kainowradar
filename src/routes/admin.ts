@@ -326,8 +326,9 @@ admin.get('/api/stores', async (c) => {
   const { DB } = c.env
   const { results } = await DB.prepare(`
     SELECT s.*,
-      (SELECT COUNT(*) FROM offers o WHERE o.store_id = s.id AND o.is_active = 1) as offer_count,
-      (SELECT COUNT(*) FROM products p WHERE p.best_store_id = s.id AND p.is_active = 1) as product_count,
+      (SELECT COUNT(*)          FROM offers o WHERE o.store_id = s.id AND o.is_active = 1) as offer_count,
+      (SELECT COUNT(DISTINCT p.id) FROM offers o JOIN products p ON p.id = o.product_id
+       WHERE o.store_id = s.id AND o.is_active = 1 AND p.is_active = 1) as product_count,
       (SELECT MIN(o.price) FROM offers o WHERE o.store_id = s.id AND o.is_active = 1) as min_price,
       (SELECT MAX(o.price) FROM offers o WHERE o.store_id = s.id AND o.is_active = 1) as max_price
     FROM stores s ORDER BY product_count DESC, offer_count DESC, s.name ASC
