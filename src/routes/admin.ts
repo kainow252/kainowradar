@@ -167,7 +167,7 @@ admin.get('/api/top-deals', async (c) => {
       o2.affiliate_url              AS affiliate_url,
       s.name                        AS store_name,
       s.slug                        AS store_slug,
-      s.logo_url                    AS store_logo,
+      CASE WHEN s.logo_url NOT LIKE 'data:%' THEN s.logo_url ELSE NULL END AS store_logo,
       o2.last_updated               AS price_updated_at
     FROM products p
     JOIN offers o  ON o.product_id = p.id AND o.is_active = 1 AND o.in_stock = 1

@@ -413,11 +413,20 @@ function priceRange(label, value, cls) {
 // ── TOP DEALS ─────────────────────────────────────────────
 async function renderTopDeals(area) {
   // Carrega dados em paralelo: deals + categorias reais do banco
+  // timeout maior (30s) pois a query é pesada com 200+ produtos
   const [data, cats] = await Promise.all([
-    api('GET', `/admin/api/top-deals?limit=50${App._topDealsCat ? '&category=' + App._topDealsCat : ''}`),
+    api('GET', `/admin/api/top-deals?limit=50${App._topDealsCat ? '&category=' + App._topDealsCat : ''}`, null, 30000),
     api('GET', '/admin/api/categories')
   ])
-  if (!data) return
+  if (!data) {
+    area.innerHTML = `<div class="section"><div class="bg-white rounded-2xl border border-red-100 shadow-sm p-10 text-center">
+      <div class="text-4xl mb-3">⚠️</div>
+      <div class="font-semibold text-red-700">Erro ao carregar Top Deals</div>
+      <div class="text-sm text-slate-500 mt-2">Tente atualizar novamente</div>
+      <button onclick="refreshTopDeals()" class="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">↻ Tentar novamente</button>
+    </div></div>`
+    return
+  }
 
   // Categorias com produtos reais (product_count > 0)
   const activeCats = (cats || []).filter(c => c.product_count > 0).sort((a,b) => b.product_count - a.product_count)
@@ -483,9 +492,9 @@ async function renderTopDeals(area) {
       </td>
       <td class="table-td">
         <div class="flex items-center gap-1.5">
-          ${item.store_logo
+          ${item.store_logo && !item.store_logo.startsWith('data:')
             ? `<img src="${item.store_logo}" class="h-5 max-w-[56px] object-contain" onerror="this.style.display='none'">`
-            : ''}
+            : `<span class="text-base leading-none">🛒</span>`}
           <span class="text-xs font-medium text-slate-700">${item.store_name || '—'}</span>
         </div>
       </td>
