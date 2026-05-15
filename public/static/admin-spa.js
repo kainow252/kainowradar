@@ -9770,6 +9770,31 @@ async function renderFeedIngestion(area) {
         </div>
       </div>
 
+      <!-- Card: Enriquecimento de Preço e Imagem -->
+      <div class="bg-amber-50 border border-amber-200 rounded-2xl p-5" id="enrich-card">
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <h4 class="font-bold text-amber-900">🔍 Enriquecer Preço + Imagem</h4>
+            <p class="text-xs text-amber-700 mt-0.5">Busca automaticamente preço e imagem dos produtos sem dados (via página ML)</p>
+          </div>
+          <button onclick="startEnrichOffers()" id="enrich-btn"
+            class="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-bold px-4 py-2.5 rounded-xl transition-all shadow-sm">
+            ✨ Enriquecer Agora
+          </button>
+        </div>
+        <div id="enrich-status" class="text-xs text-amber-700">Carregando contagem...</div>
+        <div id="enrich-progress" class="hidden mt-3">
+          <div class="flex justify-between text-xs text-amber-800 mb-1">
+            <span id="enrich-label">Processando...</span>
+            <span id="enrich-remaining"></span>
+          </div>
+          <div class="w-full bg-amber-200 rounded-full h-2 mb-2">
+            <div id="enrich-bar" class="bg-amber-500 h-2 rounded-full transition-all" style="width:0%"></div>
+          </div>
+          <div id="enrich-log" class="max-h-32 overflow-y-auto text-xs space-y-0.5 font-mono text-amber-800"></div>
+        </div>
+      </div>
+
       <!-- Upload / Ingestion Card -->
       <div class="stat-card">
         <h4 class="font-semibold text-slate-700 mb-4">➕ Novo Lote</h4>
@@ -10593,3 +10618,105 @@ async function recategorizeProducts() {
     if (btn) { btn.disabled = false; btn.textContent = '🤖 Recategorizar Produtos' }
   }
 }
+
+// ── ENRIQUECIMENTO: busca preço + imagem via ML ───────────────────
+
+async function loadEnrichCount() {
+  const statusEl = document.getElementById('enrich-status')
+  if (!statusEl) return
+  const data = await api('GET', '/admin/api/products?per_page=1')
+  // Conta via endpoint direto
+  const res = await api('POST', '/admin/api/enrich-offers', { limit: 0 })
+  if (res && res.remaining !== undefined) {
+    if (res.remaining === 0) {
+      statusEl.textContent = '✅ Todos os produtos já têm preço e imagem!'
+      const btn = document.getElementById('enrich-btn')
+      if (btn) btn.disabled = true
+    } else {
+      statusEl.textContent = `⚠️ ${res.remaining} produto(s) sem preço ou imagem — clique para enriquecer`
+    }
+  } else {
+    statusEl.textContent = 'Clique em "Enriquecer Agora" para buscar preço e imagem dos produtos'
+  }
+}
+
+async function startEnrichOffers() {
+  const btn      = document.getElementById('enrich-btn')
+  const statusEl = document.getElementById('enrich-status')
+  const progress = document.getElementById('enrich-progress')
+  const label    = document.getElementById('enrich-label')
+  const remaining= document.getElementById('enrich-remaining')
+  const bar      = document.getElementById('enrich-bar')
+  const log      = document.getElementById('enrich-log')
+
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Enriquecendo...' }
+  if (progress) progress.classList.remove('hidden')
+
+  let totalEnriched = 0
+  let totalFailed   = 0
+  let rounds        = 0
+  const MAX_ROUNDS  = 60  // máximo 60 rodadas × 20 itens = 1200 offers
+
+  while (rounds < MAX_ROUNDS) {
+    rounds++
+    if (label) label.textContent = `Rodada ${rounds}: buscando preço e imagem...`
+
+    const data = await api('POST', '/admin/api/enrich-offers', { limit: 20 }, 90000)
+
+    if (!data || data.error) {
+      if (log) {
+        const li = document.createElement('div')
+        li.className = 'text-red-600'
+        li.textContent = `❌ Erro na rodada ${rounds}: ${data?.error || 'sem resposta'}`
+        log.appendChild(li); log.scrollTop = log.scrollHeight
+      }
+      break
+    }
+
+    totalEnriched += data.enriched || 0
+    totalFailed   += data.failed   || 0
+
+    if (log && data.details?.length) {
+      data.details.forEach(d => {
+        const li = document.createElement('div')
+        li.className = d.status === 'ok' ? 'text-green-700' : 'text-slate-400'
+        const priceStr = d.price ? `R$ ${d.price.toFixed(2)}` : 'sem preço'
+        li.textContent = `${d.status === 'ok' ? '✓' : '·'} ${(d.name||'').substring(0,45)} — ${priceStr} img:${d.image}`
+        log.appendChild(li)
+        log.scrollTop = log.scrollHeight
+      })
+    }
+
+    const rem = data.remaining || 0
+    if (remaining) remaining.textContent = `${rem} restantes`
+    if (statusEl) statusEl.textContent = `✨ ${totalEnriched} enriquecidos · ${totalFailed} sem dados · ${rem} restantes`
+
+    // Progresso visual (estimado)
+    const pct = rem === 0 ? 100 : Math.min(95, Math.round((rounds / MAX_ROUNDS) * 100))
+    if (bar) bar.style.width = pct + '%'
+
+    if (data.enriched === 0 && data.processed > 0) {
+      // Todos os itens desta rodada já não tinham como enriquecer → tenta mais 2x
+      if (rounds > 2) break
+    }
+
+    if (rem === 0 || data.processed === 0) break
+
+    // Pausa 300ms entre rodadas
+    await new Promise(r => setTimeout(r, 300))
+  }
+
+  if (bar)  bar.style.width = '100%'
+  if (label) label.textContent = `✅ Concluído! ${totalEnriched} enriquecidos em ${rounds} rodada(s)`
+  if (btn)  { btn.disabled = false; btn.textContent = '✨ Enriquecer Novamente' }
+
+  if (totalEnriched > 0)
+    toast(`✅ ${totalEnriched} produto(s) com preço/imagem atualizados!`, 'success')
+  else
+    toast('Não foi possível extrair dados de preço/imagem dos links', 'warning')
+}
+
+// Carrega contagem ao abrir Feed Ingestion
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(loadEnrichCount, 500)
+})

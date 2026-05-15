@@ -2890,6 +2890,161 @@ admin.get('/api/stores/:storeId/import-links/history', async (c) => {
   return c.json({ results: rows.results })
 })
 
+// ── POST /admin/api/enrich-offers — Enriquece offers sem preço/imagem ──
+// Busca preço e imagem via resolve-url para offers importadas manualmente
+// sem preço (price=0) ou sem imagem (image_url=null)
+admin.post('/api/enrich-offers', async (c) => {
+  const { DB } = c.env
+  const body: any = await c.req.json().catch(() => ({}))
+  const BATCH = Math.min(parseInt(body.limit) || 20, 50)
+
+  // Busca offers sem preço ou sem imagem, que têm affiliate_url
+  const { results: offers } = await DB.prepare(`
+    SELECT o.id AS offer_id, o.affiliate_url, o.product_id,
+           o.price, o.image_url, p.name
+    FROM offers o
+    JOIN products p ON p.id = o.product_id
+    WHERE o.source = 'manual'
+      AND o.affiliate_url IS NOT NULL
+      AND o.affiliate_url != ''
+      AND (o.price IS NULL OR o.price = 0 OR o.image_url IS NULL OR o.image_url = '')
+    ORDER BY o.id ASC
+    LIMIT ?
+  `).bind(BATCH).all<any>()
+
+  if (!offers.length) return c.json({ ok: true, enriched: 0, message: 'Nenhum offer para enriquecer' })
+
+  // Helper: extrai MLB ID de URL
+  const extractMlbId = (s: string): string | null => {
+    const m = s.match(/\b(MLB\d{7,12})\b/i)
+    return m ? m[1].toUpperCase() : null
+  }
+
+  // Helper: extrai preço de HTML
+  const extractPrice = (html: string): number | null => {
+    const patterns = [
+      /"current_price"\s*:\s*\{"value"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/,
+      /"price"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/,
+      /content=["']([\d.,]+)["'][^>]*itemprop=["']price["']/i,
+      /itemprop=["']price["'][^>]*content=["']([\d.,]+)["']/i,
+    ]
+    for (const pat of patterns) {
+      const m = html.match(pat)
+      if (m) {
+        const val = parseFloat(m[1].replace(',', '.'))
+        if (!isNaN(val) && val > 0.5 && val < 9_000_000) return val
+      }
+    }
+    return null
+  }
+
+  // Helper: extrai imagem de HTML
+  const extractImage = (html: string): string => {
+    const og = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+              || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
+    let img = og?.[1] || ''
+    if (img.startsWith('//')) img = 'https:' + img
+    img = img.replace(/\\u002F/g, '/').replace(/\\/g, '')
+    // Garante resolução original
+    img = img.replace(/_[A-Z](-\d+)?(\.(webp|jpg|png))(\?.*)?$/, '_O$2')
+    return img
+  }
+
+  let enriched = 0
+  let failed   = 0
+  const details: any[] = []
+
+  for (const offer of offers) {
+    try {
+      const url = offer.affiliate_url
+      // Tenta buscar página do produto ML via Googlebot UA
+      let price: number | null = null
+      let image = ''
+      const mlbId = extractMlbId(url)
+      const fetchUrl = mlbId
+        ? `https://produto.mercadolivre.com.br/${mlbId}`
+        : url
+
+      const res = await fetch(fetchUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+          'Accept': 'text/html,application/xhtml+xml',
+          'Accept-Language': 'pt-BR,pt;q=0.9',
+          'Referer': 'https://www.mercadolivre.com.br/',
+        },
+        signal: AbortSignal.timeout(8000),
+      })
+
+      if (res.ok) {
+        const html = await res.text()
+        price = extractPrice(html)
+        image = extractImage(html)
+      }
+
+      // Se não achou pelo produto.mercadolivre, tenta o link /social/ direto
+      if ((!price || !image) && url.includes('/social/')) {
+        const res2 = await fetch(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+            'Accept': 'text/html,application/xhtml+xml',
+          },
+          signal: AbortSignal.timeout(8000),
+        })
+        if (res2.ok) {
+          const html2 = await res2.text()
+          if (!price) price = extractPrice(html2)
+          if (!image) image = extractImage(html2)
+        }
+      }
+
+      if (price || image) {
+        // Atualiza offer
+        await DB.prepare(`
+          UPDATE offers SET
+            price      = CASE WHEN ? > 0 THEN ? ELSE price END,
+            image_url  = CASE WHEN ? != '' THEN ? ELSE image_url END,
+            last_updated = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(price || 0, price || 0, image, image, offer.offer_id).run()
+
+        // Atualiza produto
+        await DB.prepare(`
+          UPDATE products SET
+            image_url  = CASE WHEN ? != '' AND (image_url IS NULL OR image_url = '') THEN ? ELSE image_url END,
+            best_price = CASE WHEN ? > 0 AND (best_price IS NULL OR best_price = 0) THEN ? ELSE best_price END,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(image, image, price || 0, price || 0, offer.product_id).run()
+
+        enriched++
+        details.push({ name: offer.name, price, image: image ? '✓' : '✗', status: 'ok' })
+      } else {
+        failed++
+        details.push({ name: offer.name, price: null, image: '✗', status: 'sem_dados' })
+      }
+    } catch (e: any) {
+      failed++
+      details.push({ name: offer.name, status: 'erro', error: e?.message })
+    }
+  }
+
+  // Conta total restante
+  const remaining = await DB.prepare(`
+    SELECT COUNT(*) as n FROM offers
+    WHERE source='manual' AND affiliate_url IS NOT NULL
+      AND (price IS NULL OR price = 0 OR image_url IS NULL OR image_url = '')
+  `).first<{ n: number }>()
+
+  return c.json({
+    ok: true,
+    processed: offers.length,
+    enriched,
+    failed,
+    remaining: remaining?.n || 0,
+    details,
+  })
+})
+
 // -- POST /admin/api/affiliate-bot/run-all -- Bot em lote
 // Estrategia de token:
 //   1) client_credentials (ML_APP_ID + ML_SECRET) -- nao depende de OAuth do usuario
@@ -7001,7 +7156,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260515h"><\/script>
+<script src="/static/admin-spa.js?v=20260515i"><\/script>
 </body>
 </html>`
 }
