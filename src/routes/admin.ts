@@ -2605,7 +2605,7 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
   }
 
   if (dataLines.length === 0) return c.json({ error: 'Nenhuma linha válida encontrada' }, 400)
-  if (dataLines.length > 2000) return c.json({ error: 'Máximo 1000 pares (2000 linhas) por importação' }, 400)
+  // Sem limite de linhas — o frontend envia em lotes de 50, então não há risco de timeout
 
   // ── Processa cada linha ──────────────────────────────────────
   function slugify(text: string): string {
@@ -2957,6 +2957,9 @@ admin.post('/api/enrich-offers', async (c) => {
     return img
   }
 
+  // Obtém token ML uma vez para todos os itens do lote
+  const mlToken = await getMlBearerToken(c.env).catch(() => null)
+
   let enriched = 0
   let failed   = 0
   const details: any[] = []
@@ -3004,7 +3007,28 @@ admin.post('/api/enrich-offers', async (c) => {
         } catch { /* ignora timeout */ }
       }
 
-      // Passo 3: faz GET na URL real do produto para extrair preço (e imagem como fallback)
+      // Passo 3: API ML com token client_credentials — retorna price + thumbnail (mais confiável)
+      if (mlbId && mlToken && !price) {
+        try {
+          const apiRes = await fetch(`https://api.mercadolibre.com/items/${mlbId}`, {
+            headers: {
+              'Authorization': `Bearer ${mlToken}`,
+              'Accept': 'application/json',
+            },
+            signal: AbortSignal.timeout(8000),
+          })
+          if (apiRes.ok) {
+            const item: any = await apiRes.json()
+            if (item.price)     price = item.price
+            if (!image && (item.pictures?.[0]?.url || item.thumbnail)) {
+              image = (item.pictures?.[0]?.url || item.thumbnail)
+                .replace(/-[A-Z](-\d+)?(\.(?:webp|jpg|png))(\?.*)?$/i, '-O$2')
+            }
+          }
+        } catch { /* ignora */ }
+      }
+
+      // Passo 4: scraping da URL real do produto — fallback quando API ML não tem token
       // Funciona para: https://www.mercadolivre.com.br/SLUG/p/MLBXXXXXX
       if (productUrl && !price) {
         try {
@@ -3025,7 +3049,7 @@ admin.post('/api/enrich-offers', async (c) => {
         } catch { /* ignora */ }
       }
 
-      // Passo 4: fallback — scraping de produto.mercadolivre.com.br/MLBXXXXXX via Googlebot
+      // Passo 5: fallback — scraping de produto.mercadolivre.com.br/MLBXXXXXX via Googlebot
       if (mlbId && (!price || !image)) {
         try {
           const res = await fetch(`https://produto.mercadolivre.com.br/${mlbId}`, {
@@ -7204,7 +7228,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260515l"><\/script>
+<script src="/static/admin-spa.js?v=20260515n"><\/script>
 </body>
 </html>`
 }
