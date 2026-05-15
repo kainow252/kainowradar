@@ -2611,16 +2611,32 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       const parts = line.split('|').map(p => p.trim())
       const url = parts[0]
       if (!url.startsWith('http')) return null
-      // Campo 5 opcional: "mlb:XXXXXXXX" — hint de MLB-ID passado pelo frontend
-      // Usado quando saveUrl é /social/ (sem MLB na URL) mas o produto tem MLB-ID conhecido
-      const hintPart = parts[4] || ''
-      const hintMlb = hintPart.match(/^mlb:(.+)$/i)
+      // Hint MLB: aceita em QUALQUER campo após o 1º com prefixo "mlb:"
+      // Formato enviado pelo frontend: "url | mlb:MLB123" (2 campos)
+      // Formato legado:                "url | nome | preço | img | mlb:MLB123" (5 campos)
+      let hintMlbId: string | null = null
+      let namePart = ''
+      let pricePart = ''
+      let imagePart = ''
+      for (let pi = 1; pi < parts.length; pi++) {
+        const p = parts[pi]
+        const mlbMatch = p.match(/^mlb:(.+)$/i)
+        if (mlbMatch) {
+          hintMlbId = mlbMatch[1].trim()
+        } else if (pi === 1 && !mlbMatch) {
+          namePart = p
+        } else if (pi === 2) {
+          pricePart = p
+        } else if (pi === 3) {
+          imagePart = p
+        }
+      }
       return {
         url,
-        name: parts[1] || '',
-        price: parts[2] ? parseFloat(parts[2].replace(/[^0-9.,]/g, '').replace(',', '.')) || null : null,
-        image_url: parts[3] && parts[3].startsWith('http') ? parts[3] : null,
-        hint_mlb_id: hintMlb ? hintMlb[1].trim() : null,
+        name: namePart,
+        price: pricePart ? parseFloat(pricePart.replace(/[^0-9.,]/g, '').replace(',', '.')) || null : null,
+        image_url: imagePart && imagePart.startsWith('http') ? imagePart : null,
+        hint_mlb_id: hintMlbId,
       }
     }
     // Tenta separar por , (CSV)
@@ -7495,7 +7511,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260515t"><\/script>
+<script src="/static/admin-spa.js?v=20260515u"><\/script>
 </body>
 </html>`
 }

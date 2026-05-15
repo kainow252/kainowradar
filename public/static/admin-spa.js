@@ -1099,7 +1099,13 @@ async function siMassImport(storeId) {
       const logEl = document.getElementById('si-fast-log')
       if (logEl) {
         const icon = data.ok ? '✅' : '⚠'
-        logEl.innerHTML += `<div>${icon} Lote ${ci+1}: ${data.imported||0} importados · ${data.duplicates||0} duplicados · ${data.errors||0} erros</div>`
+        let msg = `${icon} Lote ${ci+1}: ${data.imported||0} importados · ${data.duplicates||0} duplicados · ${data.errors||0} erros`
+        // Mostra o primeiro erro real para diagnóstico
+        if (data.errors > 0 && data.results) {
+          const firstErr = data.results.find(r => r.status === 'erro')
+          if (firstErr?.error) msg += `<br><span class="text-red-400 ml-4">↳ ${firstErr.error}</span>`
+        }
+        logEl.innerHTML += `<div>${msg}</div>`
         logEl.scrollTop = logEl.scrollHeight
       }
     }
