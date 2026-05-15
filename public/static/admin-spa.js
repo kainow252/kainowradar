@@ -412,93 +412,152 @@ function priceRange(label, value, cls) {
 
 // ── TOP DEALS ─────────────────────────────────────────────
 async function renderTopDeals(area) {
-  const data = await api('GET', '/admin/api/top-deals?limit=24')
+  // Carrega dados em paralelo: deals + categorias reais do banco
+  const [data, cats] = await Promise.all([
+    api('GET', `/admin/api/top-deals?limit=50${App._topDealsCat ? '&category=' + App._topDealsCat : ''}`),
+    api('GET', '/admin/api/categories')
+  ])
   if (!data) return
-  const rows = data.map((item, i) => `
-    <tr class="hover:bg-slate-50 cursor-pointer" onclick="openProductPage('${item.slug}')">
-      <td class="table-td w-8 font-bold text-slate-400">${i+1}</td>
+
+  // Categorias com produtos reais (product_count > 0)
+  const activeCats = (cats || []).filter(c => c.product_count > 0).sort((a,b) => b.product_count - a.product_count)
+  const currentCat = App._topDealsCat || ''
+
+  const catIcons = {
+    'automotivo':'🚗','pet-shop':'🐾','beleza':'💄','alimentos':'🍎',
+    'saude':'💊','audio':'🎧','perfumes':'🌸','computadores':'💻',
+    'smartphones':'📱','notebooks':'💻','tv':'📺','games':'🎮',
+    'eletrodomesticos':'🏠','esportes':'⚽','moda':'👗','outros':'📦'
+  }
+
+  const filterBtns = [
+    `<button onclick="loadTopDealsCategory('')" class="text-xs px-3 py-1.5 rounded-lg border font-medium transition-all ${currentCat===''?'bg-blue-600 text-white border-blue-600 shadow-sm':'border-slate-200 text-slate-600 hover:bg-slate-50'}">
+      Todos <span class="ml-1 opacity-70">${data.length}</span>
+    </button>`,
+    ...activeCats.map(c =>
+      `<button onclick="loadTopDealsCategory('${c.slug}')" class="text-xs px-3 py-1.5 rounded-lg border font-medium transition-all ${currentCat===c.slug?'bg-blue-600 text-white border-blue-600 shadow-sm':'border-slate-200 text-slate-600 hover:bg-slate-50'}">
+        ${catIcons[c.slug]||'📦'} ${c.name} <span class="ml-1 opacity-70">${c.product_count}</span>
+      </button>`
+    )
+  ].join('')
+
+  const rows = data.map((item, i) => {
+    const linkUrl = item.affiliate_url || item.checkout_url || ''
+    const discBadge = item.discount_percent > 0
+      ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700">-${Math.round(item.discount_percent)}%</span>`
+      : `<span class="text-slate-300 text-xs">—</span>`
+    const freteBadge = item.free_shipping
+      ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">✓ Grátis</span>`
+      : `<span class="text-xs text-slate-400">—</span>`
+    const acaoBtn = linkUrl
+      ? `<a href="${linkUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()"
+           class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-colors shadow-sm">
+           Ver oferta →
+         </a>`
+      : `<span class="text-slate-300 text-xs">—</span>`
+    const imgSrc = item.image_url || ''
+    const imgEl = imgSrc
+      ? `<img src="${imgSrc}" class="w-10 h-10 object-contain bg-slate-50 rounded-lg border border-slate-100" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
+      : ''
+    const fallbackEl = `<div class="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400 text-lg ${imgSrc?'hidden':''}" style="display:${imgSrc?'none':'flex'}">📦</div>`
+
+    return `
+    <tr class="hover:bg-blue-50/40 cursor-pointer transition-colors border-b border-slate-50 last:border-0"
+        onclick="openProductPage('${item.slug}')">
+      <td class="table-td w-8 text-center">
+        <span class="font-bold ${i<3?'text-amber-500':'text-slate-300'} text-sm">${i+1}</span>
+      </td>
       <td class="table-td">
         <div class="flex items-center gap-3">
-          <img src="${item.image_url || 'https://via.placeholder.com/48?text=P'}" class="w-10 h-10 object-contain bg-slate-50 rounded-lg">
-          <div>
-            <div class="font-semibold text-slate-800 text-sm max-w-xs truncate">${item.name}</div>
-            <div class="text-xs text-slate-400">${item.brand || ''} · EAN: ${item.ean || '—'}</div>
+          <div class="relative flex-shrink-0">${imgEl}${fallbackEl}</div>
+          <div class="min-w-0">
+            <div class="font-semibold text-slate-800 text-sm leading-tight" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${item.name}">${item.name}</div>
+            <div class="text-xs text-slate-400 mt-0.5">${item.brand ? item.brand + ' · ' : ''}EAN: ${item.ean || '—'}</div>
           </div>
         </div>
       </td>
-      <td class="table-td">${badge(item.category || 'outros', 'blue')}</td>
       <td class="table-td">
-        <div class="flex items-center gap-2">
-          ${item.store_logo ? `<img src="${item.store_logo}" class="h-4 max-w-[60px] object-contain">` : `<span class="font-semibold text-xs">${item.store_name}</span>`}
+        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
+          ${catIcons[item.category]||'📦'} ${item.category || 'outros'}
+        </span>
+      </td>
+      <td class="table-td">
+        <div class="flex items-center gap-1.5">
+          ${item.store_logo
+            ? `<img src="${item.store_logo}" class="h-5 max-w-[56px] object-contain" onerror="this.style.display='none'">`
+            : ''}
+          <span class="text-xs font-medium text-slate-700">${item.store_name || '—'}</span>
         </div>
       </td>
       <td class="table-td">
-        <div class="text-lg font-black text-green-700">${fBRL(item.lowest_price)}</div>
+        <div class="font-black text-green-700 text-base leading-tight">${fBRL(item.lowest_price)}</div>
         ${item.original_price && item.original_price > item.lowest_price
           ? `<div class="text-xs text-slate-400 line-through">${fBRL(item.original_price)}</div>` : ''}
       </td>
-      <td class="table-td">
-        ${item.discount_percent > 0 ? badge('-' + Math.round(item.discount_percent) + '%', 'red') : '—'}
+      <td class="table-td text-center">${discBadge}</td>
+      <td class="table-td text-center">${freteBadge}</td>
+      <td class="table-td text-center">
+        <span class="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">${item.offer_count} ${item.offer_count===1?'loja':'lojas'}</span>
       </td>
-      <td class="table-td">
-        ${item.free_shipping ? badge('✓ Grátis', 'green') : badge('A consultar', 'yellow')}
-      </td>
-      <td class="table-td">
-        <span class="text-xs text-slate-400">${item.offer_count} ${item.offer_count===1?'loja':'lojas'}</span>
-      </td>
-      <td class="table-td">
-        ${item.checkout_url ? `<a href="${item.checkout_url}" target="_blank" class="btn-success text-xs" onclick="event.stopPropagation()">Testar →</a>` : '—'}
-      </td>
-    </tr>
-  `).join('')
+      <td class="table-td">${acaoBtn}</td>
+    </tr>`
+  }).join('')
 
   area.innerHTML = `
     <div class="section">
-      <div class="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-800 flex items-start gap-2">
-        <span class="text-lg">💡</span>
-        <div>
-          <strong>Query otimizada:</strong> <code class="bg-blue-100 px-1.5 py-0.5 rounded text-xs">GROUP BY p.id + MIN(o.price)</code>
-          — garante exatamente 1 linha por produto, sempre com a oferta mais barata. Se o estoque da loja mais barata acabar, a próxima assume automaticamente.
-        </div>
-      </div>
       <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-        <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-          <h3 class="font-bold text-slate-800">Melhor preço por produto <span class="text-slate-400 font-normal text-sm ml-1">${data.length} resultados</span></h3>
-          <div class="flex gap-2">
-            ${['', 'smartphones', 'notebooks', 'tv', 'games', 'audio', 'eletrodomesticos'].map(cat =>
-              `<button onclick="loadTopDealsCategory('${cat}')" class="text-xs px-3 py-1.5 rounded-lg border ${cat===''?'bg-blue-600 text-white border-blue-600':'border-slate-200 hover:bg-slate-50'}">${cat||'Todos'}</button>`
-            ).join('')}
+        <div class="px-5 py-4 border-b border-slate-100">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-bold text-slate-800 text-lg">
+              🏷️ Top Deals
+              <span class="text-slate-400 font-normal text-sm ml-2">${data.length} produtos</span>
+            </h3>
+            <button onclick="refreshTopDeals()" class="flex items-center gap-1.5 text-xs text-slate-500 hover:text-blue-600 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-blue-300 transition-colors">
+              🔄 Atualizar
+            </button>
           </div>
+          <div class="flex flex-wrap gap-2">${filterBtns}</div>
         </div>
         <div class="overflow-x-auto">
           <table class="w-full">
-            <thead><tr>
-              <th class="table-th">#</th>
-              <th class="table-th">Produto</th>
-              <th class="table-th">Categoria</th>
-              <th class="table-th">Loja</th>
-              <th class="table-th">Menor Preço</th>
-              <th class="table-th">Desconto</th>
-              <th class="table-th">Frete</th>
-              <th class="table-th">Lojas</th>
-              <th class="table-th">Ação</th>
-            </tr></thead>
+            <thead>
+              <tr class="bg-slate-50">
+                <th class="table-th w-8 text-center">#</th>
+                <th class="table-th">Produto</th>
+                <th class="table-th">Categoria</th>
+                <th class="table-th">Loja</th>
+                <th class="table-th">Menor Preço</th>
+                <th class="table-th text-center">Desconto</th>
+                <th class="table-th text-center">Frete</th>
+                <th class="table-th text-center">Lojas</th>
+                <th class="table-th">Ação</th>
+              </tr>
+            </thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
+        ${data.length === 0 ? `
+          <div class="py-16 text-center text-slate-400">
+            <div class="text-4xl mb-3">🏷️</div>
+            <div class="font-semibold">Nenhum produto nesta categoria</div>
+            <div class="text-sm mt-1">Tente outro filtro ou importe produtos</div>
+          </div>` : ''}
       </div>
     </div>
   `
 }
 
 async function loadTopDealsCategory(cat) {
+  App._topDealsCat = cat
   const area = document.getElementById('content-area')
   area.innerHTML = spin
-  const url = cat ? `/admin/api/top-deals?limit=24&category=${cat}` : '/admin/api/top-deals?limit=24'
-  App._topDealsUrl = url
-  const data = await api('GET', url)
-  if (!data) return
-  // Só re-renderiza a tabela
+  await renderTopDeals(area)
+}
+
+async function refreshTopDeals() {
+  App._topDealsCat = App._topDealsCat || ''
+  const area = document.getElementById('content-area')
+  area.innerHTML = spin
   await renderTopDeals(area)
 }
 
