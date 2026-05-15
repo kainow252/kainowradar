@@ -3153,7 +3153,7 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       const prodResult = await DB.prepare(`
         INSERT INTO products (name, slug, category, source, is_active, created_at, updated_at, best_price, best_store_id)
         VALUES (?, ?, ?, 'manual', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?)
-      `).bind(name, slug, detectedCategory !== 'outros' ? detectedCategory : null, price > 0 ? price : null, storeId).run()
+      `).bind(name, slug, detectedCategory || 'outros', price > 0 ? price : null, storeId).run()
 
       productId = prodResult.meta.last_row_id as number
 
@@ -3188,13 +3188,11 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
         WHERE id = ?
       `).bind(price > 0 ? price : 0, price > 0 ? price : 0, storeId, productId).run()
 
-      // 4) Incrementa product_count da categoria no banco
-      if (detectedCategory && detectedCategory !== 'outros') {
-        await DB.prepare(`
-          UPDATE categories SET product_count = product_count + 1
-          WHERE slug = ? AND is_active = 1
-        `).bind(detectedCategory).run().catch(() => {})
-      }
+      // 4) Incrementa product_count da categoria no banco (inclui 'outros')
+      await DB.prepare(`
+        UPDATE categories SET product_count = product_count + 1
+        WHERE slug = ? AND is_active = 1
+      `).bind(detectedCategory || 'outros').run().catch(() => {})
 
       results.push({ url: affiliateUrl, status: 'importado', product_id: productId, name, category: detectedCategory })
       imported++
@@ -7113,7 +7111,7 @@ admin.post('/api/feed/process', async (c) => {
           VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
         `).bind(
           link.ean || null, link.name, slug,
-          link.brand || null, detectedCategory,
+          link.brand || null, detectedCategory || 'outros',
           link.image_url || null, link.price || null, link.network || 'manual'
         ).run()
 
