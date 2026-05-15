@@ -289,7 +289,7 @@ const CATEGORY_RULES: CategoryRule[] = [
 
   // ── Componentes PC ────────────────────────────────────────
   {
-    slug: 'componentes',
+    slug: 'componentes-pc',
     keywords: [
       'ssd m.2', 'ssd nvme', 'hd ssd', 'ssd 250', 'ssd 500', 'ssd 1tb', 'ssd 2tb',
       'placa de video', 'placa-de-video', 'placa mae', 'placa-mae',
@@ -335,6 +335,41 @@ const CATEGORY_RULES: CategoryRule[] = [
       'mochila ', 'carteira couro', 'oculos ', 'relogio ',
       'nike', 'adidas', 'puma', 'vans', 'converse', 'new balance',
       'havaianas', 'melissa', 'zara', 'lacoste',
+    ],
+  },
+
+  // ── Automotivo ────────────────────────────────────────────
+  {
+    slug: 'automotivo',
+    keywords: [
+      // tapetes
+      'tapete borracha', 'tapete emborrachado', 'tapete cacamba', 'tapete caçamba',
+      'tapete pvc', 'jogo de tapete', 'jogo tapete', 'tapete inteiriço',
+      'tapete traseiro', 'tapete dianteiro', 'tapete carpete',
+      // apliques e frisos
+      'aplique cromado', 'aplique moldura', 'friso lateral', 'friso cromado',
+      'moldura cromada', 'moldura traseira', 'aplique roda', 'aplique liga leve',
+      'kit aplique', 'jogo friso', 'parachoque',
+      // iluminação automotiva
+      'lampada led carro', 'lampada led moto', 'lampada farol', 'kit lampadas led',
+      'kit farol', 'lampada t10', 'lampada ba9s', 'lampada t15', 'lampada t4w',
+      'placa led cob', 'placa super led', 'lampada b9', 'lamp auto',
+      'farol milha', 'farol auxiliar', 'modulo canceller', 'canbus',
+      // suportes e acessórios veiculares
+      'suporte starlink', 'case starlink', 'suporte veicular', 'suporte ima carro',
+      'ventosa veicular', 'cabo starlink', 'kit starlink', 'starlink mini',
+      'suporte magnetico carro', 'ima teto', 'suporte teto carro',
+      // reboque e ferragens
+      'correia reboque', 'correia de reboque', 'fita reboque', 'cabo reboque',
+      'parafuso tuning', 'parafuso m6 allen', 'parafuso inox placa',
+      'coelho caveira caminhao', 'engate reboque', 'bola reboque',
+      // som automotivo
+      'bravox', 'auto falante', 'falante auto', 'subwoofer automotivo',
+      'modulo auto', 'caixa som carro', 'caixa de som automotivo',
+      // termos genéricos de veículos (deve ficar por último)
+      'caçamba', 'cacamba', 'caminhao', 'caminhonete',
+      // modelos de carros comuns (só quando não ambíguos)
+      'saveiro', 'hilux', 'strada ', 'fiorino ', 'rampage rebel',
     ],
   },
 ]

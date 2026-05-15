@@ -6622,10 +6622,13 @@ admin.post('/api/categories/recategorize', async (c) => {
     { slug: 'computadores',     keywords: ['desktop','computador','pc gamer','pc gaming','all in one','mini pc','workstation','imac','processador intel','processador amd','core i3','core i5','core i7','core i9','ryzen 3','ryzen 5','ryzen 7','ryzen 9','placa mae','motherboard','memoria ram','pente de ram','ram ddr4','ram ddr5','fonte de alimentacao','gabinete pc','case atx','case mid-tower'] },
     { slug: 'monitores',        keywords: ['monitor 4k','monitor gamer','monitor led','monitor ips','monitor curvo','monitor ultrawide','dell monitor','lg monitor','samsung monitor','aoc monitor','asus monitor','monitor 24','monitor 27','monitor 32','144hz','165hz','240hz','freesync','gsync'] },
     { slug: 'impressoras',      keywords: ['impressora','multifuncional','scanner','plotter','cartucho de tinta','toner','epson l','epson ecotank','hp deskjet','hp laserjet','canon pixma','brother mfc','brother dcp'] },
-    { slug: 'componentes',      keywords: ['ssd m.2','ssd nvme','hd ssd','ssd 250','ssd 500','ssd 1tb','ssd 2tb','placa de video','placa-de-video','placa mae','placa-mae','cooler cpu','pasta termica','cabo sata','fonte 500w','fonte 600w','fonte 700w','fonte 750w','fonte 800w','gabinete ','dissipador'] },
+    // FIXO: slug correto é 'componentes-pc' na tabela categories
+    { slug: 'componentes-pc',   keywords: ['ssd m.2','ssd nvme','hd ssd','ssd 250','ssd 500','ssd 1tb','ssd 2tb','placa de video','placa-de-video','placa mae','placa-mae','cooler cpu','pasta termica','cabo sata','fonte 500w','fonte 600w','fonte 700w','fonte 750w','fonte 800w','gabinete ','dissipador'] },
     { slug: 'armazenamento',    keywords: ['hd externo','hd interno','hard disk','hard drive','pendrive','pen drive','flash drive','memoria flash','cartao de memoria','cartao sd','microsd','sdxc','sdhc','ssd externo','ssd portatil','nvme externo','nas storage','wd red','wd blue','seagate barracuda','seagate ironwolf'] },
     { slug: 'redes',            keywords: ['roteador','router','modem','access point','ponto de acesso','switch de rede','cabo de rede','cabo ethernet','cabo rj45','placa de rede','adaptador wifi','repetidor wifi','extensor wifi','mesh wifi','sistema mesh','tp-link','intelbras roteador','asus roteador','netgear','ubiquiti','mikrotik'] },
     { slug: 'moda',             keywords: ['tenis ','sapato','sandalia','bota ','mocassim','chinelo','camiseta','camisa ','calca jeans','vestido','saia ','blusa ','casaco','jaqueta','moletom','shorts ','bermuda ','cueca','calcinha','sutiã','meia ','cinto ','bolsa ','mochila ','carteira couro','oculos ','relogio ','nike','adidas','puma','vans','converse','new balance','havaianas','melissa','zara','lacoste'] },
+    // Automotivo — cobre tapetes, lâmpadas, apliques, suportes veiculares, etc.
+    { slug: 'automotivo',       keywords: ['tapete borracha','tapete emborrachado','tapete cacamba','tapete caçamba','tapete pvc','jogo de tapete','jogo tapete','tapete inteiriço','tapete traseiro','tapete dianteiro','aplique cromado','aplique moldura','friso lateral','friso cromado','parachoque','grade dianteira','spoiler','moldura','lampada led carro','lampada led moto','lampada farol','lampada t10','lampada ba9s','lampada t15','placa led cob','kit lampadas','kit farol','suporte starlink','case starlink','suporte veicular','suporte magnetico carro','suporte ima carro','ventosa veicular','cabo 3m starlink','correia reboque','correia de reboque','fita reboque','cabo reboque','parafuso tuning','parafuso m6 allen','parafuso inox placa','aplique roda','aplique liga leve','kit aplique','coelho caveira caminhao','bravox','auto falante','falante auto','subwoofer automotivo','modulo amplificador auto','modulo auto','caixa som carro','caixa de som automotivo','caminhao','caminhonete','saveiro','hilux','strada','fiorino','corolla','civic ','gol g','hb20','versa ','palio','siena','sandero','rampage rebel','reboque','caçamba','cacamba'] },
   ]
 
   const norm = (t: string) => t.toLowerCase()
@@ -6948,7 +6951,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260515a"><\/script>
+<script src="/static/admin-spa.js?v=20260516a"><\/script>
 </body>
 </html>`
 }

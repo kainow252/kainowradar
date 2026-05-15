@@ -1026,7 +1026,7 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
                   { slug: 'computadores',     icon: '🖥️', name: 'Computadores & Desktops' },
                   { slug: 'monitores',        icon: '🖥', name: 'Monitores' },
                   { slug: 'impressoras',      icon: '🖨️', name: 'Impressoras & Scanners' },
-                  { slug: 'componentes',      icon: '⚙️', name: 'Componentes PC' },
+                  { slug: 'componentes-pc',   icon: '⚙️', name: 'Componentes PC' },
                   { slug: 'armazenamento',    icon: '💾', name: 'Armazenamento & SSDs' },
                   { slug: 'redes',            icon: '📡', name: 'Redes & Wi-Fi' },
                 ]
@@ -1758,6 +1758,180 @@ pages.get('/meus-alertas', async (c) => {
     navCategories: navCatsAlertas,
     footerConfig: footerCfgAlertas,
     currentUser: currentUserAlertas,
+  }))
+})
+
+// ── GET /perfil — Página de perfil do usuário ─────────────
+pages.get('/perfil', async (c) => {
+  const { DB } = c.env
+  const currentUserPerfil = await getCurrentUser(c)
+
+  // Se não estiver logado → redireciona para home com modal de login
+  if (!currentUserPerfil) {
+    return c.redirect('/?login=1')
+  }
+
+  // Busca dados completos do usuário pelo token
+  const cookie = c.req.header('Cookie') || ''
+  const token  = cookie.match(/sc_token=([^;]+)/)?.[1] || ''
+  const userFull = await DB.prepare(
+    `SELECT id, full_name, email, avatar_url, auth_provider, created_at, last_login_at, login_count,
+            notify_email, notify_whatsapp, whatsapp_number
+     FROM oauth_users WHERE session_token = ? AND session_expires_at > CURRENT_TIMESTAMP LIMIT 1`
+  ).bind(token).first<any>()
+
+  if (!userFull) return c.redirect('/?login=1')
+
+  // Busca alertas ativos do usuário
+  const { results: userAlerts } = await DB.prepare(
+    `SELECT id, product_name, product_slug, target_price, status, created_at
+     FROM user_price_alerts WHERE user_id = ? AND status = 'active'
+     ORDER BY created_at DESC LIMIT 20`
+  ).bind(userFull.id).all<any>()
+
+  // Busca categorias para nav e footer
+  const [{ results: navCatsPerfil }, footerCfgPerfil] = await Promise.all([
+    DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>(),
+    loadFooterConfig(DB),
+  ])
+
+  const memberSince = userFull.created_at
+    ? new Date(userFull.created_at).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+    : ''
+
+  const providerLabel = userFull.auth_provider === 'google' ? '🔵 Google' : '📧 Email'
+
+  const content = `
+  <div class="max-w-3xl mx-auto px-4 py-10">
+
+    <!-- Header do perfil -->
+    <div class="flex items-center gap-4 mb-8">
+      <div class="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center shrink-0">
+        <i class="fas fa-user text-white text-xl"></i>
+      </div>
+      <div>
+        <h1 class="text-2xl font-bold text-gray-900">Meu Perfil</h1>
+        <p class="text-sm text-gray-500">Gerencie seus dados e preferências</p>
+      </div>
+    </div>
+
+    <!-- Card de dados do usuário -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
+      <div class="flex items-center gap-5 mb-6">
+        ${userFull.avatar_url
+          ? `<img src="${userFull.avatar_url}" class="w-20 h-20 rounded-2xl object-cover border-2 border-blue-100" alt="">`
+          : `<div class="w-20 h-20 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white font-black text-3xl">${(userFull.full_name || userFull.email || '?')[0].toUpperCase()}</div>`
+        }
+        <div>
+          <div class="text-xl font-bold text-gray-900">${userFull.full_name || 'Usuário'}</div>
+          <div class="text-sm text-gray-500 mt-0.5">${userFull.email}</div>
+          <div class="flex items-center gap-3 mt-2">
+            <span class="text-xs bg-blue-50 text-blue-700 font-semibold px-2.5 py-1 rounded-full">${providerLabel}</span>
+            ${memberSince ? `<span class="text-xs text-gray-400">Membro desde ${memberSince}</span>` : ''}
+          </div>
+        </div>
+      </div>
+
+      <!-- Estatísticas rápidas -->
+      <div class="grid grid-cols-3 gap-4 pt-4 border-t border-gray-100">
+        <div class="text-center">
+          <div class="text-2xl font-black text-blue-600">${userAlerts.length}</div>
+          <div class="text-xs text-gray-500 mt-0.5">Alertas ativos</div>
+        </div>
+        <div class="text-center">
+          <div class="text-2xl font-black text-gray-800">${userFull.login_count || 1}</div>
+          <div class="text-xs text-gray-500 mt-0.5">Logins</div>
+        </div>
+        <div class="text-center">
+          <div class="text-2xl font-black text-green-600">${userFull.notify_email ? '✓' : '—'}</div>
+          <div class="text-xs text-gray-500 mt-0.5">Notif. email</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alertas de preço do usuário -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-bold text-gray-900">🔔 Meus Alertas de Preço</h2>
+        <a href="/meus-alertas" class="text-sm text-blue-600 hover:underline font-semibold">Ver todos →</a>
+      </div>
+
+      ${userAlerts.length === 0
+        ? `<div class="text-center py-10 text-gray-400">
+            <div class="text-5xl mb-4">🔔</div>
+            <p class="font-medium">Nenhum alerta ativo</p>
+            <p class="text-sm mt-1">Crie alertas nas páginas de produtos para ser notificado quando o preço cair!</p>
+           </div>`
+        : userAlerts.map(a => `
+            <div class="flex items-center gap-4 py-3 border-b border-gray-50 last:border-0">
+              <div class="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center shrink-0">
+                <i class="fas fa-tag text-blue-500 text-xs"></i>
+              </div>
+              <div class="flex-1 min-w-0">
+                <a href="/produto/${a.product_slug}" class="font-semibold text-gray-900 hover:text-blue-600 text-sm line-clamp-1">
+                  ${a.product_name || 'Produto'}
+                </a>
+                <div class="text-xs text-gray-400 mt-0.5">
+                  Alvo: <strong class="text-gray-700">R$ ${Number(a.target_price).toFixed(2).replace('.', ',')}</strong>
+                  · criado em ${new Date(a.created_at).toLocaleDateString('pt-BR')}
+                </div>
+              </div>
+              <span class="text-xs bg-green-50 text-green-700 font-semibold px-2 py-0.5 rounded-full shrink-0">ativo</span>
+            </div>
+          `).join('')
+      }
+    </div>
+
+    <!-- Ações da conta -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+      <h2 class="text-lg font-bold text-gray-900 mb-4">⚙️ Conta</h2>
+      <div class="space-y-3">
+        <a href="/meus-alertas"
+           class="flex items-center justify-between px-4 py-3 rounded-xl bg-gray-50 hover:bg-blue-50 transition-colors group">
+          <div class="flex items-center gap-3">
+            <i class="fas fa-bell text-blue-500 w-5 text-center"></i>
+            <div>
+              <div class="text-sm font-semibold text-gray-800 group-hover:text-blue-700">Gerenciar Alertas</div>
+              <div class="text-xs text-gray-400">Visualize e remova alertas de preço</div>
+            </div>
+          </div>
+          <i class="fas fa-chevron-right text-gray-300 text-xs"></i>
+        </a>
+
+        <a href="/busca"
+           class="flex items-center justify-between px-4 py-3 rounded-xl bg-gray-50 hover:bg-blue-50 transition-colors group">
+          <div class="flex items-center gap-3">
+            <i class="fas fa-search text-blue-500 w-5 text-center"></i>
+            <div>
+              <div class="text-sm font-semibold text-gray-800 group-hover:text-blue-700">Buscar Produtos</div>
+              <div class="text-xs text-gray-400">Encontre ofertas e compare preços</div>
+            </div>
+          </div>
+          <i class="fas fa-chevron-right text-gray-300 text-xs"></i>
+        </a>
+
+        <a href="/auth/logout"
+           class="flex items-center justify-between px-4 py-3 rounded-xl bg-red-50 hover:bg-red-100 transition-colors group"
+           onclick="return confirm('Deseja realmente sair da sua conta?')">
+          <div class="flex items-center gap-3">
+            <i class="fas fa-sign-out-alt text-red-500 w-5 text-center"></i>
+            <div>
+              <div class="text-sm font-semibold text-red-600">Sair da conta</div>
+              <div class="text-xs text-red-400">Encerrar sessão atual</div>
+            </div>
+          </div>
+          <i class="fas fa-chevron-right text-red-300 text-xs"></i>
+        </a>
+      </div>
+    </div>
+
+  </div>`
+
+  return c.html(renderLayout('Meu Perfil | KainowRadar', content, {
+    description: 'Gerencie seu perfil, alertas de preço e preferências no KainowRadar.',
+    navCategories: navCatsPerfil,
+    footerConfig: footerCfgPerfil,
+    currentUser: currentUserPerfil,
   }))
 })
 

@@ -10092,7 +10092,7 @@ async function renderCategories(area) {
         <div class="mt-3 flex flex-wrap gap-2">
           ${['smartphones','notebooks','tv','tablets','games','audio','cameras',
              'eletrodomesticos','computadores','monitores','impressoras',
-             'componentes','armazenamento','redes','moda'].map(slug => `
+             'componentes-pc','armazenamento','redes','moda','automotivo'].map(slug => `
             <span class="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-100 text-blue-700">
               ${cats.find(c => c.slug === slug)?.icon || '🏷️'} ${slug}
             </span>
