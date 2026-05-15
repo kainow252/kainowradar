@@ -829,6 +829,20 @@ function _buildStoreCard(s) {
   )
 }
 
+// ── Atualiza o card da loja no grid sem re-renderizar tudo ──────
+// Chamado após import bem-sucedido para reflectir o novo product_count
+async function _refreshStoreCard(storeId) {
+  try {
+    const all = await api('GET', '/admin/api/stores')
+    if (!all) return
+    const s = all.find(x => x.id === storeId)
+    if (!s) return
+    const card = document.getElementById('store-card-' + storeId)
+    if (!card) return // seção Lojas não está visível — nada a fazer
+    card.outerHTML = _buildStoreCard(s)
+  } catch (_) { /* silencioso — não bloqueia o fluxo */ }
+}
+
 // ── IMPORTAR LINKS — universal por loja ─────────────────────────
 // ── IMPORTAR LINKS — modal automático ───────────────────────────
 // Fluxo: colar links → clicar Importar → sistema busca nome/preço/imagem → salva tudo
@@ -1149,6 +1163,7 @@ async function siMassImport(storeId) {
 
     if (totalImported > 0) {
       toast('✓ ' + totalImported.toLocaleString('pt-BR') + ' produtos importados!', 'success')
+      _refreshStoreCard(storeId) // atualiza contador do card da loja sem re-renderizar
     } else if (totalDuplicates > 0) {
       toast('Todos os links já estavam importados (duplicados).', 'warning')
     } else {
@@ -2041,6 +2056,7 @@ async function siFastImportChunked(storeId, lines, live, btn) {
 
     if (totalImported > 0) {
       toast('✓ ' + totalImported + ' de ' + total + ' importados!', 'success')
+      _refreshStoreCard(storeId) // atualiza contador do card da loja sem re-renderizar
       if (btn) {
         btn.disabled  = false
         btn.className = 'w-full py-3 rounded-xl bg-green-600 text-white text-sm font-bold mt-0'
