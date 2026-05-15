@@ -303,7 +303,7 @@ app.get('/', async (c) => {
         AND p.image_url NOT LIKE '%unsplash%'
         AND p.name NOT LIKE 'cfegdhabc%'
         AND p.name NOT LIKE 'Produto Importado%'
-      ORDER BY p.id DESC LIMIT 8
+      ORDER BY RANDOM() LIMIT 8
     `).all(),
     DB.prepare(`
       SELECT p.*, s.name as best_store_name,
@@ -315,7 +315,7 @@ app.get('/', async (c) => {
         AND p.image_url IS NOT NULL AND p.image_url != ''
         AND p.name NOT LIKE 'cfegdhabc%'
         AND p.name NOT LIKE 'Produto Importado%'
-      ORDER BY p.id DESC, COALESCE(o.discount_percent, 0) DESC LIMIT 8
+      ORDER BY RANDOM() LIMIT 8
     `).all(),
     DB.prepare(`SELECT * FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all(),
     DB.prepare(`SELECT id, name, slug, logo_url FROM stores WHERE is_active = 1 ORDER BY name ASC LIMIT 100`).all(),
