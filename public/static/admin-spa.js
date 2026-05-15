@@ -1077,7 +1077,8 @@ async function siMassImport(storeId) {
     </div>
     <div id="si-fast-log" class="text-xs text-slate-500 space-y-0.5 max-h-32 overflow-y-auto"></div>`
 
-  let totalImported   = 0
+  let totalImported   = 0   // genuinamente novos
+  let totalUpdated    = 0   // offers existentes atualizadas
   let totalDuplicates = 0
   let totalErrors     = 0
   let processedLines  = 0
@@ -1107,14 +1108,15 @@ async function siMassImport(storeId) {
 
       processedLines  += chunk.length
       totalImported   += data.imported   || 0
+      totalUpdated    += data.updated    || 0
       totalDuplicates += data.duplicates || 0
       totalErrors     += data.errors     || 0
 
       const logEl = document.getElementById('si-fast-log')
       if (logEl) {
         const icon = data.ok ? '✅' : '⚠'
-        let msg = `${icon} Lote ${ci+1}: ${data.imported||0} importados · ${data.duplicates||0} duplicados · ${data.errors||0} erros`
-        // Mostra o primeiro erro real para diagnóstico
+        const updPart = data.updated > 0 ? ` · ${data.updated} atualizados` : ''
+        let msg = `${icon} Lote ${ci+1}: ${data.imported||0} novos${updPart} · ${data.duplicates||0} duplicados · ${data.errors||0} erros`
         if (data.errors > 0 && data.results) {
           const firstErr = data.results.find(r => r.status === 'erro')
           if (firstErr?.error) msg += `<br><span class="text-red-400 ml-4">↳ ${firstErr.error}</span>`
@@ -1132,26 +1134,34 @@ async function siMassImport(storeId) {
     if (barEl)     { barEl.style.width = '100%'; barEl.className = barEl.className.replace('bg-indigo-500','bg-green-500') }
     if (statusEl2) statusEl2.textContent = '✓ Concluído!'
     if (countEl)   countEl.textContent   = processedLines + '/' + total
-    if (labelEl)   labelEl.textContent   = `${totalImported} importados · ${totalDuplicates} duplicados · ${totalErrors} erros`
+    const updLabel = totalUpdated > 0 ? ` · ${totalUpdated} atualizados` : ''
+    if (labelEl)   labelEl.textContent   = `${totalImported} novos${updLabel} · ${totalDuplicates} duplicados · ${totalErrors} erros`
 
-    // Card de resultado final
-    const enrichTip = totalImported > 0
+    // Card de resultado final — 4 colunas quando há atualizados
+    const enrichTip = (totalImported + totalUpdated) > 0
       ? `<p class="text-xs text-indigo-600 mt-2">💡 Use <strong>Enriquecer Ofertas</strong> para completar preço, nome e imagem.</p>`
+      : ''
+    const updatedCol = totalUpdated > 0
+      ? `<div class="bg-white rounded-lg p-2 text-center border border-amber-100">
+           <div class="text-xl font-black text-amber-600">${totalUpdated.toLocaleString('pt-BR')}</div>
+           <div class="text-xs text-amber-500">Atualizados</div>
+         </div>`
       : ''
 
     const resultCard = document.createElement('div')
     resultCard.innerHTML = `
       <div class="bg-green-50 border border-green-200 rounded-xl p-4 mt-3">
         <p class="text-sm font-bold text-green-800">✅ Importação concluída!</p>
-        <div class="grid grid-cols-3 gap-2 mt-3">
+        <div class="grid grid-cols-${totalUpdated > 0 ? 4 : 3} gap-2 mt-3">
           <div class="bg-white rounded-lg p-2 text-center border border-green-100">
             <div class="text-xl font-black text-green-700">${total.toLocaleString('pt-BR')}</div>
             <div class="text-xs text-green-500">Enviados</div>
           </div>
           <div class="bg-white rounded-lg p-2 text-center border border-green-100">
             <div class="text-xl font-black text-blue-700">${totalImported.toLocaleString('pt-BR')}</div>
-            <div class="text-xs text-blue-500">Salvos</div>
+            <div class="text-xs text-blue-500">Novos</div>
           </div>
+          ${updatedCol}
           <div class="bg-white rounded-lg p-2 text-center border border-green-100">
             <div class="text-xl font-black text-${totalErrors>0?'red':'slate'}-600">${totalErrors.toLocaleString('pt-BR')}</div>
             <div class="text-xs text-${totalErrors>0?'red':'slate'}-400">Erros</div>
@@ -1162,8 +1172,10 @@ async function siMassImport(storeId) {
     liveWrapper.appendChild(resultCard)
 
     if (totalImported > 0) {
-      toast('✓ ' + totalImported.toLocaleString('pt-BR') + ' produtos importados!', 'success')
-      _refreshStoreCard(storeId) // atualiza contador do card da loja sem re-renderizar
+      toast('✓ ' + totalImported.toLocaleString('pt-BR') + ' produtos novos importados!', 'success')
+      _refreshStoreCard(storeId) // só atualiza o card quando há produtos genuinamente novos
+    } else if (totalUpdated > 0) {
+      toast('🔄 ' + totalUpdated.toLocaleString('pt-BR') + ' offer(s) atualizadas — nenhum produto novo.', 'info')
     } else if (totalDuplicates > 0) {
       toast('Todos os links já estavam importados (duplicados).', 'warning')
     } else {
@@ -1997,7 +2009,8 @@ async function siFastImportChunked(storeId, lines, live, btn) {
     </div>
     <div id="si-fast-log" class="text-xs text-slate-500 space-y-0.5 max-h-32 overflow-y-auto"></div>`
 
-  let totalImported  = 0
+  let totalImported  = 0   // genuinamente novos
+  let totalUpdated   = 0   // offers existentes atualizadas
   let totalDuplicates = 0
   let totalErrors    = 0
   let processedLines = 0
@@ -2029,6 +2042,7 @@ async function siFastImportChunked(storeId, lines, live, btn) {
 
       processedLines += chunk.length
       totalImported   += data.imported   || 0
+      totalUpdated    += data.updated    || 0
       totalDuplicates += data.duplicates || 0
       totalErrors     += data.errors     || 0
       if (data.store_name) storeName = data.store_name
@@ -2036,7 +2050,8 @@ async function siFastImportChunked(storeId, lines, live, btn) {
       const logEl = document.getElementById('si-fast-log')
       if (logEl) {
         const icon = data.ok ? '✅' : '⚠'
-        logEl.innerHTML += `<div>${icon} Lote ${ci+1}: ${data.imported||0} importados, ${data.duplicates||0} duplicados, ${data.errors||0} erros</div>`
+        const updPart = (data.updated||0) > 0 ? `, ${data.updated} atualizados` : ''
+        logEl.innerHTML += `<div>${icon} Lote ${ci+1}: ${data.imported||0} novos${updPart}, ${data.duplicates||0} duplicados, ${data.errors||0} erros</div>`
         logEl.scrollTop = logEl.scrollHeight
       }
     }
@@ -2051,16 +2066,18 @@ async function siFastImportChunked(storeId, lines, live, btn) {
     if (countEl)  countEl.textContent  = processedLines + '/' + total
 
     const summaryEl = document.getElementById('si-fast-label')
+    const updLabel  = totalUpdated > 0 ? ` · ${totalUpdated} atualizados` : ''
     if (summaryEl) summaryEl.textContent =
-      `${totalImported} importados · ${totalDuplicates} duplicados · ${totalErrors} erros`
+      `${totalImported} novos${updLabel} · ${totalDuplicates} duplicados · ${totalErrors} erros`
 
     if (totalImported > 0) {
-      toast('✓ ' + totalImported + ' de ' + total + ' importados!', 'success')
-      _refreshStoreCard(storeId) // atualiza contador do card da loja sem re-renderizar
+      const updToast = totalUpdated > 0 ? ` · ${totalUpdated} atualizados` : ''
+      toast('✓ ' + totalImported + ' novos' + updToast + ' de ' + total + ' links!', 'success')
+      _refreshStoreCard(storeId) // só refresca quando há produtos genuinamente novos
       if (btn) {
         btn.disabled  = false
         btn.className = 'w-full py-3 rounded-xl bg-green-600 text-white text-sm font-bold mt-0'
-        btn.innerHTML = '✓ ' + totalImported + ' salvos! Importar mais'
+        btn.innerHTML = '✓ ' + totalImported + ' novos! Importar mais'
         btn.onclick = function() {
           document.getElementById('si-textarea').value = ''
           siCountLinks()
@@ -2068,6 +2085,18 @@ async function siFastImportChunked(storeId, lines, live, btn) {
           btn.disabled  = false
           btn.className = 'w-full py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 transition-all mt-0'
           btn.textContent = '🚀 Importar Automaticamente'
+        }
+      }
+    } else if (totalUpdated > 0) {
+      toast('🔄 ' + totalUpdated + ' offer(s) atualizadas — nenhum produto novo no contador.', 'info')
+      if (btn) {
+        btn.disabled  = false
+        btn.className = 'w-full py-3 rounded-xl bg-amber-500 text-white text-sm font-bold mt-0'
+        btn.innerHTML = '🔄 ' + totalUpdated + ' atualizados — Importar mais'
+        btn.onclick = function() {
+          document.getElementById('si-textarea').value = ''
+          siCountLinks()
+          document.getElementById('si-live-area').innerHTML = ''
         }
       }
     } else {

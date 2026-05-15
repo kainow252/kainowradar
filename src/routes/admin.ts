@@ -2725,7 +2725,8 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
   }
 
   const results: any[] = []
-  let imported = 0
+  let imported = 0   // novos produtos/offers criados
+  let updated  = 0   // offers existentes atualizadas (preço/imagem/url)
   let skipped  = 0
   let duplicates = 0
   let errors   = 0
@@ -2868,7 +2869,7 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
 
             const updateInfo = shouldUpdateAffUrl ? ' (affiliate_url atualizado para /social/)' : ''
             results.push({ url: affiliateUrl, status: 'atualizado', product_id: existingAnyStore.product_id, name, info: updateInfo.trim() })
-            imported++
+            updated++
           } else {
             // Idêntico — duplicado puro
             duplicates++
@@ -2941,7 +2942,7 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
             WHERE id = ?
           `).bind(price, price, price, imgUrl || '', imgUrl || '', productId2).run()
 
-          imported++
+          updated++
           results.push({ url: affiliateUrl, status: 'atualizado', product_id: productId2, name, price, message: 'Offer atualizado com novos dados' })
           continue
         }
@@ -3031,6 +3032,7 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
     total_received: dataLines.length,
     has_more: hasMore,
     imported,
+    updated,
     duplicates,
     skipped,
     errors,
