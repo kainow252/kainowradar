@@ -284,6 +284,8 @@ npx wrangler pages secret put AWIN_PUBLISHER_ID --project-name shopping-compare
 | **Admin count ≠ contador da página pública** | **Admin usava `best_store_id`; página pública usava `offer.store_id` — métricas diferentes** | **Admin agora usa `COUNT(DISTINCT p.id) via offers JOIN` — igual à página pública** |
 | **"27 importados" mas contador não sobe** | **`imported++` contava tanto novos quanto atualizações — UI enganosa** | **Separado `updated` counter; UI mostra "N novos · M atualizados"; `_refreshStoreCard` só dispara para genuinamente novos** |
 | **Links /social/ novos tratados como atualização** | **`effectiveMlbId` com prefixo duplo "MLB" → LIKE `%MLB-MLB...%` nunca encontrava nada (Bug 1). Mesmo corrigido, `affiliate_url` armazenada é `/social/` sem MLB no texto → LIKE ainda falha (Bug 2)** | **Bug 1: `rawMlbId.replace(/^MLB[\-_]?/i, '')` normaliza para dígitos. Bug 2: busca fallback em `products.ml_item_id`; `ml_item_id` gravado no INSERT de novos produtos** |
+| **Produto já importado (ml_item_id=NULL) cria duplicata em reimport** | **Produto importado antes do fix de ml_item_id tem `ml_item_id=NULL`; novo import com mesmo MLB-ID não encontra via ml_item_id → cria duplicata** | **Quando encontrado via `existingByName` ou offer existente E `effectiveMlbId` disponível, atualiza `ml_item_id` retroativamente** |
+| **`/social/` URL gera nome `Cfegdhabc31955` para todos os produtos** | **Extração de nome do path da URL capturava o publisher_id da afiliada como nome — igual para todos os produtos → colisão em `existingByName`** | **`/social/` URLs não usam mais o path como nome; usa `Produto MLBXXXXXXXX` do `hint_mlb_id` ou `Produto Importado...` como último recurso** |
 
 ---
 
