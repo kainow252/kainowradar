@@ -738,18 +738,21 @@ function _buildStoreCard(s) {
   const statusBadge = s.is_active
     ? '<span class="flex items-center gap-1 text-xs font-medium text-green-700 bg-green-50 px-2 py-0.5 rounded-full"><span class="w-1.5 h-1.5 bg-green-500 rounded-full inline-block"></span>Ativa</span>'
     : '<span class="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">Inativa</span>'
-  const offersBadge = s.offer_count > 0
-    ? '<span class="text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">' + s.offer_count + ' produto' + (s.offer_count > 1 ? 's' : '') + '</span>'
-    : ''
+  const prodCount    = s.product_count || 0
+  const offerCount   = s.offer_count || 0
+  const productsBadge = prodCount > 0
+    ? '<span class="text-xs text-violet-700 bg-violet-50 px-2 py-0.5 rounded-full">🏷️ ' + prodCount + ' produto' + (prodCount > 1 ? 's' : '') + '</span>'
+    : (s.is_active ? '<span class="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">⚠️ Sem produtos</span>' : '')
   const checked = s.is_active ? 'checked' : ''
   const urlHint = s.checkout_pattern || s.deeplink_base || '—'
+  const topBorderColor = prodCount > 0 ? '#8b5cf6' : (s.is_active ? '#f59e0b' : '#cbd5e1')
 
   // Botao Importar Links aparece em TODOS os cards de loja
   const importBtn = '<button onclick="event.stopPropagation();openStoreImport(' + s.id + ',\'' + (s.name||'').replace(/'/g,'&#39;') + '\')" class="w-full text-xs font-semibold py-2 px-3 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-all mt-2">&#128229; Importar Links</button>'
 
   return (
-    '<div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden hover:shadow-md transition-shadow" id="store-card-' + s.id + '">'
-    + '<div class="px-4 py-3 flex items-center justify-between" style="background:' + nc.bg + ';border-bottom:2px solid ' + nc.border + '20">'
+    '<div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden hover:shadow-md transition-shadow" id="store-card-' + s.id + '" style="border-top:3px solid ' + topBorderColor + '">'
+    + '<div class="px-4 py-3 flex items-center justify-between" style="background:' + nc.bg + '">'
     +   '<div class="flex items-center gap-2.5">'
     +     '<div style="width:40px;height:40px;background:#fff;border-radius:10px;display:flex;align-items:center;justify-content:center;border:1px solid ' + nc.border + '30;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,0.07)">'
     +       logoHTML
@@ -766,11 +769,11 @@ function _buildStoreCard(s) {
     + '</div>'
     + '<div class="px-4 py-3">'
     +   '<div class="grid grid-cols-3 gap-2 text-center mb-3">'
-    +     '<div class="bg-slate-50 rounded-xl p-2"><div class="text-lg font-black text-slate-800">' + (s.offer_count || 0) + '</div><div class="text-xs text-slate-400">Ofertas</div></div>'
-    +     '<div class="bg-green-50 rounded-xl p-2"><div class="text-sm font-bold text-green-700">' + fBRL(s.min_price) + '</div><div class="text-xs text-slate-400">Menor preço</div></div>'
+    +     '<div class="bg-violet-50 rounded-xl p-2"><div class="text-lg font-black text-violet-700">' + prodCount + '</div><div class="text-xs text-slate-400">Produtos</div></div>'
+    +     '<div class="bg-slate-50 rounded-xl p-2"><div class="text-lg font-black text-slate-700">' + offerCount + '</div><div class="text-xs text-slate-400">Ofertas</div></div>'
     +     '<div class="bg-blue-50 rounded-xl p-2"><div class="text-sm font-bold text-blue-700">' + (s.commission_rate || 0) + '%</div><div class="text-xs text-slate-400">Comissão</div></div>'
     +   '</div>'
-    +   '<div class="flex items-center gap-2 mb-2">' + statusBadge + offersBadge + '</div>'
+    +   '<div class="flex items-center flex-wrap gap-1.5 mb-2">' + statusBadge + productsBadge + '</div>'
     +   '<div class="text-xs text-slate-400 truncate mb-3" title="' + urlHint + '">🔗 ' + urlHint + '</div>'
     +   '<button onclick="event.stopPropagation();openStoreModal(' + s.id + ')" class="w-full text-xs font-semibold py-2 px-3 rounded-xl border bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100 transition-all">✏️ Editar loja</button>'
     +   importBtn
@@ -2340,14 +2343,23 @@ async function renderStores(area) {
   const data = await api('GET', '/admin/api/stores')
   if (!data) return
 
-  const total      = data.length
-  const active     = data.filter(s => s.is_active).length
-  const withOffers = data.filter(s => s.offer_count > 0).length
-  const allCards   = data.map(_buildStoreCard).join('')
+  const total        = data.length
+  const active       = data.filter(s => s.is_active).length
+  const withProducts = data.filter(s => (s.product_count || 0) > 0).length
+  const totalProds   = data.reduce((sum, s) => sum + (s.product_count || 0), 0)
+  const totalOffers  = data.reduce((sum, s) => sum + (s.offer_count  || 0), 0)
+
+  // Separar lojas: com produtos | ativas sem produtos | inativas sem produtos
+  const comProdutos  = data.filter(s => (s.product_count || 0) > 0)
+  const ativasSemProd = data.filter(s => s.is_active && (s.product_count || 0) === 0)
+  const inativas     = data.filter(s => !s.is_active)
+
+  const allCards = data.map(_buildStoreCard).join('')
 
   area.innerHTML = `
     <div class="section">
-      <div class="grid grid-cols-3 gap-4 mb-6">
+      <!-- Cards de resumo: 5 métricas -->
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <div class="stat-card text-center border-t-4 border-blue-400">
           <div class="text-3xl font-black text-slate-800">${total}</div>
           <div class="text-sm text-slate-500 mt-1">Lojas cadastradas</div>
@@ -2357,10 +2369,33 @@ async function renderStores(area) {
           <div class="text-sm text-slate-500 mt-1">Lojas ativas</div>
         </div>
         <div class="stat-card text-center border-t-4 border-amber-400">
-          <div class="text-3xl font-black text-amber-700">${withOffers}</div>
+          <div class="text-3xl font-black text-amber-700">${withProducts}</div>
           <div class="text-sm text-slate-500 mt-1">Com produtos</div>
         </div>
+        <div class="stat-card text-center border-t-4 border-violet-400">
+          <div class="text-3xl font-black text-violet-700">${totalProds}</div>
+          <div class="text-sm text-slate-500 mt-1">Produtos no banco</div>
+        </div>
+        <div class="stat-card text-center border-t-4 border-sky-400">
+          <div class="text-3xl font-black text-sky-700">${totalOffers}</div>
+          <div class="text-sm text-slate-500 mt-1">Ofertas ativas</div>
+        </div>
       </div>
+
+      <!-- Alerta quando há lojas ativas sem produtos -->
+      ${ativasSemProd.length > 0 ? `
+      <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5 flex gap-3 items-start">
+        <span class="text-xl mt-0.5">⚠️</span>
+        <div>
+          <div class="font-semibold text-amber-800">${ativasSemProd.length} loja${ativasSemProd.length>1?'s':''} ativa${ativasSemProd.length>1?'s':''} sem produtos</div>
+          <div class="text-sm text-amber-700 mt-1">
+            ${ativasSemProd.map(s => `<span class="inline-block bg-amber-100 rounded px-2 py-0.5 mr-1 mb-1">${s.name}</span>`).join('')}
+          </div>
+          <div class="text-xs text-amber-600 mt-2">Para adicionar produtos: importe via <strong>Importar do ML</strong> ou <strong>Importar Lomadee</strong>.</div>
+        </div>
+      </div>` : ''}
+
+      <!-- Filtros e busca -->
       <div class="flex gap-3 mb-5">
         <div class="relative flex-1">
           <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">🔍</span>
@@ -2459,7 +2494,7 @@ async function openStoreModal(id) {
           </div>
           <div>
             <h3 class="font-bold text-slate-800 text-lg leading-tight">✏️ ${s.name || 'Editar loja'}</h3>
-            <p class="text-xs text-slate-400 mt-0.5">ID #${id} · ${s.offer_count || 0} ofertas cadastradas</p>
+            <p class="text-xs text-slate-400 mt-0.5">ID #${id} · ${s.product_count || 0} produtos · ${s.offer_count || 0} ofertas</p>
           </div>
         </div>
 
