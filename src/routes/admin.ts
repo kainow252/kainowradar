@@ -2582,14 +2582,138 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
   if (!storeId) return c.json({ error: 'storeId inválido' }, 400)
 
   // Busca a loja no banco
-  const store = await DB.prepare(`SELECT id, name, affiliate_network FROM stores WHERE id = ?`).bind(storeId).first<any>()
+  const store = await DB.prepare(`SELECT id, name, slug, affiliate_network FROM stores WHERE id = ?`).bind(storeId).first<any>()
   if (!store) return c.json({ error: 'Loja não encontrada' }, 404)
 
   const body = await c.req.json().catch(() => ({}))
   const raw: string = body.links || ''
   if (!raw.trim()) return c.json({ error: 'Nenhum link enviado' }, 400)
 
-  // ── Parser de linhas ─────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════
+  // ROTA GENÉRICA — qualquer loja que NÃO seja Mercado Livre
+  // Lógica limpa: sem /social/, sem ml_item_id, sem wid=, sem dedup ML
+  // ══════════════════════════════════════════════════════════════
+  if (store.affiliate_network !== 'meli-api') {
+    const rawLines = raw.split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean)
+    const parsed: { url: string; name: string; price: number | null; image_url: string | null }[] = []
+
+    for (const line of rawLines) {
+      if (line.includes('|')) {
+        const parts = line.split('|').map((p: string) => p.trim())
+        if (!parts[0].startsWith('http')) continue
+        parsed.push({
+          url:       parts[0],
+          name:      parts[1] || '',
+          price:     parts[2] ? parseFloat(parts[2].replace(/[^0-9.,]/g, '').replace(',', '.')) || null : null,
+          image_url: parts[3] && parts[3].startsWith('http') ? parts[3] : null,
+        })
+      } else if (line.startsWith('http')) {
+        parsed.push({ url: line, name: '', price: null, image_url: null })
+      }
+    }
+
+    if (!parsed.length) return c.json({ error: 'Nenhuma linha válida encontrada' }, 400)
+
+    const slugifyGeneric = (t: string): string =>
+      t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').substring(0, 120)
+
+    let imported = 0, updated = 0, duplicates = 0, skipped = 0, errors = 0
+    const results: any[] = []
+
+    for (const item of parsed.slice(0, 50)) {
+      if (!item.url) { skipped++; continue }
+      try {
+        // Dedup por URL exata (sem query string)
+        let baseUrl = item.url
+        try { baseUrl = new URL(item.url).origin + new URL(item.url).pathname } catch { /* ignora */ }
+
+        const existing = await DB.prepare(
+          `SELECT o.id, o.product_id, o.price FROM offers o
+           WHERE o.affiliate_url = ? OR o.affiliate_url LIKE ? LIMIT 1`
+        ).bind(item.url, baseUrl + '%').first<any>()
+
+        // Nome: usa o fornecido ou extrai do slug da URL
+        let name = (item.name || '').trim()
+        if (!name) {
+          try {
+            const pth = new URL(item.url).pathname
+            const slug = pth.replace(/\/$/, '').split('/').filter(Boolean).pop() || ''
+            if (slug && slug.length >= 4) {
+              name = slug.replace(/-+/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()).trim().substring(0, 120)
+            }
+          } catch { /* ignora */ }
+        }
+        if (!name) name = 'Produto Importado ' + Date.now().toString(36).toUpperCase()
+
+        const price = item.price ?? 0
+        const slug  = slugifyGeneric(name) + '-' + Date.now().toString(36)
+        const extId = 'import-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6)
+
+        if (existing) {
+          // Atualiza oferta existente
+          await DB.prepare(
+            `UPDATE offers SET price = COALESCE(?, price),
+               image_url = COALESCE(?, image_url), last_updated = CURRENT_TIMESTAMP
+             WHERE id = ?`
+          ).bind(item.price, item.image_url, existing.id).run()
+
+          await DB.prepare(
+            `UPDATE products SET best_price = COALESCE(?, best_price),
+               image_url = COALESCE(?, image_url)
+             WHERE id = ? AND (best_price IS NULL OR ? < best_price)`
+          ).bind(item.price, item.image_url, existing.product_id, item.price).run()
+
+          updated++
+          results.push({ action: 'updated', url: item.url, name })
+        } else {
+          // Cria produto novo
+          const insP = await DB.prepare(
+            `INSERT INTO products (name, slug, best_price, image_url, is_active, created_at)
+             VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP)`
+          ).bind(name, slug, price > 0 ? price : null, item.image_url).run()
+          const productId = insP.meta.last_row_id as number
+
+          // Cria oferta
+          await DB.prepare(
+            `INSERT INTO offers (product_id, store_id, title, price, original_price,
+               affiliate_url, checkout_url, image_url, in_stock, is_active, source, external_id, last_updated)
+             VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 1, 1, 'manual', ?, CURRENT_TIMESTAMP)`
+          ).bind(productId, storeId, name, price > 0 ? price : null,
+            item.url, item.url, item.image_url, extId).run()
+
+          // Atualiza best_store_id no produto
+          await DB.prepare(
+            `UPDATE products SET best_store_id = ? WHERE id = ?`
+          ).bind(storeId, productId).run()
+
+          imported++
+          results.push({ action: 'imported', url: item.url, name })
+        }
+      } catch (e: any) {
+        errors++
+        results.push({ action: 'error', url: item.url, error: e?.message })
+      }
+    }
+
+    return c.json({
+      ok: true,
+      store_id: storeId,
+      store_name: store.name,
+      total: parsed.slice(0, 50).length,
+      imported,
+      updated,
+      duplicates,
+      skipped,
+      errors,
+      results,
+    })
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ROTA MERCADO LIVRE (meli-api) — lógica completa preservada
+  // NÃO MEXER: dedup ml_item_id, /social/, wid=, hint_mlb_id, tudo
+  // ══════════════════════════════════════════════════════════════
   // Cada linha pode ser:
   //   - só URL
   //   - URL | Nome
