@@ -300,7 +300,9 @@ app.get('/', async (c) => {
       FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
       WHERE p.is_active = 1
         AND p.image_url NOT LIKE '%unsplash%'
-      ORDER BY p.created_at DESC, p.offer_count DESC LIMIT 8
+        AND p.name NOT LIKE 'cfegdhabc%'
+        AND p.name NOT LIKE 'Produto Importado%'
+      ORDER BY p.id DESC LIMIT 8
     `).all(),
     DB.prepare(`
       SELECT p.*, s.name as best_store_name,
@@ -309,7 +311,9 @@ app.get('/', async (c) => {
       LEFT JOIN stores s ON s.id = p.best_store_id
       LEFT JOIN offers o ON o.product_id = p.id AND o.store_id = p.best_store_id AND o.is_active = 1
       WHERE p.is_active = 1 AND p.offer_count > 0
-      ORDER BY COALESCE(o.discount_percent, 0) DESC, p.created_at DESC LIMIT 8
+        AND p.name NOT LIKE 'cfegdhabc%'
+        AND p.name NOT LIKE 'Produto Importado%'
+      ORDER BY p.id DESC, COALESCE(o.discount_percent, 0) DESC LIMIT 8
     `).all(),
     DB.prepare(`SELECT * FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all(),
     DB.prepare(`SELECT id, name, slug, logo_url FROM stores WHERE is_active = 1 ORDER BY name ASC LIMIT 100`).all(),

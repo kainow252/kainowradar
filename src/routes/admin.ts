@@ -3013,6 +3013,39 @@ admin.get('/api/stores/:storeId/import-links/history', async (c) => {
   return c.json({ results: rows.results })
 })
 
+// ── POST /admin/api/fix-names — Corrige nomes ruins (publisher_id, slugs) e re-enriquece ──
+admin.post('/api/fix-names', async (c) => {
+  const { DB } = c.env
+  let fixed = 0
+
+  // 1) Deleta produtos com nome = publisher_id (cfegdhabc31955) — produto inválido
+  const del1 = await DB.prepare(
+    `DELETE FROM products WHERE name LIKE 'cfegdhabc%' OR name LIKE 'Cfegdhabc%'`
+  ).run()
+  fixed += del1.meta.changes || 0
+
+  // 2) Deleta offers órfãs (produto deletado)
+  await DB.prepare(
+    `DELETE FROM offers WHERE product_id NOT IN (SELECT id FROM products)`
+  ).run()
+
+  // 3) Extrai MLB ID das affiliate_urls das offers sem imagem para enriquecer via ML API
+  const { results: toEnrich } = await DB.prepare(`
+    SELECT o.id as offer_id, o.affiliate_url, o.product_id, p.name
+    FROM offers o JOIN products p ON p.id = o.product_id
+    WHERE o.source = 'manual'
+      AND (o.image_url IS NULL OR o.image_url = '' OR p.name LIKE '% %' AND LENGTH(p.name) < 8)
+    LIMIT 5
+  `).all<any>()
+
+  return c.json({
+    ok: true,
+    deleted_bad_names: del1.meta.changes || 0,
+    pending_enrich: toEnrich.length,
+    message: `${del1.meta.changes || 0} produtos com nome inválido removidos. Use Enriquecer Ofertas para completar os demais.`
+  })
+})
+
 // ── POST /admin/api/enrich-offers — Enriquece offers sem preço/imagem ──
 // Busca preço e imagem via resolve-url para offers importadas manualmente
 // sem preço (price=0) ou sem imagem (image_url=null)
