@@ -885,7 +885,7 @@ function openStoreImport(storeId, storeName) {
             <div class="mt-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-800 leading-relaxed">
               <strong>&#9888;&#65039; Produto com variante</strong> (URL tem <code class="bg-amber-100 px-1 rounded">#...&amp;wid=MLB...</code>)?
               Cole o <strong>link afiliado</strong> (<code class="bg-amber-100 px-1 rounded">/social/...?ref=...</code>) <strong>na mesma linha</strong> — o sistema detecta o par automaticamente.<br>
-              <span class="text-amber-600">Sem o link /social/, produtos com wid= não podem ser importados (bloqueio do ML).</span>
+              <span class="text-amber-600">O <code>wid=</code> é preservado para importar variantes do mesmo produto como itens separados.</span>
             </div>
           </div>
 
@@ -1544,10 +1544,19 @@ function siExtractUrlsFromText(text) {
     .filter(s => /^https?:\/\//i.test(s))
     .map(u => {
       u = u.replace(/[.,;)>\]]+$/, '').trim()
-      // Remove fragmento #...&wid=MLB... de URLs do ML — o wid é variante de cor/tamanho
-      // a URL base do produto já é suficiente para importar
+      // URLs ML com fragmento #...&wid=MLB...
+      // O wid= identifica a VARIANTE (cor/tamanho) — preserva ele como ?wid= na query
+      // para que variantes do mesmo produto base não sejam deduplicadas como duplicatas
       if (/mercadolivre\.com\.br/i.test(u) && u.includes('#')) {
-        u = u.split('#')[0]
+        const [base, frag] = u.split('#')
+        const widMatch = frag && frag.match(/[&?]?wid=(MLB[\w-]+)/i)
+        if (widMatch) {
+          // Preserva wid como query param para manter unicidade da variante
+          const sep = base.includes('?') ? '&' : '?'
+          u = base + sep + 'wid=' + widMatch[1]
+        } else {
+          u = base
+        }
       }
       return u
     })

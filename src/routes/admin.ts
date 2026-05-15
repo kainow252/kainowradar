@@ -2752,9 +2752,16 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       //   3) URL exata sem query string (fallback último recurso)
       // NUNCA usar LIKE %cfegdhabc31955% — publisher_id é igual em TODOS os links.
 
+      // Extrai wid= da query param (frontend converte #...&wid=MLB... → ?wid=MLB...)
+      // O wid é o item-ID da variante (cor/tamanho) — tem prioridade para dedup precisa
+      const widMatch = productUrl.match(/[?&]wid=(MLB[\w-]+)/i)
+      const widMlbId = widMatch ? widMatch[1].replace(/-/g, '') : null
+
       // Prioridade 0: hint do frontend (MLB-ID resolvido via url1 quando saveUrl=/social/)
+      // Prioridade 1: wid= da URL (variante específica — mais preciso que MLB do path)
       const effectiveMlbId: string | null =
         hint_mlb_id                                            // frontend resolveu via url1
+        ?? widMlbId                                            // wid= da variante (query param)
         ?? productUrl.match(/MLB[\-_]?(\d+)/i)?.[1]           // MLB na url do produto
         ?? affiliateUrl.match(/MLB[\-_]?(\d+)/i)?.[1]         // MLB no affiliateUrl
         ?? null
