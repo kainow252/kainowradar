@@ -176,7 +176,7 @@ pages.get('/produto/:slug', async (c) => {
     DB.prepare(`
       SELECT p.*, s.name as best_store_name FROM products p
       LEFT JOIN stores s ON s.id = p.best_store_id
-      WHERE p.category = ? AND p.id != ? AND p.is_active = 1 AND p.best_price IS NOT NULL
+      WHERE p.category = ? AND p.id != ? AND p.is_active = 1
       ORDER BY p.offer_count DESC LIMIT 4
     `).bind(product.category || '', product.id).all<Product>(),
   ])
@@ -660,14 +660,14 @@ pages.get('/categoria/:slug', async (c) => {
     DB.prepare(`
       SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
       FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
-      WHERE p.category = ? AND p.is_active = 1 AND p.best_price IS NOT NULL
+      WHERE p.category = ? AND p.is_active = 1
       ORDER BY ${orderBy} LIMIT 24 OFFSET ?
     `).bind(slug, offset).all<Product>(),
     DB.prepare(`SELECT name, slug, icon FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all<any>(),
     // COUNT real — ignora product_count estático (pode estar desatualizado)
     DB.prepare(`
       SELECT COUNT(*) as total FROM products
-      WHERE category = ? AND is_active = 1 AND best_price IS NOT NULL
+      WHERE category = ? AND is_active = 1
     `).bind(slug).first<{ total: number }>(),
   ])
 
@@ -728,7 +728,7 @@ pages.get('/busca', async (c) => {
       FROM products p
       LEFT JOIN stores s ON s.id = p.best_store_id
       JOIN offers o ON o.product_id = p.id AND o.store_id = ?
-      WHERE p.is_active = 1 AND p.best_price IS NOT NULL
+      WHERE p.is_active = 1
       ${ q ? 'AND (p.name LIKE ? OR p.category LIKE ?)' : '' }
       ORDER BY ${orderBy} LIMIT 24 OFFSET ?
     `
@@ -736,7 +736,7 @@ pages.get('/busca', async (c) => {
       SELECT COUNT(DISTINCT p.id) as total
       FROM products p
       JOIN offers o ON o.product_id = p.id AND o.store_id = ?
-      WHERE p.is_active = 1 AND p.best_price IS NOT NULL
+      WHERE p.is_active = 1
       ${ q ? 'AND (p.name LIKE ? OR p.category LIKE ?)' : '' }
     `
     productsQuery = q
@@ -749,22 +749,22 @@ pages.get('/busca', async (c) => {
     productsQuery = DB.prepare(`
       SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
       FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
-      WHERE p.is_active = 1 AND p.best_price IS NOT NULL
+      WHERE p.is_active = 1
         AND (p.name LIKE ? OR p.category LIKE ?)
       ORDER BY ${orderBy} LIMIT 24 OFFSET ?
     `).bind(`%${q}%`, `%${q}%`, offset)
     countQuery = DB.prepare(`
       SELECT COUNT(*) as total FROM products
-      WHERE is_active = 1 AND best_price IS NOT NULL AND (name LIKE ? OR category LIKE ?)
+      WHERE is_active = 1 AND (name LIKE ? OR category LIKE ?)
     `).bind(`%${q}%`, `%${q}%`)
   } else {
     productsQuery = DB.prepare(`
       SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
       FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
-      WHERE p.is_active = 1 AND p.best_price IS NOT NULL
+      WHERE p.is_active = 1
       ORDER BY ${orderBy} LIMIT 24 OFFSET ?
     `).bind(offset)
-    countQuery = DB.prepare(`SELECT COUNT(*) as total FROM products WHERE is_active = 1 AND best_price IS NOT NULL`)
+    countQuery = DB.prepare(`SELECT COUNT(*) as total FROM products WHERE is_active = 1`)
   }
 
   const [{ results: products }, { results: navCatsBusca }, totalRow] = await Promise.all([
