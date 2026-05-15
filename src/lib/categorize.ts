@@ -342,10 +342,35 @@ const CATEGORY_RULES: CategoryRule[] = [
   {
     slug: 'automotivo',
     keywords: [
+      // capas e proteção de carro
+      'capa carro', 'capa cobrir carro', 'capa de cobrir', 'cobrir carro',
+      'capa impermeavel carro', 'capa protetora carro', 'capa automotiva',
+      'capa fiat', 'capa gol', 'capa civic', 'capa corolla', 'capa hb20',
+      'capa onix', 'capa palio', 'capa siena', 'capa uno', 'capa sandero',
+      'capa kwid', 'capa polo', 'capa voyage', 'capa tracker', 'capa t-cross',
+      'capa cobrir', 'cobrir veiculo',
+      // bancos e interiores
+      'capa banco carro', 'capa banco auto', 'banco carro', 'capa banco automotivo',
+      'bobina capa banco', 'capa plastica banco', 'capa descartavel banco',
+      'capa banco descartavel', 'capa couro carro', 'capas banco couro', 'capa banco couro',
+      'capa automotivo', 'capas banco', 'capa banco',
       // tapetes
-      'tapete borracha', 'tapete emborrachado', 'tapete cacamba', 'tapete caçamba',
-      'tapete pvc', 'jogo de tapete', 'jogo tapete', 'tapete inteiriço',
-      'tapete traseiro', 'tapete dianteiro', 'tapete carpete',
+      'tapete borracha', 'tapete emborrachado', 'tapete cacamba', 'tapete cacamba',
+      'tapete pvc', 'jogo de tapete', 'jogo tapete', 'tapete inteirivo',
+      'tapete traseiro', 'tapete dianteiro', 'tapete carpete', 'tapete carro',
+      // organizadores e acessórios internos
+      'organizador carro', 'caixa porta malas', 'organizador porta malas',
+      'porta malas carro', 'gancho carro', 'gancho banco carro', 'gancho sacola carro',
+      'suporte sacola carro',
+      // tags e pedágios
+      'tag sem parar', 'tag veloe', 'tag automatica', 'tag autoviagem',
+      'tag condutor', 'tag veicular', 'tag pedagio', 'sem parar', 'veloe',
+      // uber / apps / motoristas
+      'placa uber', 'placa 99', 'placa motorista', 'identificador uber',
+      'identificador motorista', 'adesivo uber', 'motorista aplicativo',
+      // decoração e acessórios externos
+      'lagartixa carro', 'lagartixa gecko', 'gecko carro',
+      'acessorio decorativo carro', 'enfeite carro', 'enfeite retrovisor',
       // apliques e frisos
       'aplique cromado', 'aplique moldura', 'friso lateral', 'friso cromado',
       'moldura cromada', 'moldura traseira', 'aplique roda', 'aplique liga leve',
@@ -353,22 +378,22 @@ const CATEGORY_RULES: CategoryRule[] = [
       // iluminação automotiva
       'lampada led carro', 'lampada led moto', 'lampada farol', 'kit lampadas led',
       'kit farol', 'lampada t10', 'lampada ba9s', 'lampada t15', 'lampada t4w',
-      'placa led cob', 'placa super led', 'lampada b9', 'lamp auto',
-      'farol milha', 'farol auxiliar', 'modulo canceller', 'canbus',
-      // suportes e acessórios veiculares
+      'placa led cob', 'placa super led', 'farol milha', 'farol auxiliar',
+      // suportes veiculares
       'suporte starlink', 'case starlink', 'suporte veicular', 'suporte ima carro',
-      'ventosa veicular', 'cabo starlink', 'kit starlink', 'starlink mini',
-      'suporte magnetico carro', 'ima teto', 'suporte teto carro',
+      'ventosa veicular', 'suporte magnetico carro',
       // reboque e ferragens
       'correia reboque', 'correia de reboque', 'fita reboque', 'cabo reboque',
-      'parafuso tuning', 'parafuso m6 allen', 'parafuso inox placa',
-      'coelho caveira caminhao', 'engate reboque', 'bola reboque',
+      'parafuso tuning', 'engate reboque', 'bola reboque',
+      // terminais e conectores
+      'removedor terminal', 'extrator terminal', 'chave terminal', 'conector automotivo',
+      'terminal conector carro',
       // som automotivo
       'bravox', 'auto falante', 'falante auto', 'subwoofer automotivo',
       'modulo auto', 'caixa som carro', 'caixa de som automotivo',
-      // termos genéricos de veículos (deve ficar por último)
-      'caçamba', 'cacamba', 'caminhao', 'caminhonete',
-      // modelos de carros comuns (só quando não ambíguos)
+      // termos genéricos
+      'cacamba', 'caminhao', 'caminhonete',
+      // modelos de carro
       'saveiro', 'hilux', 'strada ', 'fiorino ', 'rampage rebel',
     ],
   },

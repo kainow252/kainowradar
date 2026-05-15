@@ -7004,7 +7004,36 @@ admin.post('/api/categories/recategorize', async (c) => {
     { slug: 'redes',            keywords: ['roteador','router','modem','access point','ponto de acesso','switch de rede','cabo de rede','cabo ethernet','cabo rj45','placa de rede','adaptador wifi','repetidor wifi','extensor wifi','mesh wifi','sistema mesh','tp-link','intelbras roteador','asus roteador','netgear','ubiquiti','mikrotik'] },
     { slug: 'moda',             keywords: ['tenis ','sapato','sandalia','bota ','mocassim','chinelo','camiseta','camisa ','calca jeans','vestido','saia ','blusa ','casaco','jaqueta','moletom','shorts ','bermuda ','cueca','calcinha','sutiã','meia ','cinto ','bolsa ','mochila ','carteira couro','oculos ','relogio ','nike','adidas','puma','vans','converse','new balance','havaianas','melissa','zara','lacoste'] },
     // Automotivo — cobre tapetes, lâmpadas, apliques, suportes veiculares, etc.
-    { slug: 'automotivo',       keywords: ['tapete borracha','tapete emborrachado','tapete cacamba','tapete caçamba','tapete pvc','jogo de tapete','jogo tapete','tapete inteiriço','tapete traseiro','tapete dianteiro','aplique cromado','aplique moldura','friso lateral','friso cromado','parachoque','grade dianteira','spoiler','moldura','lampada led carro','lampada led moto','lampada farol','lampada t10','lampada ba9s','lampada t15','placa led cob','kit lampadas','kit farol','suporte starlink','case starlink','suporte veicular','suporte magnetico carro','suporte ima carro','ventosa veicular','cabo 3m starlink','correia reboque','correia de reboque','fita reboque','cabo reboque','parafuso tuning','parafuso m6 allen','parafuso inox placa','aplique roda','aplique liga leve','kit aplique','coelho caveira caminhao','bravox','auto falante','falante auto','subwoofer automotivo','modulo amplificador auto','modulo auto','caixa som carro','caixa de som automotivo','caminhao','caminhonete','saveiro','hilux','strada','fiorino','corolla','civic ','gol g','hb20','versa ','palio','siena','sandero','rampage rebel','reboque','caçamba','cacamba'] },
+    { slug: 'automotivo',       keywords: [
+      // capas e proteção de carro
+      'capa carro','capa cobrir carro','capa de cobrir','cobrir carro','capa impermeavel carro','capa protetora carro','capa automotiva',
+      'capa fiat','capa gol','capa civic','capa corolla','capa hb20','capa onix','capa palio','capa siena','capa uno','capa sandero','capa kwid','capa polo','capa voyage','capa tracker','capa t-cross',
+      // bancos e interiores
+      'capa banco carro','capa banco auto','banco carro','capa banco automotivo','bobina capa banco','capa plastica banco','capa descartavel banco','capa banco descartavel','capa couro carro','capas banco couro','capa banco couro',
+      'capa automotivo','tapete carro','tapete borracha','tapete emborrachado','tapete cacamba','tapete caçamba','tapete pvc','jogo de tapete','jogo tapete','tapete inteiriço','tapete traseiro','tapete dianteiro',
+      // organizadores e acessórios internos
+      'organizador carro','caixa porta malas','organizador porta malas','porta malas carro','gancho carro','gancho banco carro','gancho sacola carro','suporte sacola carro',
+      // tags e pedágios
+      'tag sem parar','tag veloe','tag automática','tag autoviagem','tag condutor','tag veicular','tag pedágio','tag pedagio','sem parar','veloe',
+      // uber / apps / motoristas
+      'placa uber','placa 99','placa ifood motorista','placa motorista','identificador uber','identificador motorista','adesivo uber','adesivo motorista aplicativo',
+      // decoração e tuning
+      'lagartixa carro','lagartixa gecko','gecko carro','acessorio decorativo carro','enfeite carro','enfeite retrovisor',
+      // elétrica / iluminação
+      'aplique cromado','aplique moldura','friso lateral','friso cromado','parachoque','grade dianteira','spoiler','moldura',
+      'lampada led carro','lampada led moto','lampada farol','lampada t10','lampada ba9s','lampada t15','placa led cob','kit lampadas','kit farol',
+      // suportes veiculares
+      'suporte starlink','case starlink','suporte veicular','suporte magnetico carro','suporte ima carro','ventosa veicular','cabo 3m starlink',
+      // reboque / segurança
+      'correia reboque','correia de reboque','fita reboque','cabo reboque','parafuso tuning','parafuso m6 allen','parafuso inox placa',
+      'aplique roda','aplique liga leve','kit aplique',
+      // som automotivo
+      'coelho caveira caminhao','bravox','auto falante','falante auto','subwoofer automotivo','modulo amplificador auto','modulo auto','caixa som carro','caixa de som automotivo',
+      // terminais e conectores
+      'terminal conector carro','removedor terminal','extrator terminal','chave terminal','conector automotivo',
+      // modelos de carro
+      'caminhao','caminhonete','saveiro','hilux','strada','fiorino','corolla','civic ','gol g','hb20','versa ','palio','siena','sandero','rampage rebel','reboque','caçamba','cacamba',
+    ] },
     // Esportes & Fitness
     { slug: 'esportes',         keywords: ['estacao de musculacao','estação de musculação','aparelho de ginastica','aparelho ginastica','aparelho de academia','aparelho academia','estacao musculacao','kit musculacao','barra de musculacao','halter ','halteres','anilha ','anilhas','kettlebell','dumbell','dumbbell','banco de supino','banco supino','rack de musculacao','polia fitness','corda de pular','corda battle','battle rope','bola medicinal','medicine ball','prancha abdominal','roda abdominal','rolo abdominal','colchonete','tapete yoga','yoga mat','esteira eletrica','esteira elétrica','bicicleta ergometrica','bicicleta ergométrica','bicicleta spinning','eliptico','elíptico','step fitness','step aerobico','resistance band','faixa elastica','bola de futebol','bola de basquete','bola de volei','bola de tenis','raquete de tenis','raquete de padel','luva de boxe','saco de boxe','chuteira ','prancheta natacao','oculos de natacao','capacete bike','capacete ciclismo','tenis de corrida','roupa de academia','bermuda academia','legging ','top fitness'] },
   ]
