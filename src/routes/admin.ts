@@ -2786,12 +2786,17 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
 
       // Prioridade 0: hint do frontend (MLB-ID resolvido via url1 quando saveUrl=/social/)
       // Prioridade 1: wid= da URL (variante específica — mais preciso que MLB do path)
-      const effectiveMlbId: string | null =
+      // Normaliza para sempre SÓ DÍGITOS — hint_mlb_id e widMlbId podem chegar com prefixo "MLB"
+      const rawMlbId: string | null =
         hint_mlb_id                                            // frontend resolveu via url1
         ?? widMlbId                                            // wid= da variante (query param)
         ?? productUrl.match(/MLB[\-_]?(\d+)/i)?.[1]           // MLB na url do produto
         ?? affiliateUrl.match(/MLB[\-_]?(\d+)/i)?.[1]         // MLB no affiliateUrl
         ?? null
+      // Remove prefixo "MLB" se presente — LIKE usa sempre %MLB-DIGITS% e %MLBDIGITS%
+      const effectiveMlbId: string | null = rawMlbId
+        ? rawMlbId.replace(/^MLB[\-_]?/i, '')
+        : null
 
       // Extrai ref= da URL /social/ — fingerprint único por produto (fallback)
       const refMatch = affiliateUrl.match(/[?&]ref=([^&]+)/)
@@ -2808,6 +2813,20 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
            WHERE o.affiliate_url LIKE ? OR o.affiliate_url LIKE ?
            LIMIT 1`
         ).bind(`%MLB-${effectiveMlbId}%`, `%MLB${effectiveMlbId}%`).first<any>()
+
+        // Fallback: affiliate_url pode ser /social/ sem MLB na string (ex: mercadolivre.com.br/social/cfeg...)
+        // Nesse caso, o MLB-ID está em products.ml_item_id (gravado na criação ou após enrichment)
+        if (!existingAnyStore) {
+          const existingProduct = await DB.prepare(
+            `SELECT o.id, p.id as product_id, o.title, o.store_id, o.affiliate_url, s.name as store_name
+             FROM products p
+             LEFT JOIN offers o ON o.product_id = p.id AND o.is_active = 1
+             LEFT JOIN stores s ON s.id = o.store_id
+             WHERE p.ml_item_id = ? AND p.is_active = 1
+             LIMIT 1`
+          ).bind(effectiveMlbId).first<any>()
+          if (existingProduct) existingAnyStore = existingProduct
+        }
       } else if (socialRef) {
         // /social/ sem MLB visível → ref= é fingerprint único por produto
         existingAnyStore = await DB.prepare(
@@ -2980,6 +2999,11 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       `).bind(name, slug, detectedCategory !== 'outros' ? detectedCategory : null, price > 0 ? price : null, storeId).run()
 
       productId = prodResult.meta.last_row_id as number
+
+      // Salva ml_item_id para deduplicação futura (evita /social/ URL falhar no LIKE)
+      if (effectiveMlbId) {
+        await DB.prepare(`UPDATE products SET ml_item_id = ? WHERE id = ?`).bind(effectiveMlbId, productId).run()
+      }
 
       if (imgUrl) {
         await DB.prepare(`UPDATE products SET image_url = ? WHERE id = ?`).bind(imgUrl, productId).run()
