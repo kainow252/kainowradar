@@ -3013,36 +3013,26 @@ admin.get('/api/stores/:storeId/import-links/history', async (c) => {
   return c.json({ results: rows.results })
 })
 
-// ── POST /admin/api/fix-names — Corrige nomes ruins (publisher_id, slugs) e re-enriquece ──
+// ── POST /admin/api/fix-names — Corrige nomes ruins (publisher_id, slugs) ──
 admin.post('/api/fix-names', async (c) => {
   const { DB } = c.env
-  let fixed = 0
 
-  // 1) Deleta produtos com nome = publisher_id (cfegdhabc31955) — produto inválido
-  const del1 = await DB.prepare(
-    `DELETE FROM products WHERE name LIKE 'cfegdhabc%' OR name LIKE 'Cfegdhabc%'`
-  ).run()
-  fixed += del1.meta.changes || 0
+  // Busca IDs dos produtos com nome inválido (publisher_id ou genérico)
+  const { results: badProds } = await DB.prepare(
+    `SELECT id FROM products WHERE name LIKE 'cfegdhabc%' OR name LIKE 'Cfegdhabc%' LIMIT 50`
+  ).all<{ id: number }>()
 
-  // 2) Deleta offers órfãs (produto deletado)
-  await DB.prepare(
-    `DELETE FROM offers WHERE product_id NOT IN (SELECT id FROM products)`
-  ).run()
-
-  // 3) Extrai MLB ID das affiliate_urls das offers sem imagem para enriquecer via ML API
-  const { results: toEnrich } = await DB.prepare(`
-    SELECT o.id as offer_id, o.affiliate_url, o.product_id, p.name
-    FROM offers o JOIN products p ON p.id = o.product_id
-    WHERE o.source = 'manual'
-      AND (o.image_url IS NULL OR o.image_url = '' OR p.name LIKE '% %' AND LENGTH(p.name) < 8)
-    LIMIT 5
-  `).all<any>()
+  let deleted = 0
+  for (const p of badProds) {
+    await DB.prepare(`DELETE FROM offers WHERE product_id = ?`).bind(p.id).run()
+    await DB.prepare(`DELETE FROM products WHERE id = ?`).bind(p.id).run()
+    deleted++
+  }
 
   return c.json({
     ok: true,
-    deleted_bad_names: del1.meta.changes || 0,
-    pending_enrich: toEnrich.length,
-    message: `${del1.meta.changes || 0} produtos com nome inválido removidos. Use Enriquecer Ofertas para completar os demais.`
+    deleted,
+    message: `${deleted} produtos com nome inválido removidos.`
   })
 })
 

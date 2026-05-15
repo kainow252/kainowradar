@@ -299,6 +299,7 @@ app.get('/', async (c) => {
       SELECT p.*, s.name as best_store_name, s.slug as best_store_slug
       FROM products p LEFT JOIN stores s ON s.id = p.best_store_id
       WHERE p.is_active = 1
+        AND p.image_url IS NOT NULL AND p.image_url != ''
         AND p.image_url NOT LIKE '%unsplash%'
         AND p.name NOT LIKE 'cfegdhabc%'
         AND p.name NOT LIKE 'Produto Importado%'
@@ -311,6 +312,7 @@ app.get('/', async (c) => {
       LEFT JOIN stores s ON s.id = p.best_store_id
       LEFT JOIN offers o ON o.product_id = p.id AND o.store_id = p.best_store_id AND o.is_active = 1
       WHERE p.is_active = 1 AND p.offer_count > 0
+        AND p.image_url IS NOT NULL AND p.image_url != ''
         AND p.name NOT LIKE 'cfegdhabc%'
         AND p.name NOT LIKE 'Produto Importado%'
       ORDER BY p.id DESC, COALESCE(o.discount_percent, 0) DESC LIMIT 8
