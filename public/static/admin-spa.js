@@ -1614,7 +1614,7 @@ function siCountLinks() {
   if (pairs) parts.push(pairs + (pairs === 1 ? ' par produto+afiliado' : ' pares produto+afiliado'))
   if (solo)  parts.push(solo  + (solo  === 1 ? ' link'                  : ' links'))
   el.textContent = parts.join(' + ') + ' detectado' + (items.length === 1 ? '' : 's')
-  // wid= já é removido no parser — nenhum aviso necessário
+  // wid= é preservado como ?wid= — sem aviso necessário
   const warnEl = document.getElementById('si-wid-warn')
   if (warnEl) warnEl.classList.add('hidden')
 }
