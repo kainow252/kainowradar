@@ -1310,7 +1310,7 @@ async function siImportDual(storeId, pairs) {
       if (m.price) line += ' | ' + m.price
       if (m.image) line += ' | ' + m.image
       // Passa mlbId como 5º campo quando temos /social/ como saveUrl mas mlbId do produto
-      // Isso permite ao backend deduplcar corretamente pelo MLB-ID mesmo sem ele na URL /social/
+      // Isso permite ao backend deduplicar corretamente pelo MLB-ID mesmo sem ele na URL /social/
       if (m.mlbId && pairs[i].url2) line += ' | mlb:' + m.mlbId
       lines.push(line)
     })
@@ -1364,7 +1364,13 @@ async function siFetchMetaClientSide(originalUrl, affiliateUrl) {
   let r = null
   try {
     let endpoint = '/admin/api/resolve-url?url=' + encodeURIComponent(originalUrl)
-    if (affiliateUrl) endpoint += '&url2=' + encodeURIComponent(affiliateUrl)
+    if (affiliateUrl) {
+      // Decodifica antes de re-encodar para evitar double-encode
+      // O ref= do /social/ já tem %2B, %2F etc — encodeURIComponent encodaria os % → %25
+      let affClean
+      try { affClean = decodeURIComponent(affiliateUrl) } catch(e) { affClean = affiliateUrl }
+      endpoint += '&url2=' + encodeURIComponent(affClean)
+    }
     r = await api('GET', endpoint, null, 18000)
   } catch(e) { r = null }
 
