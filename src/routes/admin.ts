@@ -2977,6 +2977,7 @@ admin.post('/api/enrich-offers', async (c) => {
 
   let enriched = 0
   let failed   = 0
+  let deleted  = 0
   const details: any[] = []
 
   for (const offer of offers) {
@@ -3106,8 +3107,22 @@ admin.post('/api/enrich-offers', async (c) => {
         enriched++
         details.push({ name: offer.name, price, image: image ? '✓' : '✗', mlb: mlbId, status: 'ok' })
       } else {
-        failed++
-        details.push({ name: offer.name, price: null, image: '✗', mlb: mlbId, status: 'sem_dados' })
+        // Não conseguiu enriquecer — deleta offer e produto do banco
+        try {
+          await DB.prepare(`DELETE FROM offers WHERE id = ?`).bind(offer.offer_id).run()
+          // Deleta o produto se não tiver outros offers vinculados
+          const otherOffers = await DB.prepare(
+            `SELECT COUNT(*) as n FROM offers WHERE product_id = ?`
+          ).bind(offer.product_id).first<{ n: number }>()
+          if (!otherOffers?.n) {
+            await DB.prepare(`DELETE FROM products WHERE id = ?`).bind(offer.product_id).run()
+          }
+          deleted++
+          details.push({ name: offer.name, mlb: mlbId, status: 'deletado' })
+        } catch (de: any) {
+          failed++
+          details.push({ name: offer.name, mlb: mlbId, status: 'sem_dados', error: de?.message })
+        }
       }
     } catch (e: any) {
       failed++
@@ -3126,6 +3141,7 @@ admin.post('/api/enrich-offers', async (c) => {
     ok: true,
     processed: offers.length,
     enriched,
+    deleted,
     failed,
     remaining: remaining?.n || 0,
     details,
@@ -7243,7 +7259,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260515p"><\/script>
+<script src="/static/admin-spa.js?v=20260515q"><\/script>
 </body>
 </html>`
 }

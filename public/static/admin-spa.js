@@ -10663,6 +10663,7 @@ async function startEnrichOffers() {
 
   let totalEnriched = 0
   let totalFailed   = 0
+  let totalDeleted  = 0
   let rounds        = 0
   let zeroRounds    = 0   // rodadas consecutivas sem enriquecimento
   const MAX_ROUNDS  = 60  // máximo 60 rodadas × 20 itens = 1200 offers
@@ -10685,9 +10686,10 @@ async function startEnrichOffers() {
 
     totalEnriched += data.enriched || 0
     totalFailed   += data.failed   || 0
+    totalDeleted  += data.deleted  || 0
 
-    // Controle de parada: 5 rodadas seguidas sem enriquecimento = para
-    if (data.enriched === 0 && data.processed > 0) {
+    // Controle de parada: 5 rodadas seguidas sem progresso (enrich ou delete) = para
+    if ((data.enriched || 0) + (data.deleted || 0) === 0 && data.processed > 0) {
       zeroRounds++
       if (zeroRounds >= 5) {
         if (log) {
@@ -10699,16 +10701,23 @@ async function startEnrichOffers() {
         break
       }
     } else {
-      zeroRounds = 0  // reseta contador se progrediu
+      zeroRounds = 0  // reseta se houve enriquecimento OU deleção
     }
 
     if (log && data.details?.length) {
       data.details.forEach(d => {
         const li = document.createElement('div')
-        li.className = d.status === 'ok' ? 'text-green-700' : 'text-slate-400'
-        const priceStr = d.price ? `R$ ${d.price.toFixed(2)}` : 'sem preço'
+        if (d.status === 'ok')            li.className = 'text-green-700'
+        else if (d.status === 'deletado') li.className = 'text-red-400'
+        else                              li.className = 'text-slate-400'
+        const priceStr = d.price ? `R$ ${d.price.toFixed(2)}` : ''
         const mlbStr   = d.mlb   ? ` [${d.mlb}]` : ''
-        li.textContent = `${d.status === 'ok' ? '✓' : '·'} ${(d.name||'').substring(0,45)}${mlbStr} — ${priceStr} img:${d.image}`
+        if (d.status === 'ok')
+          li.textContent = `✓ ${(d.name||'').substring(0,45)}${mlbStr} — ${priceStr} img:${d.image}`
+        else if (d.status === 'deletado')
+          li.textContent = `🗑️ ${(d.name||'').substring(0,45)}${mlbStr} — sem dados, removido`
+        else
+          li.textContent = `· ${(d.name||'').substring(0,45)}${mlbStr} — erro`
         log.appendChild(li)
         log.scrollTop = log.scrollHeight
       })
@@ -10716,7 +10725,7 @@ async function startEnrichOffers() {
 
     const rem = data.remaining || 0
     if (remaining) remaining.textContent = `${rem} restantes`
-    if (statusEl) statusEl.textContent = `✨ ${totalEnriched} enriquecidos · ${totalFailed} sem dados · ${rem} restantes`
+    if (statusEl) statusEl.textContent = `✨ ${totalEnriched} enriquecidos · 🗑️ ${totalDeleted} removidos · ${rem} restantes`
 
     // Progresso visual (estimado)
     const pct = rem === 0 ? 100 : Math.min(95, Math.round((rounds / MAX_ROUNDS) * 100))
@@ -10729,11 +10738,11 @@ async function startEnrichOffers() {
   }
 
   if (bar)  bar.style.width = '100%'
-  if (label) label.textContent = `✅ Concluído! ${totalEnriched} enriquecidos em ${rounds} rodada(s)`
+  if (label) label.textContent = `✅ Concluído! ${totalEnriched} enriquecidos · ${totalDeleted} removidos em ${rounds} rodada(s)`
   if (btn)  { btn.disabled = false; btn.textContent = '✨ Enriquecer Novamente' }
 
-  if (totalEnriched > 0)
-    toast(`✅ ${totalEnriched} produto(s) com preço/imagem atualizados!`, 'success')
+  if (totalEnriched > 0 || totalDeleted > 0)
+    toast(`✅ ${totalEnriched} atualizados, ${totalDeleted} sem dados removidos!`, totalEnriched > 0 ? 'success' : 'info')
   else
     toast('Não foi possível extrair dados de preço/imagem dos links', 'warning')
 }
