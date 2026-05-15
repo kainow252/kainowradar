@@ -9,14 +9,12 @@ const App = {
 }
 
 // ── Auth ─────────────────────────────────────────────────
-let _loginMode = 'user' // 'user' | 'master'
 
 function togglePwdVisibility(inputId, btn) {
   const inp = document.getElementById(inputId)
   if (!inp) return
   const showing = inp.type === 'text'
   inp.type = showing ? 'password' : 'text'
-  // Troca o ícone: olho aberto ↔ olho riscado
   const svg = btn.querySelector('svg')
   if (svg) {
     if (showing) {
@@ -24,27 +22,6 @@ function togglePwdVisibility(inputId, btn) {
     } else {
       svg.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
     }
-  }
-}
-
-function setLoginMode(mode) {
-  _loginMode = mode
-  const tabUser   = document.getElementById('tab-user')
-  const tabMaster = document.getElementById('tab-master')
-  const userFlds  = document.getElementById('login-user-fields')
-  const masterFlds= document.getElementById('login-master-fields')
-  const active    = 'flex-1 py-2 text-sm font-semibold rounded-lg bg-white shadow-sm text-slate-800 transition-all'
-  const inactive  = 'flex-1 py-2 text-sm font-semibold rounded-lg text-slate-400 hover:text-slate-600 transition-all'
-  if (mode === 'user') {
-    tabUser.className   = active
-    tabMaster.className = inactive
-    userFlds.classList.remove('hidden')
-    masterFlds.classList.add('hidden')
-  } else {
-    tabUser.className   = inactive
-    tabMaster.className = active
-    userFlds.classList.add('hidden')
-    masterFlds.classList.remove('hidden')
   }
 }
 
@@ -56,17 +33,10 @@ async function doLogin() {
   btn.disabled = true
 
   try {
-    let body = {}
-    if (_loginMode === 'user') {
-      const email = document.getElementById('login-email')?.value?.trim()
-      const pwd   = document.getElementById('login-password')?.value
-      if (!email || !pwd) { throw new Error('Preencha email e senha.') }
-      body = { email, password: pwd }
-    } else {
-      const pwd = document.getElementById('login-master-password')?.value
-      if (!pwd) { throw new Error('Digite a senha master.') }
-      body = { password: pwd }
-    }
+    const email = document.getElementById('login-email')?.value?.trim()
+    const pwd   = document.getElementById('login-password')?.value
+    if (!email || !pwd) { throw new Error('Preencha email e senha.') }
+    const body = { email, password: pwd }
 
     const res  = await fetch('/admin/api/login', {
       method: 'POST',

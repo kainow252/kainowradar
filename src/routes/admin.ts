@@ -7676,20 +7676,9 @@ function renderAdminSPA(): string {
     <div class="bg-white rounded-2xl p-6 shadow-2xl">
       <h2 class="text-lg font-bold text-slate-800 mb-5">Entrar no painel</h2>
       <div class="space-y-4">
-        <!-- Tabs: Usuário / Master -->
-        <div class="flex rounded-xl bg-slate-100 p-1 gap-1">
-          <button id="tab-user" onclick="setLoginMode('user')"
-            class="flex-1 py-2 text-sm font-semibold rounded-lg bg-white shadow-sm text-slate-800 transition-all">
-            👤 Usuário
-          </button>
-          <button id="tab-master" onclick="setLoginMode('master')"
-            class="flex-1 py-2 text-sm font-semibold rounded-lg text-slate-400 hover:text-slate-600 transition-all">
-            🔑 Master
-          </button>
-        </div>
 
-        <!-- Login usuário (email + senha) -->
-        <div id="login-user-fields" class="space-y-3">
+        <!-- Login (email + senha) -->
+        <div class="space-y-3">
           <div>
             <label class="block text-sm font-medium text-slate-600 mb-1.5">Email</label>
             <input type="email" id="login-email" class="input" placeholder="seu@email.com"
@@ -7703,23 +7692,6 @@ function renderAdminSPA(): string {
               <button type="button" onclick="togglePwdVisibility('login-password', this)"
                 class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors focus:outline-none" tabindex="-1">
                 <svg id="eye-login-password" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
-                </svg>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Login master (senha única ADMIN_SECRET) -->
-        <div id="login-master-fields" class="space-y-3 hidden">
-          <div>
-            <label class="block text-sm font-medium text-slate-600 mb-1.5">Senha master</label>
-            <div class="relative">
-              <input type="password" id="login-master-password" class="input pr-10" placeholder="••••••••"
-                onkeydown="if(event.key==='Enter') doLogin()">
-              <button type="button" onclick="togglePwdVisibility('login-master-password', this)"
-                class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors focus:outline-none" tabindex="-1">
-                <svg id="eye-login-master-password" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
                 </svg>
               </button>
