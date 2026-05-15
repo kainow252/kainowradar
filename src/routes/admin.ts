@@ -3300,36 +3300,142 @@ admin.post('/api/sync-products-from-offers', async (c) => {
   })
 })
 
-// ── POST /admin/api/fix-names — Corrige nomes ruins (publisher_id, slugs) ──
+// ── POST /admin/api/fix-names — Corrige nomes ruins tentando API ML primeiro ──
+// 1ª tentativa: busca nome real via API ML (/items/{mlbId}) pelo ml_item_id ou slug
+// 2ª tentativa (fallback): deleta produto inválido se não conseguir resolver
 admin.post('/api/fix-names', async (c) => {
   const { DB } = c.env
 
-  // Busca IDs dos produtos com nome inválido:
-  //   - "cfegdhabc..." = publisher_id vazando como nome
-  //   - "Produto MLB..." = item não resolvido pelo affiliate-bot/parseLine
-  //   - "Produto Import..." = placeholder genérico sem nome real
+  // Busca produtos com nome inválido + ml_item_id para tentar recuperar
   const { results: badProds } = await DB.prepare(
-    `SELECT id, name FROM products
-     WHERE name LIKE 'cfegdhabc%'
-        OR name LIKE 'Cfegdhabc%'
-        OR name LIKE 'Produto MLB%'
-        OR name LIKE 'Produto Import%'
+    `SELECT p.id, p.name, p.ml_item_id, p.slug,
+            o.affiliate_url
+     FROM products p
+     LEFT JOIN offers o ON o.product_id = p.id
+     WHERE p.name LIKE 'cfegdhabc%'
+        OR p.name LIKE 'Cfegdhabc%'
+        OR p.name LIKE 'Produto MLB%'
+        OR p.name LIKE 'Produto Import%'
      LIMIT 50`
-  ).all<{ id: number; name: string }>()
+  ).all<{ id: number; name: string; ml_item_id: string | null; slug: string; affiliate_url: string | null }>()
 
+  let fixed = 0
   let deleted = 0
+  const details: { id: number; old: string; new?: string; action: string }[] = []
+
+  // Helper inline para extrair MLB-ID de string
+  const xMlb = (s: string | null): string | null => {
+    if (!s) return null
+    const m = s.match(/\b(MLB)-?(\d{6,12})\b/i)
+    return m ? ('MLB' + m[2]).toUpperCase() : null
+  }
+
   for (const p of badProds) {
-    await DB.prepare(`DELETE FROM offers WHERE product_id = ?`).bind(p.id).run()
-    await DB.prepare(`DELETE FROM products WHERE id = ?`).bind(p.id).run()
-    deleted++
+    // Tenta extrair MLB-ID de múltiplas fontes
+    const mlbId = p.ml_item_id
+      ? (p.ml_item_id.startsWith('MLB') ? p.ml_item_id : 'MLB' + p.ml_item_id)
+      : (xMlb(p.slug) ?? xMlb(p.affiliate_url) ?? xMlb(p.name))
+
+    let resolved = false
+
+    if (mlbId) {
+      try {
+        const token = await getMlBearerToken(c.env)
+        if (token) {
+          const rItem = await fetch(
+            `https://api.mercadolibre.com/items/${mlbId}?attributes=id,title,price,thumbnail,pictures`,
+            {
+              headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+              signal: AbortSignal.timeout(7000),
+            }
+          )
+          if (rItem.ok) {
+            const d = await rItem.json() as any
+            if (d.title && d.title.length > 4) {
+              // Limpa o título igual ao cleanName do resolve-url
+              const cleanTitle = d.title
+                .replace(/\s+/g, ' ')
+                .replace(/[\u200B-\u200D\uFEFF]/g, '')
+                .trim()
+                .substring(0, 200)
+
+              // Atualiza nome, preço e imagem se disponíveis
+              const bestImg = (() => {
+                const pics: any[] = d.pictures || []
+                const p2 = pics.find((x: any) => x.url?.includes('mlstatic')) || pics[0]
+                return p2?.url || d.thumbnail || null
+              })()
+
+              await DB.prepare(`
+                UPDATE products SET
+                  name       = ?,
+                  best_price = CASE WHEN best_price IS NULL AND ? > 0 THEN ? ELSE best_price END,
+                  image_url  = CASE WHEN (image_url IS NULL OR image_url = '') AND ? != '' THEN ? ELSE image_url END,
+                  updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+              `).bind(
+                cleanTitle,
+                d.price ?? 0, d.price ?? 0,
+                bestImg ?? '', bestImg ?? '',
+                p.id
+              ).run()
+
+              // Atualiza também o título na oferta vinculada
+              await DB.prepare(`
+                UPDATE offers SET title = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE product_id = ? AND (title IS NULL OR title LIKE 'cfegdhabc%' OR title LIKE 'Produto%')
+              `).bind(cleanTitle, p.id).run().catch(() => {})
+
+              details.push({ id: p.id, old: p.name, new: cleanTitle, action: 'fixed' })
+              fixed++
+              resolved = true
+            }
+          }
+          // Se item não encontrado (404), tenta como Product ID (≤10 dígitos)
+          if (!resolved) {
+            const digits = mlbId.replace(/^MLB/i, '')
+            if (digits.length <= 10) {
+              const rProd = await fetch(
+                `https://api.mercadolibre.com/products/${mlbId}?attributes=id,name`,
+                { headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+                  signal: AbortSignal.timeout(5000) }
+              )
+              if (rProd.ok) {
+                const dp = await rProd.json() as any
+                if (dp.name && dp.name.length > 4) {
+                  const cleanTitle = dp.name.replace(/\s+/g, ' ').trim().substring(0, 200)
+                  await DB.prepare(
+                    `UPDATE products SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+                  ).bind(cleanTitle, p.id).run()
+                  details.push({ id: p.id, old: p.name, new: cleanTitle, action: 'fixed' })
+                  fixed++
+                  resolved = true
+                }
+              }
+            }
+          }
+        }
+      } catch { /* API falhou → deleta */ }
+    }
+
+    // Sem MLB-ID ou API falhou → deleta produto e ofertas
+    if (!resolved) {
+      await DB.prepare(`DELETE FROM offers WHERE product_id = ?`).bind(p.id).run()
+      await DB.prepare(`DELETE FROM products WHERE id = ?`).bind(p.id).run()
+      details.push({ id: p.id, old: p.name, action: 'deleted' })
+      deleted++
+    }
   }
 
   return c.json({
     ok: true,
+    fixed,
     deleted,
-    message: deleted > 0
-      ? `${deleted} produtos com nome inválido removidos.`
-      : 'Nenhum produto com nome inválido encontrado.'
+    total: badProds.length,
+    details,
+    message: badProds.length === 0
+      ? 'Nenhum produto com nome inválido encontrado.'
+      : `${fixed} corrigidos via API ML · ${deleted} removidos (sem MLB-ID).`
   })
 })
 

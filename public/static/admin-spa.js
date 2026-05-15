@@ -10357,6 +10357,22 @@ async function renderFeedIngestion(area) {
         </div>
       </div>
 
+      <!-- Card: Corrigir Nomes Inválidos -->
+      <div class="bg-rose-50 border border-rose-200 rounded-2xl p-5" id="fixnames-card">
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <h4 class="font-bold text-rose-900">🔧 Corrigir Nomes Inválidos</h4>
+            <p class="text-xs text-rose-700 mt-0.5">Produtos com nome "Produto MLB…", "cfegdhabc…" ou "Produto Importado…". Tenta recuperar o nome real via API do Mercado Livre antes de remover.</p>
+          </div>
+          <button onclick="runFixNames()" id="fixnames-btn"
+            class="flex items-center gap-2 bg-rose-500 hover:bg-rose-600 text-white text-sm font-bold px-4 py-2.5 rounded-xl transition-all shadow-sm whitespace-nowrap">
+            🔧 Corrigir Agora
+          </button>
+        </div>
+        <div id="fixnames-status" class="text-xs text-rose-700">Clique para verificar produtos com nomes inválidos.</div>
+        <div id="fixnames-log" class="hidden mt-3 max-h-40 overflow-y-auto text-xs space-y-0.5 font-mono text-rose-800 bg-rose-100 rounded-lg p-2"></div>
+      </div>
+
       <!-- Upload / Ingestion Card -->
       <div class="stat-card">
         <h4 class="font-semibold text-slate-700 mb-4">➕ Novo Lote</h4>
@@ -11211,6 +11227,52 @@ async function loadEnrichCount() {
     }
   } else {
     statusEl.textContent = 'Clique em "Enriquecer Agora" para buscar preço e imagem dos produtos'
+  }
+}
+
+async function runFixNames() {
+  const btn    = document.getElementById('fixnames-btn')
+  const status = document.getElementById('fixnames-status')
+  const log    = document.getElementById('fixnames-log')
+  if (!btn || !status) return
+
+  btn.disabled = true
+  btn.textContent = '⏳ Processando…'
+  status.textContent = 'Buscando produtos com nomes inválidos…'
+  log.classList.add('hidden')
+  log.innerHTML = ''
+
+  try {
+    const res = await api('POST', '/admin/api/fix-names')
+    if (!res?.ok && res?.error) throw new Error(res.error)
+
+    const { fixed = 0, deleted = 0, total = 0, message = '', details = [] } = res || {}
+
+    status.textContent = total === 0
+      ? '✅ Nenhum produto com nome inválido encontrado.'
+      : `✅ ${message}`
+
+    if (details.length > 0) {
+      log.classList.remove('hidden')
+      log.innerHTML = details.map(d => {
+        if (d.action === 'fixed') {
+          return `<div class="text-green-700">✅ #${d.id} <span class="line-through text-rose-400">${d.old}</span> → <b>${d.new}</b></div>`
+        } else {
+          return `<div class="text-rose-600">🗑 #${d.id} removido (${d.old})</div>`
+        }
+      }).join('')
+    }
+
+    if (fixed > 0 || deleted > 0) {
+      toast(`🔧 ${fixed} corrigidos · ${deleted} removidos`, 'success')
+      setTimeout(() => renderImports?.(), 1500)
+    }
+  } catch (e) {
+    status.textContent = '❌ Erro: ' + (e?.message || String(e))
+    toast('Erro ao corrigir nomes', 'error')
+  } finally {
+    btn.disabled = false
+    btn.textContent = '🔧 Corrigir Agora'
   }
 }
 
