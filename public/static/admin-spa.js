@@ -905,6 +905,194 @@ function siTab(tab, storeId) {
   if (tab === 'history' && storeId) siLoadHistory(storeId)
 }
 
+// ── CSV: lê arquivo e envia para importação ───────────────────────
+function siReadCsv(input, storeId) {
+  const file = input.files?.[0]
+  if (!file) return
+  const nameEl = document.getElementById('si-csv-name')
+  if (nameEl) nameEl.textContent = file.name
+
+  const reader = new FileReader()
+  reader.onload = e => {
+    const text = e.target?.result || ''
+    const liveArea = document.getElementById('si-csv-live-area')
+    if (!liveArea) return
+
+    // Tenta detectar se é CSV com colunas (url,name,price,image_url)
+    const lines = text.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#'))
+    const hasCols = lines[0] && lines[0].split(',').length >= 2 && !lines[0].startsWith('http')
+    const isHeader = hasCols && /url|name|link|produto/i.test(lines[0])
+    const dataLines = isHeader ? lines.slice(1) : lines
+
+    // Extrai URLs e dados opcionais
+    const items = []
+    for (const line of dataLines) {
+      if (!line.trim()) continue
+      // Tenta CSV com colunas
+      const cols = line.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/) // split respeitando aspas
+      const urlRaw = cols[0]?.replace(/^["']|["']$/g, '').trim()
+      if (!urlRaw || !urlRaw.startsWith('http')) continue
+      const name  = cols[1]?.replace(/^["']|["']$/g, '').trim() || ''
+      const price = parseFloat(cols[2]?.replace(/[^0-9.,]/g, '').replace(',', '.')) || 0
+      const img   = cols[3]?.replace(/^["']|["']$/g, '').trim() || ''
+
+      // Verifica se há 2ª URL na mesma linha (par produto+social)
+      const allUrls = (line.match(/https?:\/\/[^\s,"'<>\n\r]+/g) || [])
+        .map(u => u.replace(/[.,;)]+$/, '').trim())
+      const socialUrl  = allUrls.find(u => /\/social\/[a-z0-9]+/i.test(u))
+      const productUrl = allUrls.find(u => /mercadolivre\.com\.br|meli\.la/i.test(u) && !/\/social\//i.test(u))
+
+      if (socialUrl && productUrl) {
+        items.push({ url1: productUrl, url2: socialUrl, name, price, image_url: img })
+      } else {
+        items.push({ url1: urlRaw, name, price, image_url: img })
+      }
+    }
+
+    if (!items.length) {
+      liveArea.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">
+        ❌ Nenhuma URL válida encontrada no arquivo. Verifique o formato.
+      </div>`
+      return
+    }
+
+    liveArea.innerHTML = `
+      <div class="bg-green-50 border border-green-200 rounded-xl p-3 mb-3">
+        <p class="text-sm font-semibold text-green-700">✅ ${items.length} ${items.length === 1 ? 'item lido' : 'itens lidos'} de "${file.name}"</p>
+        <p class="text-xs text-green-600 mt-0.5">${items.filter(i => i.url2).length} par(es) produto+afiliado · ${items.filter(i => !i.url2).length} link(s) simples</p>
+      </div>
+      <div class="max-h-40 overflow-y-auto bg-slate-50 rounded-xl border border-slate-200 divide-y divide-slate-100 mb-3">
+        ${items.slice(0, 20).map((it, idx) => `
+          <div class="px-3 py-1.5 text-xs font-mono text-slate-500 truncate">
+            ${idx + 1}. ${(it.url1 || '').substring(0, 55)}${it.url2 ? ' <span class="text-indigo-500">+ /social/</span>' : ''}
+            ${it.name ? `<span class="text-slate-400 ml-1">— ${it.name}</span>` : ''}
+          </div>`).join('')}
+        ${items.length > 20 ? `<div class="px-3 py-1.5 text-xs text-slate-400">... e mais ${items.length - 20} itens</div>` : ''}
+      </div>
+      <button onclick="siImportCsvItems(${storeId}, ${JSON.stringify(items).replace(/</g,'\\u003c')})"
+        class="w-full py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2">
+        🚀 Importar ${items.length} ${items.length === 1 ? 'item' : 'itens'}
+      </button>
+    `
+  }
+  reader.readAsText(file, 'UTF-8')
+}
+
+// Executa importação dos itens lidos do CSV
+async function siImportCsvItems(storeId, items) {
+  const liveArea = document.getElementById('si-csv-live-area')
+  if (!liveArea) return
+  liveArea.innerHTML = `<div class="flex items-center gap-2 text-sm text-slate-600 py-3">
+    <div class="animate-spin text-xl">⏳</div> Importando ${items.length} itens...
+  </div>`
+
+  // Monta o texto no mesmo formato da aba Colar (um par por linha)
+  const textLines = items.map(it => it.url2 ? `${it.url1} ${it.url2}` : it.url1)
+  const raw = textLines.join('\n')
+
+  const data = await api('POST', `/admin/api/stores/${storeId}/import-links`, { links: raw }, 30000)
+  siShowImportResult(data, liveArea)
+}
+
+// ── HISTÓRICO: carrega importações da loja ────────────────────────
+async function siLoadHistory(storeId) {
+  const container = document.getElementById('si-history-content')
+  if (!container) return
+  container.innerHTML = '<div class="text-center py-8 text-slate-400 text-sm animate-pulse">🔄 Carregando histórico...</div>'
+
+  const data = await api('GET', `/admin/api/stores/${storeId}/import-links/history`)
+  const rows = data?.results || data || []
+
+  if (!rows.length) {
+    container.innerHTML = `
+      <div class="text-center py-12 text-slate-400">
+        <div class="text-4xl mb-3">🕓</div>
+        <div class="font-semibold text-sm">Nenhuma importação para esta loja</div>
+        <div class="text-xs mt-1">Use a aba "Colar Links" ou "CSV" para importar</div>
+      </div>`
+    return
+  }
+
+  const statusIcon  = s => s === 'importado' ? '✅' : s === 'duplicado' ? '🔁' : s === 'erro' ? '❌' : '🔗'
+  const statusColor = s => s === 'importado' ? '' : s === 'duplicado' ? 'bg-amber-50/60' : s === 'erro' ? 'bg-red-50/60' : 'bg-blue-50/40'
+
+  container.innerHTML = `
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-xs font-semibold text-slate-600">${rows.length} importação(ões) registrada(s)</span>
+      <button onclick="siLoadHistory(${storeId})" class="text-xs text-slate-400 hover:text-blue-600 transition-colors">🔄 Atualizar</button>
+    </div>
+    <div class="border border-slate-100 rounded-xl overflow-hidden">
+      <div class="max-h-80 overflow-y-auto divide-y divide-slate-50">
+        ${rows.map(r => {
+          const date = r.created_at || r.imported_at
+            ? new Date(r.created_at || r.imported_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+            : '—'
+          const shortUrl = (r.affiliate_url || r.original_url || r.url || '').replace('https://','').substring(0, 35)
+          return `<div class="flex items-center gap-2.5 px-3 py-2 ${statusColor(r.status)} hover:bg-slate-50 transition-colors">
+            <span class="text-sm flex-shrink-0">${statusIcon(r.status)}</span>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-semibold text-slate-700 truncate">${r.name || r.title || r.product_name || r.ml_item_id || '—'}</div>
+              <div class="text-xs font-mono text-slate-400 truncate">${shortUrl}</div>
+            </div>
+            <div class="text-right flex-shrink-0">
+              ${r.best_price || r.price ? `<div class="text-xs font-bold text-green-700">${fBRL(r.best_price || r.price)}</div>` : ''}
+              <div class="text-xs text-slate-300">${date}</div>
+            </div>
+          </div>`
+        }).join('')}
+      </div>
+    </div>
+  `
+}
+
+// Mostra resultado de importação no liveArea
+function siShowImportResult(data, container) {
+  if (!container) return
+  if (!data || data.error) {
+    container.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700 mt-2">
+      ❌ ${data?.error || 'Erro na importação'}
+    </div>`
+    return
+  }
+  const { imported = 0, duplicates = 0, errors = 0, results = [] } = data
+  const total = results.length || imported + duplicates + errors
+  container.innerHTML = `
+    <div class="grid grid-cols-3 gap-2 mt-3 mb-3">
+      <div class="bg-green-50 rounded-xl p-2.5 text-center">
+        <div class="text-xl font-black text-green-700">${imported}</div>
+        <div class="text-xs text-green-500 font-medium">Importados</div>
+      </div>
+      <div class="bg-amber-50 rounded-xl p-2.5 text-center">
+        <div class="text-xl font-black text-amber-700">${duplicates}</div>
+        <div class="text-xs text-amber-500 font-medium">Duplicados</div>
+      </div>
+      <div class="bg-red-50 rounded-xl p-2.5 text-center">
+        <div class="text-xl font-black text-red-700">${errors}</div>
+        <div class="text-xs text-red-500 font-medium">Erros</div>
+      </div>
+    </div>
+    ${results.length ? `
+    <div class="border border-slate-100 rounded-xl overflow-hidden">
+      <div class="max-h-52 overflow-y-auto divide-y divide-slate-50">
+        ${results.map(r => {
+          const icon = r.status === 'importado' ? '✅' : r.status === 'duplicado' ? '🔁' : '❌'
+          const bg   = r.status === 'importado' ? '' : r.status === 'duplicado' ? 'bg-amber-50/50' : 'bg-red-50/50'
+          return `<div class="flex items-center gap-2 px-3 py-2 ${bg}">
+            <span class="text-sm">${icon}</span>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-semibold text-slate-700 truncate">${r.name || '—'}</div>
+              ${r.category ? `<div class="text-xs text-slate-400">📦 ${r.category}</div>` : ''}
+            </div>
+            ${r.price ? `<div class="text-xs font-bold text-green-700 flex-shrink-0">${fBRL(r.price)}</div>` : ''}
+          </div>`
+        }).join('')}
+      </div>
+    </div>` : ''}
+  `
+  if (imported > 0) toast(`✅ ${imported} produto(s) importado(s) com sucesso!`, 'success')
+  else if (duplicates > 0) toast(`🔁 ${duplicates} link(s) já importados anteriormente`, 'info')
+}
+
 // Detecta se uma URL é link afiliado /social/ do ML
 function siIsSocialUrl(u) {
   return /\/social\/[a-z0-9]+/i.test(u)

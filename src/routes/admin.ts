@@ -1983,6 +1983,39 @@ admin.get('/api/stores/ml/import-history', async (c) => {
   return c.json({ results })
 })
 
+// ── GET /admin/api/stores/:id/import-history ─────────────────────
+// Retorna histórico das últimas 100 importações de uma loja específica
+// (busca na tabela offers JOIN products filtrado por store_id)
+admin.get('/api/stores/:id/import-history', async (c) => {
+  const { DB } = c.env
+  const storeId = parseInt(c.req.param('id'))
+  if (!storeId) return c.json({ results: [] })
+
+  const { results } = await DB.prepare(`
+    SELECT
+      o.id,
+      p.name,
+      p.category,
+      p.slug,
+      o.affiliate_url,
+      o.price        AS best_price,
+      o.image_url,
+      o.created_at,
+      CASE
+        WHEN o.created_at IS NOT NULL THEN 'importado'
+        ELSE 'erro'
+      END AS status
+    FROM offers o
+    JOIN products p ON p.id = o.product_id
+    WHERE o.store_id = ?
+      AND o.source = 'manual'
+    ORDER BY o.created_at DESC
+    LIMIT 100
+  `).bind(storeId).all<any>()
+
+  return c.json({ results })
+})
+
 // ── GET /admin/api/proxy-img ─────────────────────────────────────
 // Proxy de imagem para contornar hotlink protection do mlstatic.com
 // Busca a imagem no servidor com Referer correto e re-serve ao browser
@@ -6968,7 +7001,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260515c"><\/script>
+<script src="/static/admin-spa.js?v=20260515d"><\/script>
 </body>
 </html>`
 }
