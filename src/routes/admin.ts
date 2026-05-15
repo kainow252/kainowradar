@@ -3013,6 +3013,72 @@ admin.get('/api/stores/:storeId/import-links/history', async (c) => {
   return c.json({ results: rows.results })
 })
 
+// ── POST /admin/api/sync-products-from-offers ─────────────────────────────
+// Copia image_url, best_price, title e best_store_id da offer mais barata
+// para cada produto que está com esses campos em branco.
+// Roda em lotes de 100 — chame várias vezes até "synced: 0".
+admin.post('/api/sync-products-from-offers', async (c) => {
+  const { DB } = c.env
+  const body: any = await c.req.json().catch(() => ({}))
+  const BATCH = Math.min(parseInt(body.limit) || 100, 200)
+
+  // Produtos que ainda precisam de sync: sem image_url OU sem best_price
+  const { results: prods } = await DB.prepare(`
+    SELECT p.id
+    FROM products p
+    WHERE p.is_active = 1
+      AND (p.image_url IS NULL OR p.image_url = '' OR p.best_price IS NULL)
+    LIMIT ?
+  `).bind(BATCH).all<{ id: number }>()
+
+  if (!prods.length) {
+    return c.json({ ok: true, synced: 0, message: 'Todos os produtos já estão sincronizados.' })
+  }
+
+  let synced = 0
+  for (const prod of prods) {
+    // Pega a offer com menor preço > 0 com imagem disponível para este produto
+    const best = await DB.prepare(`
+      SELECT o.price, o.image_url, o.title, o.store_id
+      FROM offers o
+      WHERE o.product_id = ?
+        AND o.is_active = 1
+        AND o.price > 0
+        AND o.image_url IS NOT NULL AND o.image_url != ''
+      ORDER BY o.price ASC LIMIT 1
+    `).bind(prod.id).first<any>()
+
+    if (!best) continue  // offer ainda sem dados — pula
+
+    await DB.prepare(`
+      UPDATE products SET
+        best_price    = CASE WHEN best_price IS NULL OR ? < best_price THEN ? ELSE best_price END,
+        image_url     = CASE WHEN image_url IS NULL OR image_url = '' THEN ? ELSE image_url END,
+        name          = CASE WHEN name LIKE 'Produto Import%' OR name LIKE 'cfegdhabc%' THEN ? ELSE name END,
+        best_store_id = CASE WHEN best_store_id IS NULL THEN ? ELSE best_store_id END,
+        offer_count   = CASE WHEN offer_count = 0 THEN 1 ELSE offer_count END,
+        updated_at    = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(
+      best.price, best.price,
+      best.image_url,
+      best.title || ('Produto ' + prod.id),
+      best.store_id,
+      prod.id
+    ).run()
+
+    synced++
+  }
+
+  const remaining = prods.length === BATCH ? '?' : '0'
+  return c.json({
+    ok: true,
+    synced,
+    total_checked: prods.length,
+    message: `${synced} produtos sincronizados das offers.`,
+  })
+})
+
 // ── POST /admin/api/fix-names — Corrige nomes ruins (publisher_id, slugs) ──
 admin.post('/api/fix-names', async (c) => {
   const { DB } = c.env
