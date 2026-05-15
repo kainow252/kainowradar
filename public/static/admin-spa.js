@@ -935,8 +935,8 @@ function openStoreImport(storeId, storeName) {
         <!-- PAINEL: Em Massa (fila assíncrona ilimitada) -->
         <div id="si-panel-mass" class="hidden">
           <div class="bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 rounded-xl p-3 mb-3">
-            <p class="text-xs font-bold text-indigo-800">&#128230; Importação em Massa — sem limite de links</p>
-            <p class="text-xs text-indigo-600 mt-0.5">Cole 10, 1.000 ou 10.000 links. O sistema enfileira tudo e processa <strong>100 por rodada</strong> automaticamente.</p>
+            <p class="text-xs font-bold text-indigo-800">&#128230; Importação em Massa — direto no banco</p>
+            <p class="text-xs text-indigo-600 mt-0.5">Cole links do ML, meli.la ou pares produto+afiliado. Importação em lotes de 50 — sem fila, sem delay.</p>
           </div>
 
           <div class="mb-3">
@@ -959,9 +959,9 @@ function openStoreImport(storeId, storeName) {
 
           <button id="si-mass-btn" onclick="siMassImport(${storeId})"
             class="w-full py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 active:scale-95 transition-all">
-            &#128640; Enfileirar e Processar
+            &#128640; Importar Agora
           </button>
-          <p class="text-xs text-slate-400 text-center mt-2">Os links são salvos na fila e processados em lotes de 100. Você pode fechar o modal — o processamento continua.</p>
+          <p class="text-xs text-slate-400 text-center mt-2">Lotes de 50 links enviados diretamente — resultado imediato. Use <strong>Enriquecer Ofertas</strong> depois para completar nome/preço/imagem.</p>
         </div>
 
         <!-- PAINEL: Histórico -->
@@ -989,13 +989,13 @@ function siTab(tab, storeId) {
   if (tab === 'history' && storeId) siLoadHistory(storeId)
 }
 
-// ── EM MASSA: fila assíncrona ilimitada ──────────────────────────
+// ── EM MASSA: importação direta via import-links (chunks de 50) ──
 
 function siMassCount() {
   const val = document.getElementById('si-mass-textarea')?.value || ''
-  const urls = (val.match(/https?:\/\/[^\s,;"'<>\n\r]+/g) || [])
-    .map(u => u.replace(/[.,;]+$/, '').trim()).filter(Boolean)
-  const n = new Set(urls).size
+  // Usa o mesmo parser inteligente da aba Colar Links (preserva wid=, dedup real)
+  const items = siParseTextarea(val)
+  const n = items.length
   const el = document.getElementById('si-mass-count')
   if (!el) return
   el.textContent = n === 0 ? '0 links'
@@ -1005,157 +1005,169 @@ function siMassCount() {
 }
 
 async function siMassImport(storeId) {
-  const ta  = document.getElementById('si-mass-textarea')
-  const btn = document.getElementById('si-mass-btn')
+  const ta      = document.getElementById('si-mass-textarea')
+  const btn     = document.getElementById('si-mass-btn')
   const statusEl = document.getElementById('si-mass-status')
 
-  const val = ta?.value || ''
-  const rawUrls = (val.match(/https?:\/\/[^\s,;"'<>\n\r]+/g) || [])
-    .map(u => u.replace(/[.,;]+$/, '').trim()).filter(Boolean)
-  const urls = [...new Set(rawUrls)]
+  const val   = ta?.value || ''
+  // Usa o mesmo parser inteligente: detecta pares produto+afiliado, preserva wid=
+  const items = siParseTextarea(val)
 
-  if (!urls.length) { toast('Cole pelo menos um link!', 'error'); return }
+  if (!items.length) { toast('Cole pelo menos um link!', 'error'); return }
 
-  // ── Passo 1: Enfileirar em lotes de 5000 ─────────────────
+  // Monta as linhas no formato que /import-links espera
+  // Para pares: usa url2 (afiliado) como principal e injeta mlb: como hint
+  // Para links simples: passa direto
+  const hasPairs = items.some(it => it.url2)
+  const lines = items.map(it => {
+    const saveUrl  = it.url2 || it.url1
+    if (!it.url2) return saveUrl  // link simples
+    // par produto+afiliado → extrai MLB do url1 como hint
+    const mlbMatch = (it.url1 || '').match(/\b(MLB[\-]?\d{8,12})\b/i)
+    const mlbHint  = mlbMatch ? ' | mlb:' + mlbMatch[1].replace('-','').toUpperCase() : ''
+    return saveUrl + mlbHint
+  })
+
+  const total = lines.length
+
+  // Mostra painel de status e usa siFastImportChunked com IDs próprios da aba Em Massa
   btn.disabled = true
-  btn.textContent = '⏳ Enfileirando ' + urls.length.toLocaleString('pt-BR') + ' links...'
+  btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> Importando ' + total.toLocaleString('pt-BR') + ' links...'
   statusEl.classList.remove('hidden')
 
-  const showStatus = (html) => { statusEl.innerHTML = html }
+  // Cria zona de live-feed reutilizando o mesmo HTML do siFastImportChunked
+  statusEl.innerHTML = ''
 
-  showStatus(`
-    <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-3 text-xs text-indigo-800">
-      <div class="font-bold mb-1">📥 Enfileirando ${urls.length.toLocaleString('pt-BR')} links...</div>
-      <div class="h-2 bg-indigo-100 rounded-full overflow-hidden mt-2">
-        <div id="si-mass-bar-enq" class="h-full bg-indigo-400 rounded-full transition-all duration-300" style="width:5%"></div>
+  // Wrapper que o siFastImportChunked vai preencher (usa id si-fast-*)
+  // Precisamos criar um div vazio para ele escrever dentro
+  const liveWrapper = document.createElement('div')
+  liveWrapper.id = 'si-mass-live'
+  statusEl.appendChild(liveWrapper)
+
+  const CHUNK = 50
+  const chunks = []
+  for (let i = 0; i < total; i += CHUNK) chunks.push(lines.slice(i, i + CHUNK))
+
+  // Injeta o HTML de progresso (mesmo layout do siFastImportChunked)
+  liveWrapper.innerHTML = `
+    <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-3">
+      <p class="text-sm font-semibold text-indigo-800">⚡ Importando — <span id="si-fast-label">${total.toLocaleString('pt-BR')} links em ${chunks.length} lote(s)</span></p>
+      <p class="text-xs text-indigo-600 mt-1">Lotes de 50 direto no banco — sem fila intermediária.</p>
+      <div class="flex justify-between text-xs text-slate-500 mt-2 mb-1">
+        <span id="si-fast-status">Preparando...</span>
+        <span id="si-fast-count" class="font-bold text-indigo-600">0/${total}</span>
       </div>
-    </div>`)
-
-  // Converte URLs em items para o feed/ingest
-  const items = urls.map(u => ({
-    name: nameFromUrl(u) || ('Produto ' + u.split('/').pop()?.slice(0,30) || 'Importado'),
-    affiliate_url: u,
-    product_url: u,
-    price: null
-  }))
-
-  // Enfileira em lotes de 5000 (limite do endpoint)
-  const INGEST_CHUNK = 5000
-  let totalQueued = 0
-  let batchIds = []
-
-  for (let i = 0; i < items.length; i += INGEST_CHUNK) {
-    const chunk = items.slice(i, i + INGEST_CHUNK)
-    const pct = Math.round(((i + chunk.length) / items.length) * 100)
-    const bar = document.getElementById('si-mass-bar-enq')
-    if (bar) bar.style.width = Math.max(pct, 5) + '%'
-
-    const res = await api('POST', '/admin/api/feed/ingest', {
-      store_id: storeId,
-      network: 'manual',
-      notes: `importação em massa — ${urls.length} links — lote ${Math.floor(i/INGEST_CHUNK)+1}`,
-      items: chunk
-    }, 30000)
-
-    if (!res?.ok) {
-      showStatus(`<div class="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-700">❌ Erro ao enfileirar: ${res?.error || 'falha'}</div>`)
-      btn.disabled = false
-      btn.textContent = '⚠ Tentar novamente'
-      return
-    }
-    totalQueued += res.total_queued || chunk.length
-    batchIds.push(res.batch_id)
-  }
-
-  // ── Passo 2: Processar de 100 em 100 com polling ──────────
-  showStatus(`
-    <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-3">
-      <div class="flex items-center justify-between mb-2">
-        <span class="text-xs font-bold text-indigo-800">⚙️ Processando fila...</span>
-        <span id="si-mass-pct" class="text-xs font-bold text-indigo-600">0%</span>
+      <div class="h-2.5 bg-indigo-100 rounded-full overflow-hidden">
+        <div id="si-fast-bar" class="h-full bg-indigo-500 rounded-full transition-all duration-300" style="width:2%"></div>
       </div>
-      <div class="h-3 bg-indigo-100 rounded-full overflow-hidden mb-2">
-        <div id="si-mass-bar" class="h-full bg-gradient-to-r from-indigo-500 to-blue-500 rounded-full transition-all duration-500" style="width:0%"></div>
-      </div>
-      <div class="flex justify-between text-xs text-indigo-600">
-        <span id="si-mass-done">0 processados</span>
-        <span class="text-indigo-400">de ${totalQueued.toLocaleString('pt-BR')} enfileirados</span>
-      </div>
-      <div id="si-mass-log" class="mt-2 max-h-28 overflow-y-auto text-xs text-slate-500 font-mono space-y-0.5"></div>
-    </div>`)
+    </div>
+    <div id="si-fast-log" class="text-xs text-slate-500 space-y-0.5 max-h-32 overflow-y-auto"></div>`
 
-  let totalProcessed = 0
-  let totalImported  = 0
-  let totalErrors    = 0
-  let round = 0
-  const PROCESS_BATCH = 100
+  let totalImported   = 0
+  let totalDuplicates = 0
+  let totalErrors     = 0
+  let processedLines  = 0
 
-  // Processa todas as batches em sequência
-  for (const batchId of batchIds) {
-    let pendingInBatch = Infinity
+  try {
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const chunk = chunks[ci]
+      const pct   = Math.round((ci / chunks.length) * 100)
 
-    while (pendingInBatch > 0) {
-      round++
-      const res = await api('POST', `/admin/api/feed/process?batch_id=${batchId}&limit=${PROCESS_BATCH}`, {}, 30000)
-      if (!res) break
+      const barEl    = document.getElementById('si-fast-bar')
+      const statusEl2 = document.getElementById('si-fast-status')
+      const countEl  = document.getElementById('si-fast-count')
+      if (barEl)     barEl.style.width = Math.max(pct, 2) + '%'
+      if (statusEl2) statusEl2.textContent = `Lote ${ci + 1} de ${chunks.length}...`
+      if (countEl)   countEl.textContent   = processedLines + '/' + total
 
-      pendingInBatch = res.pending_remaining ?? 0
-      const proc = res.processed || 0
-      totalProcessed += proc
-      totalImported  += (res.imported || 0) + (res.matched || 0) + (res.updated || 0)
-      totalErrors    += res.errors || 0
+      btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> Lote ' + (ci+1) + '/' + chunks.length + ' — ' + processedLines + '/' + total
 
-      const pct = totalQueued > 0 ? Math.round((totalProcessed / totalQueued) * 100) : 0
-      const bar  = document.getElementById('si-mass-bar')
-      const pctEl = document.getElementById('si-mass-pct')
-      const doneEl = document.getElementById('si-mass-done')
-      const log  = document.getElementById('si-mass-log')
-      if (bar) bar.style.width = Math.min(pct, 100) + '%'
-      if (pctEl) pctEl.textContent = pct + '%'
-      if (doneEl) doneEl.textContent = totalProcessed.toLocaleString('pt-BR') + ' processados'
-      if (log) {
-        const line = document.createElement('div')
-        line.textContent = `Rodada ${round}: +${proc} | ✅ ${res.imported||0} salvos | ⚠ ${res.errors||0} erros | 🔁 ${pendingInBatch} restantes`
-        log.prepend(line)
+      const data = await api('POST', '/admin/api/stores/' + storeId + '/import-links',
+        { links: chunk.join('\n') }, 60000)
+
+      if (!data) {
+        const logEl = document.getElementById('si-fast-log')
+        if (logEl) logEl.innerHTML += `<div class="text-red-500">⚠ Lote ${ci+1}: sem resposta (timeout) — interrompido.</div>`
+        break
       }
 
-      if (proc === 0 || pendingInBatch === 0) break
+      processedLines  += chunk.length
+      totalImported   += data.imported   || 0
+      totalDuplicates += data.duplicates || 0
+      totalErrors     += data.errors     || 0
+
+      const logEl = document.getElementById('si-fast-log')
+      if (logEl) {
+        const icon = data.ok ? '✅' : '⚠'
+        logEl.innerHTML += `<div>${icon} Lote ${ci+1}: ${data.imported||0} importados · ${data.duplicates||0} duplicados · ${data.errors||0} erros</div>`
+        logEl.scrollTop = logEl.scrollHeight
+      }
     }
-  }
 
-  // ── Passo 3: Resultado final ──────────────────────────────
-  const enrichTip = totalImported > 0
-    ? `<p class="text-xs text-indigo-600 mt-2">💡 Use <strong>Enriquecer Ofertas</strong> para completar preço, nome e imagem dos produtos importados.</p>`
-    : ''
+    // Barra 100%
+    const barEl     = document.getElementById('si-fast-bar')
+    const statusEl2 = document.getElementById('si-fast-status')
+    const countEl   = document.getElementById('si-fast-count')
+    const labelEl   = document.getElementById('si-fast-label')
+    if (barEl)     { barEl.style.width = '100%'; barEl.className = barEl.className.replace('bg-indigo-500','bg-green-500') }
+    if (statusEl2) statusEl2.textContent = '✓ Concluído!'
+    if (countEl)   countEl.textContent   = processedLines + '/' + total
+    if (labelEl)   labelEl.textContent   = `${totalImported} importados · ${totalDuplicates} duplicados · ${totalErrors} erros`
 
-  showStatus(`
-    <div class="bg-green-50 border border-green-200 rounded-xl p-4">
-      <p class="text-sm font-bold text-green-800">✅ Importação concluída!</p>
-      <div class="grid grid-cols-3 gap-2 mt-3">
-        <div class="bg-white rounded-lg p-2 text-center border border-green-100">
-          <div class="text-xl font-black text-green-700">${totalQueued.toLocaleString('pt-BR')}</div>
-          <div class="text-xs text-green-500">Enfileirados</div>
-        </div>
-        <div class="bg-white rounded-lg p-2 text-center border border-green-100">
-          <div class="text-xl font-black text-blue-700">${totalImported.toLocaleString('pt-BR')}</div>
-          <div class="text-xs text-blue-500">Salvos</div>
-        </div>
-        <div class="bg-white rounded-lg p-2 text-center border border-green-100">
-          <div class="text-xl font-black text-${totalErrors>0?'red':'slate'}-600">${totalErrors.toLocaleString('pt-BR')}</div>
-          <div class="text-xs text-${totalErrors>0?'red':'slate'}-400">Erros</div>
-        </div>
-      </div>
-      ${enrichTip}
-    </div>`)
+    // Card de resultado final
+    const enrichTip = totalImported > 0
+      ? `<p class="text-xs text-indigo-600 mt-2">💡 Use <strong>Enriquecer Ofertas</strong> para completar preço, nome e imagem.</p>`
+      : ''
 
-  toast('✓ ' + totalImported.toLocaleString('pt-BR') + ' produtos importados!', 'success')
-  btn.disabled = false
-  btn.textContent = '🔄 Importar mais'
-  btn.onclick = () => {
-    ta.value = ''
-    siMassCount()
-    statusEl.classList.add('hidden')
-    btn.textContent = '🚀 Enfileirar e Processar'
+    const resultCard = document.createElement('div')
+    resultCard.innerHTML = `
+      <div class="bg-green-50 border border-green-200 rounded-xl p-4 mt-3">
+        <p class="text-sm font-bold text-green-800">✅ Importação concluída!</p>
+        <div class="grid grid-cols-3 gap-2 mt-3">
+          <div class="bg-white rounded-lg p-2 text-center border border-green-100">
+            <div class="text-xl font-black text-green-700">${total.toLocaleString('pt-BR')}</div>
+            <div class="text-xs text-green-500">Enviados</div>
+          </div>
+          <div class="bg-white rounded-lg p-2 text-center border border-green-100">
+            <div class="text-xl font-black text-blue-700">${totalImported.toLocaleString('pt-BR')}</div>
+            <div class="text-xs text-blue-500">Salvos</div>
+          </div>
+          <div class="bg-white rounded-lg p-2 text-center border border-green-100">
+            <div class="text-xl font-black text-${totalErrors>0?'red':'slate'}-600">${totalErrors.toLocaleString('pt-BR')}</div>
+            <div class="text-xs text-${totalErrors>0?'red':'slate'}-400">Erros</div>
+          </div>
+        </div>
+        ${enrichTip}
+      </div>`
+    liveWrapper.appendChild(resultCard)
+
+    if (totalImported > 0) {
+      toast('✓ ' + totalImported.toLocaleString('pt-BR') + ' produtos importados!', 'success')
+    } else if (totalDuplicates > 0) {
+      toast('Todos os links já estavam importados (duplicados).', 'warning')
+    } else {
+      toast('Nenhum produto importado.', 'warning')
+    }
+
+    btn.disabled  = false
+    btn.className = 'w-full py-3 rounded-xl ' + (totalImported > 0 ? 'bg-green-600' : 'bg-slate-500') + ' text-white text-sm font-bold hover:opacity-90 transition-all'
+    btn.innerHTML = totalImported > 0
+      ? '🔄 Importar mais'
+      : '↩ Importar outros links'
+    btn.onclick = () => {
+      ta.value = ''
+      siMassCount()
+      statusEl.classList.add('hidden')
+      btn.className = 'w-full py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 active:scale-95 transition-all'
+      btn.innerHTML = '🚀 Importar Agora'
+      btn.onclick = () => siMassImport(storeId)
+    }
+
+  } catch(err) {
+    toast('Erro: ' + (err?.message || String(err)), 'error')
+    btn.disabled  = false
+    btn.className = 'w-full py-3 rounded-xl bg-red-600 text-white text-sm font-bold hover:bg-red-700 transition-all'
+    btn.innerHTML = '⚠ Erro — Tentar novamente'
     btn.onclick = () => siMassImport(storeId)
   }
 }
