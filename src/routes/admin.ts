@@ -6771,8 +6771,8 @@ function renderAdminSPA(): string {
   <\/script>
   <style>
     body { font-family: 'Inter', sans-serif; }
-    .sidebar-link { @apply flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-slate-300 hover:bg-white/10 hover:text-white transition-all cursor-pointer; }
-    .sidebar-link.active { @apply bg-white/15 text-white; }
+    .sidebar-link { @apply flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-semibold text-slate-100 hover:bg-white/15 hover:text-white transition-all cursor-pointer; }
+    .sidebar-link.active { @apply bg-blue-600/90 text-white shadow-sm; }
     .stat-card { @apply bg-white rounded-2xl p-5 border border-slate-100 shadow-sm; }
     .table-th { @apply px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide bg-slate-50; }
     .table-td { @apply px-4 py-3 text-sm text-slate-700 border-b border-slate-50; }
@@ -6841,7 +6841,7 @@ function renderAdminSPA(): string {
 <div id="admin-app" class="hidden min-h-screen flex">
 
   <!-- Sidebar -->
-  <aside id="sidebar" class="w-64 bg-slate-900 min-h-screen flex flex-col fixed left-0 top-0 bottom-0 z-40">
+  <aside id="sidebar" class="w-64 bg-slate-800 min-h-screen flex flex-col fixed left-0 top-0 bottom-0 z-40">
     <!-- Logo -->
     <div class="p-5 border-b border-white/10">
       <div class="flex items-center gap-3">
@@ -6862,7 +6862,7 @@ function renderAdminSPA(): string {
       <div onclick="showSection('dashboard')" class="sidebar-link active" data-section="dashboard">
         <span class="text-lg">📊</span> Dashboard
       </div>
-      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Catálogo</div>
+      <div class="px-3 pt-4 pb-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Catálogo</div>
       <div onclick="showSection('top-deals')" class="sidebar-link" data-section="top-deals">
         <span class="text-lg">🏷️</span> Top Deals
       </div>
@@ -6875,7 +6875,7 @@ function renderAdminSPA(): string {
       <div onclick="showSection('categories')" class="sidebar-link" data-section="categories">
         <span class="text-lg">🗂️</span> Categorias
       </div>
-      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest">Integrações</div>
+      <div class="px-3 pt-4 pb-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Integrações</div>
       <!-- ml-import, ml-categories, ml-search, ml-crawl, ml-linkbuilder ocultos do menu -->
       <div onclick="showSection('feed-ingestion')" class="sidebar-link" data-section="feed-ingestion">
         <span class="text-lg">📥</span> Feed Ingestion
@@ -6889,7 +6889,7 @@ function renderAdminSPA(): string {
       <div onclick="showSection('api-configs')" class="sidebar-link" data-section="api-configs">
         <span class="text-lg">🔌</span> APIs & Secrets
       </div>
-      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest mt-1">Publicação</div>
+      <div class="px-3 pt-4 pb-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Publicação</div>
       <div onclick="showSection('social')" class="sidebar-link" data-section="social">
         <span class="text-lg">📣</span> Social Media
       </div>
@@ -6899,7 +6899,7 @@ function renderAdminSPA(): string {
       <div onclick="showSection('footer')" class="sidebar-link" data-section="footer">
         <span class="text-lg">🦶</span> Rodapé
       </div>
-      <div class="px-3 pt-3 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-widest mt-1">Análise</div>
+      <div class="px-3 pt-4 pb-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Análise</div>
       <div onclick="showSection('analytics')" class="sidebar-link" data-section="analytics">
         <span class="text-lg">📈</span> Analytics
       </div>
@@ -6911,10 +6911,10 @@ function renderAdminSPA(): string {
     <!-- Footer sidebar -->
     <div class="p-4 border-t border-white/10">
       <div class="flex items-center justify-between">
-        <div class="text-sm text-slate-400">admin</div>
-        <button onclick="doLogout()" class="text-xs text-slate-400 hover:text-red-400 transition-colors">Sair →</button>
+        <div class="text-sm font-semibold text-slate-200">admin</div>
+        <button onclick="doLogout()" class="text-xs text-slate-400 hover:text-red-400 transition-colors font-semibold">Sair →</button>
       </div>
-      <a href="/" target="_blank" class="mt-2 block text-xs text-slate-500 hover:text-slate-300 transition-colors">
+      <a href="/" target="_blank" class="mt-2 block text-xs text-slate-400 hover:text-white transition-colors font-medium">
         ← Ver site público
       </a>
     </div>
@@ -6951,7 +6951,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260516a"><\/script>
+<script src="/static/admin-spa.js?v=20260516b"><\/script>
 </body>
 </html>`
 }
