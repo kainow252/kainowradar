@@ -172,7 +172,9 @@ admin.get('/api/dashboard', async (c) => {
   })
 })
 
-// ── GET /admin/api/top-deals — Query otimizada GROUP BY MIN ─
+// ── GET /admin/api/top-deals — Query rápida usando best_price denormalizado ─
+// Usa p.best_price + p.best_store_id (já calculados no produto) para evitar
+// correlated subquery pesada que causava timeout no D1 com 200+ produtos.
 admin.get('/api/top-deals', async (c) => {
   const { DB, CACHE } = c.env
   const limit = Math.min(50, parseInt(c.req.query('limit') || '20'))
@@ -182,8 +184,9 @@ admin.get('/api/top-deals', async (c) => {
   const cached = await cache.get(cacheKey)
   if (cached) return c.json(cached)
 
-  // A QUERY MESTRA: GROUP BY p.id + MIN(price) garante 1 linha por produto
-  // O subquery correlacionado pega os dados da oferta mais barata
+  // Query rápida: usa best_price/best_store_id já denormalizados em products
+  // + JOIN simples na offer da best_store para pegar affiliate_url/checkout_url/desconto
+  // Sem correlated subquery — O(N) em vez de O(N²)
   const catFilter = category ? 'AND p.category = ?' : ''
   const binds: any[] = category ? [category, limit] : [limit]
 
@@ -197,26 +200,28 @@ admin.get('/api/top-deals', async (c) => {
       p.image_url,
       p.ean,
       p.offer_count,
-      MIN(o.price)                  AS lowest_price,
-      o2.original_price             AS original_price,
-      o2.discount_percent           AS discount_percent,
-      o2.free_shipping              AS free_shipping,
-      o2.checkout_url               AS checkout_url,
-      o2.affiliate_url              AS affiliate_url,
+      p.best_price                  AS lowest_price,
+      o.original_price              AS original_price,
+      o.discount_percent            AS discount_percent,
+      o.free_shipping               AS free_shipping,
+      o.checkout_url                AS checkout_url,
+      o.affiliate_url               AS affiliate_url,
       s.name                        AS store_name,
       s.slug                        AS store_slug,
       CASE WHEN s.logo_url NOT LIKE 'data:%' THEN s.logo_url ELSE NULL END AS store_logo,
-      o2.last_updated               AS price_updated_at
+      o.last_updated                AS price_updated_at
     FROM products p
-    JOIN offers o  ON o.product_id = p.id AND o.is_active = 1 AND o.in_stock = 1
-    JOIN offers o2 ON o2.product_id = p.id
-      AND o2.price = (SELECT MIN(o3.price) FROM offers o3 WHERE o3.product_id = p.id AND o3.is_active = 1 AND o3.in_stock = 1)
-      AND o2.is_active = 1 AND o2.in_stock = 1
-    JOIN stores s  ON s.id = o2.store_id AND s.is_active = 1
+    LEFT JOIN offers o  ON o.product_id = p.id
+                      AND o.store_id = p.best_store_id
+                      AND o.is_active = 1
+    LEFT JOIN stores s  ON s.id = p.best_store_id AND s.is_active = 1
     WHERE p.is_active = 1
+      AND p.best_price IS NOT NULL
+      AND p.best_price > 0
+      AND p.image_url IS NOT NULL
+      AND p.image_url != ''
     ${catFilter}
-    GROUP BY p.id
-    ORDER BY lowest_price ASC
+    ORDER BY p.best_price ASC
     LIMIT ?
   `).bind(...binds).all()
 
@@ -3083,10 +3088,18 @@ admin.post('/api/sync-products-from-offers', async (c) => {
 admin.post('/api/fix-names', async (c) => {
   const { DB } = c.env
 
-  // Busca IDs dos produtos com nome inválido (publisher_id ou genérico)
+  // Busca IDs dos produtos com nome inválido:
+  //   - "cfegdhabc..." = publisher_id vazando como nome
+  //   - "Produto MLB..." = item não resolvido pelo affiliate-bot/parseLine
+  //   - "Produto Import..." = placeholder genérico sem nome real
   const { results: badProds } = await DB.prepare(
-    `SELECT id FROM products WHERE name LIKE 'cfegdhabc%' OR name LIKE 'Cfegdhabc%' LIMIT 50`
-  ).all<{ id: number }>()
+    `SELECT id, name FROM products
+     WHERE name LIKE 'cfegdhabc%'
+        OR name LIKE 'Cfegdhabc%'
+        OR name LIKE 'Produto MLB%'
+        OR name LIKE 'Produto Import%'
+     LIMIT 50`
+  ).all<{ id: number; name: string }>()
 
   let deleted = 0
   for (const p of badProds) {
@@ -3098,7 +3111,9 @@ admin.post('/api/fix-names', async (c) => {
   return c.json({
     ok: true,
     deleted,
-    message: `${deleted} produtos com nome inválido removidos.`
+    message: deleted > 0
+      ? `${deleted} produtos com nome inválido removidos.`
+      : 'Nenhum produto com nome inválido encontrado.'
   })
 })
 
@@ -3357,8 +3372,10 @@ admin.post('/api/enrich-offers', async (c) => {
         details.push({ name: offer.name, price, image: image ? '✓' : '✗', mlb: mlbId, status: 'ok' })
       } else {
         // Não conseguiu enriquecer
-        if (DELETE_FAILED) {
-          // Deleta offer e produto do banco SOMENTE se delete_failed=true no body
+        // Auto-deleta se o produto tem nome inválido (Produto MLB*, Produto Import*, cfegdhabc*)
+        // — esses nunca vão resolver, são lixo do parseLine bugado
+        const isInvalidName = /^(Produto MLB|Produto Import|cfegdhabc)/i.test(offer.name || '')
+        if (DELETE_FAILED || isInvalidName) {
           try {
             await DB.prepare(`DELETE FROM offers WHERE id = ?`).bind(offer.offer_id).run()
             // Deleta o produto se não tiver outros offers vinculados
