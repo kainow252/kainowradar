@@ -227,10 +227,11 @@ npx wrangler pages secret put AWIN_PUBLISHER_ID --project-name shopping-compare
 
 | Métrica | Valor |
 |---------|-------|
-| **Produtos ativos** | 264 |
-| **Offers** | 264 (todas com `price > 0` e `image_url`) |
+| **Produtos ativos** | 263 (264 − 1 inválido `Produto MLB6130836212` auto-deletado pelo enrich) |
+| **Offers** | 263 (todas com `price > 0` e `image_url`) |
 | **Home** | 16 produtos aleatórios por carga (`ORDER BY RANDOM()`) |
 | **Enriquecer** | 0 restantes (correto — todas as offers já estão completas) |
+| **Top Deals** | Query rápida via `best_price` denormalizado (O(N), sem correlated subquery) |
 
 ---
 
@@ -257,8 +258,10 @@ npx wrangler pages secret put AWIN_PUBLISHER_ID --project-name shopping-compare
 - [x] **Importação em massa** via aba "Em Massa" → `/import-links` direto (chunks de 50)
 - [x] **Home rotativa** com `ORDER BY RANDOM()` — 16 produtos diferentes a cada refresh
 - [x] **`/api/sync-products-from-offers`** — sincroniza `price`/`image_url`/`name` das offers para `products`
-- [x] **`/api/fix-names`** — remove produtos com nome inválido (`cfegdhabc%`)
+- [x] **`/api/fix-names`** — remove produtos com nome inválido (`cfegdhabc%`, `Produto MLB%`, `Produto Import%`)
 - [x] **`parseLine`** aceita hint `mlb:` em qualquer campo (não apenas posição fixa)
+- [x] **Top Deals query** — reescrita usando `best_price` denormalizado (O(N) vs O(N²) com correlated subquery)
+- [x] **Enrich auto-deleta** produtos com nome inválido (`Produto MLB*`, `cfegdhabc*`) se não conseguir enriquecer
 
 ---
 
@@ -273,6 +276,8 @@ npx wrangler pages secret put AWIN_PUBLISHER_ID --project-name shopping-compare
 | Home mostrava sempre os mesmos 8 | `ORDER BY created_at` — todos importados no mesmo segundo | `ORDER BY RANDOM()` + `image_url IS NOT NULL` |
 | 4 produtos sem offer (IDs 890-894) | Bug anterior no `parseLine` criou produto sem offer | Desativados via `PATCH is_active=0` |
 | `products.image_url` NULL | Enrich salvou nas offers mas não propagou para `products` | Novo endpoint `/api/sync-products-from-offers` |
+| **Top Deals travando ("só carregando")** | **Correlated subquery `SELECT MIN(o3.price)` por linha — O(N²) no D1** | **Reescrita usando `p.best_price` denormalizado — 1 JOIN simples** |
+| **Enrich em loop: "Produto MLB6130836212"** | **Produto com nome inválido (`Produto MLB%`) — parseLine não resolveu** | **Enrich auto-deleta nomes inválidos + fix-names expandido** |
 
 ---
 
