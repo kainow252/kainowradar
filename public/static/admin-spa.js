@@ -969,18 +969,29 @@ function siReadCsv(input, storeId) {
           </div>`).join('')}
         ${items.length > 20 ? `<div class="px-3 py-1.5 text-xs text-slate-400">... e mais ${items.length - 20} itens</div>` : ''}
       </div>
-      <button onclick="siImportCsvItems(${storeId}, ${JSON.stringify(items).replace(/</g,'\\u003c')})"
+      <button onclick="siImportCsvItems()"
         class="w-full py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2">
         🚀 Importar ${items.length} ${items.length === 1 ? 'item' : 'itens'}
       </button>
     `
+
+    // Guarda em memória — evita JSON gigante no atributo onclick
+    App._csvItems   = items
+    App._csvStoreId = storeId
   }
   reader.readAsText(file, 'UTF-8')
 }
 
 // Executa importação dos itens lidos do CSV — com chunking automático
-async function siImportCsvItems(storeId, items) {
+async function siImportCsvItems() {
+  // Lê itens salvos em memória pelo siReadCsv (evita JSON gigante no onclick)
+  const items   = App._csvItems
+  const storeId = App._csvStoreId
   const liveArea = document.getElementById('si-csv-live-area')
+  if (!items || !items.length || !storeId) {
+    toast('Nenhum arquivo carregado. Selecione um CSV primeiro.', 'error')
+    return
+  }
   if (!liveArea) return
 
   const CHUNK_SIZE = 200  // pares por lote
