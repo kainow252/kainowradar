@@ -2933,6 +2933,11 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
         if (offerExists) {
           // Offer existe: atualiza preço/imagem/affiliate_url se houver dados melhores
           // (novo link /social/, preço atualizado, imagem nova)
+
+          // Oportunidade: preenche ml_item_id se estava NULL e agora temos o valor
+          if (effectiveMlbId) {
+            await DB.prepare(`UPDATE products SET ml_item_id = ? WHERE id = ? AND (ml_item_id IS NULL OR ml_item_id = '')`).bind(effectiveMlbId, productId2).run().catch(() => {})
+          }
           const incomingIsSocial  = /mercadolivre\.com\.br\/social\//.test(affiliateUrl)
           const existingIsSocial  = /mercadolivre\.com\.br\/social\//.test(offerExists.affiliate_url || '')
           const shouldUpdateAffUrl = incomingIsSocial && !existingIsSocial
@@ -2967,6 +2972,10 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
         }
 
         // Offer não existe para esta loja → cria offer vinculado ao produto existente
+        // Oportunidade: preenche ml_item_id se estava NULL e agora temos o valor
+        if (effectiveMlbId) {
+          await DB.prepare(`UPDATE products SET ml_item_id = ? WHERE id = ? AND (ml_item_id IS NULL OR ml_item_id = '')`).bind(effectiveMlbId, productId2).run().catch(() => {})
+        }
         await DB.prepare(`
           INSERT INTO offers
             (product_id, store_id, external_id, title, price, affiliate_url, image_url,
