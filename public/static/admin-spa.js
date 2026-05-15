@@ -906,6 +906,29 @@ function siTab(tab, storeId) {
 }
 
 // ── CSV: lê arquivo e envia para importação ───────────────────────
+
+// Extrai nome legível do slug da URL do produto ML
+// ex: "estaco-de-musculaco-completa-com-66kg" → "Estação De Musculação Completa Com 66kg"
+function nameFromUrl(url) {
+  try {
+    // Pega o path: /estaco-de-musculaco-completa.../p/MLB...
+    const path = new URL(url).pathname
+    // Remove segmentos finais tipo /p/MLB..., /MLB..., #...
+    const slug = path
+      .replace(/\/p\/MLB[\w-]*/i, '')
+      .replace(/\/MLB[\w-]*/i, '')
+      .replace(/\/$/, '')
+      .split('/').filter(Boolean).pop() || ''
+    if (!slug || slug.length < 4) return ''
+    // Substitui hífens por espaço e capitaliza cada palavra
+    return slug
+      .replace(/-+/g, ' ')
+      .replace(/\b\w/g, c => c.toUpperCase())
+      .trim()
+      .substring(0, 120)
+  } catch { return '' }
+}
+
 function siReadCsv(input, storeId) {
   const file = input.files?.[0]
   if (!file) return
@@ -943,9 +966,11 @@ function siReadCsv(input, storeId) {
       const productUrl = allUrls.find(u => /mercadolivre\.com\.br|meli\.la/i.test(u) && !/\/social\//i.test(u))
 
       if (socialUrl && productUrl) {
-        items.push({ url1: productUrl, url2: socialUrl, name, price, image_url: img })
+        const resolvedName = name || nameFromUrl(productUrl)
+        items.push({ url1: productUrl, url2: socialUrl, name: resolvedName, price, image_url: img })
       } else {
-        items.push({ url1: urlRaw, name, price, image_url: img })
+        const resolvedName = name || nameFromUrl(urlRaw)
+        items.push({ url1: urlRaw, name: resolvedName, price, image_url: img })
       }
     }
 
@@ -1036,8 +1061,22 @@ async function siImportCsvItems() {
     if (bar) bar.style.width = progress + '%'
     if (pct) pct.textContent = progress + '%'
 
-    // Monta texto: "prodUrl socialUrl" por linha (par) ou só url
-    const textLines = chunk.map(it => it.url2 ? `${it.url1} ${it.url2}` : it.url1)
+    // Monta texto no formato que o backend entende:
+    // Par com /social/: "socialUrl | nome | preco | img | mlb:XXXXXXXX"
+    // Só URL produto:   "prodUrl | nome | preco | img"
+    const textLines = chunk.map(it => {
+      const saveUrl = it.url2 || it.url1   // prefere /social/ como URL salva
+      const mlbId   = (it.url1 || '').match(/MLB[-_]?(\d{7,12})/i)?.[0] || ''
+      let line = saveUrl
+      if (it.name) {
+        line += ' | ' + it.name.replace(/\|/g, ' ')
+        if (it.price > 0) line += ' | ' + it.price
+        else              line += ' | '   // placeholder vazio para manter posição
+        line += ' | '   // image_url vazia
+        if (mlbId && it.url2) line += ' | mlb:' + mlbId  // hint só quando tem par
+      }
+      return line
+    })
     const raw = textLines.join('\n')
 
     try {
