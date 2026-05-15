@@ -2897,21 +2897,51 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       ).bind(name).first<{ id: number }>()
 
       if (existingByName) {
-        // Produto com mesmo nome já existe — só cria o offer vinculado
-        const prodResult2 = { meta: { last_row_id: existingByName.id } }
-        const productId2  = existingByName.id
+        // Produto com mesmo nome já existe — vincula offer ao produto existente
+        const productId2 = existingByName.id
 
         // Verifica se offer já existe para este produto+loja
         const offerExists = await DB.prepare(
-          `SELECT id FROM offers WHERE product_id = ? AND store_id = ? LIMIT 1`
-        ).bind(productId2, storeId).first<{ id: number }>()
+          `SELECT id, affiliate_url FROM offers WHERE product_id = ? AND store_id = ? LIMIT 1`
+        ).bind(productId2, storeId).first<{ id: number; affiliate_url: string }>()
 
         if (offerExists) {
-          duplicates++
-          results.push({ url: affiliateUrl, status: 'duplicado', product_id: productId2, message: 'Produto com mesmo nome já importado' })
+          // Offer existe: atualiza preço/imagem/affiliate_url se houver dados melhores
+          // (novo link /social/, preço atualizado, imagem nova)
+          const incomingIsSocial  = /mercadolivre\.com\.br\/social\//.test(affiliateUrl)
+          const existingIsSocial  = /mercadolivre\.com\.br\/social\//.test(offerExists.affiliate_url || '')
+          const shouldUpdateAffUrl = incomingIsSocial && !existingIsSocial
+
+          await DB.prepare(`
+            UPDATE offers SET
+              title        = CASE WHEN ? != '' THEN ? ELSE title END,
+              price        = CASE WHEN ? > 0   THEN ? ELSE price END,
+              image_url    = CASE WHEN ? != '' THEN ? ELSE image_url END,
+              affiliate_url = CASE WHEN ? = 1  THEN ? ELSE affiliate_url END,
+              last_updated = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).bind(
+            name, name,
+            price, price,
+            imgUrl || '', imgUrl || '',
+            shouldUpdateAffUrl ? 1 : 0, affiliateUrl,
+            offerExists.id
+          ).run()
+
+          await DB.prepare(`
+            UPDATE products SET
+              best_price = CASE WHEN ? > 0 AND (best_price IS NULL OR ? < best_price) THEN ? ELSE best_price END,
+              image_url  = CASE WHEN ? != '' AND (image_url IS NULL OR image_url = '') THEN ? ELSE image_url END,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).bind(price, price, price, imgUrl || '', imgUrl || '', productId2).run()
+
+          imported++
+          results.push({ url: affiliateUrl, status: 'atualizado', product_id: productId2, name, price, message: 'Offer atualizado com novos dados' })
           continue
         }
 
+        // Offer não existe para esta loja → cria offer vinculado ao produto existente
         await DB.prepare(`
           INSERT INTO offers
             (product_id, store_id, external_id, title, price, affiliate_url, image_url,
