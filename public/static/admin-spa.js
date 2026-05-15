@@ -833,14 +833,43 @@ function _buildStoreCard(s) {
 // Chamado após import bem-sucedido para reflectir o novo product_count
 async function _refreshStoreCard(storeId) {
   try {
+    const id  = parseInt(storeId, 10)          // garante número — storeId pode vir como string do onclick
     const all = await api('GET', '/admin/api/stores')
-    if (!all) return
-    const s = all.find(x => x.id === storeId)
+    if (!Array.isArray(all)) return
+    const s   = all.find(x => parseInt(x.id, 10) === id)
     if (!s) return
-    const card = document.getElementById('store-card-' + storeId)
-    if (!card) return // seção Lojas não está visível — nada a fazer
-    card.outerHTML = _buildStoreCard(s)
-  } catch (_) { /* silencioso — não bloqueia o fluxo */ }
+    const card = document.getElementById('store-card-' + id)
+    if (!card) {
+      // Card não existe no DOM — se a seção Lojas estiver ativa, re-renderiza tudo
+      if (App.currentSection === 'stores') {
+        renderStores(document.getElementById('content-area'))
+      }
+      return
+    }
+    // substitui o card inteiro com dados frescos
+    const tmp = document.createElement('div')
+    tmp.innerHTML = _buildStoreCard(s)
+    const newCard = tmp.firstElementChild
+    card.parentNode.replaceChild(newCard, card)
+    // atualiza também os totais do cabeçalho da seção (se visível)
+    _updateStoreSectionTotals(all)
+  } catch (e) { console.warn('[_refreshStoreCard]', e) }
+}
+
+// Atualiza os números do cabeçalho da seção Lojas sem re-renderizar
+function _updateStoreSectionTotals(storesArr) {
+  try {
+    const totalProds  = storesArr.reduce((s, x) => s + (x.product_count || 0), 0)
+    const totalOffers = storesArr.reduce((s, x) => s + (x.offer_count  || 0), 0)
+    // Os stat-cards do topo são identificáveis pelo texto da legenda
+    document.querySelectorAll('.stat-card').forEach(el => {
+      const label = el.querySelector('.text-sm')?.textContent || ''
+      const val   = el.querySelector('.text-3xl, .text-2xl')
+      if (!val) return
+      if (label.includes('produtos') || label.toLowerCase().includes('produto')) val.textContent = totalProds
+      if (label.includes('ofertas')  || label.toLowerCase().includes('oferta'))  val.textContent = totalOffers
+    })
+  } catch (_) { /* silencioso */ }
 }
 
 // ── IMPORTAR LINKS — universal por loja ─────────────────────────
