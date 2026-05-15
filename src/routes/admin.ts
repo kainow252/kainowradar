@@ -2668,13 +2668,28 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
     if (!finalAffiliateUrl) { skipped++; continue }
 
     const affiliateUrl = finalAffiliateUrl
-    const name = (rawName || '').trim()
-    // Rejeita itens sem nome — o frontend DEVE fornecer o nome antes de salvar
+    let name = (rawName || '').trim()
+
+    // Se veio sem nome, tenta extrair do slug da URL do produto
     if (!name) {
-      results.push({ url: affiliateUrl, name: '', status: 'erro', error: 'Nome obrigatório' })
-      errors++
-      continue
+      const tryUrl = productUrl || affiliateUrl
+      try {
+        const pth = new URL(tryUrl).pathname
+        const slug = pth
+          .replace(/\/p\/MLB[\w-]*/i, '').replace(/\/MLB[\w-]*/i, '')
+          .replace(/\/$/, '').split('/').filter(Boolean).pop() || ''
+        if (slug && slug.length >= 4 && !/^MLB\d/i.test(slug)) {
+          name = slug.replace(/-+/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()).trim().substring(0, 120)
+        }
+        if (!name) {
+          const mlb = (pth + new URL(tryUrl).search).match(/\b(MLB\d{6,12})\b/i)
+          if (mlb) name = 'Produto ' + mlb[1].toUpperCase()
+        }
+      } catch { /* ignora */ }
     }
+
+    // Último recurso: nome genérico (nunca rejeita por falta de nome)
+    if (!name) name = 'Produto Importado ' + Date.now().toString(36).toUpperCase()
 
     const price   = rawPrice ?? 0
     const imgUrl  = image_url || null
@@ -7228,7 +7243,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260515o"><\/script>
+<script src="/static/admin-spa.js?v=20260515p"><\/script>
 </body>
 </html>`
 }

@@ -911,22 +911,31 @@ function siTab(tab, storeId) {
 // ex: "estaco-de-musculaco-completa-com-66kg" → "Estação De Musculação Completa Com 66kg"
 function nameFromUrl(url) {
   try {
-    // Pega o path: /estaco-de-musculaco-completa.../p/MLB...
-    const path = new URL(url).pathname
-    // Remove segmentos finais tipo /p/MLB..., /MLB..., #...
+    const u    = new URL(url)
+    const path = u.pathname
+
+    // Tenta extrair slug legível antes do /p/MLB ou /MLB
     const slug = path
       .replace(/\/p\/MLB[\w-]*/i, '')
       .replace(/\/MLB[\w-]*/i, '')
       .replace(/\/$/, '')
       .split('/').filter(Boolean).pop() || ''
-    if (!slug || slug.length < 4) return ''
-    // Substitui hífens por espaço e capitaliza cada palavra
-    return slug
-      .replace(/-+/g, ' ')
-      .replace(/\b\w/g, c => c.toUpperCase())
-      .trim()
-      .substring(0, 120)
-  } catch { return '' }
+
+    if (slug && slug.length >= 4 && !/^MLB\d/i.test(slug)) {
+      return slug
+        .replace(/-+/g, ' ')
+        .replace(/\b\w/g, c => c.toUpperCase())
+        .trim()
+        .substring(0, 120)
+    }
+
+    // Fallback: extrai MLB ID e usa como nome provisório
+    const mlb = (path + u.search).match(/\b(MLB\d{6,12})\b/i)
+    if (mlb) return 'Produto ' + mlb[1].toUpperCase()
+
+    // Último recurso: domínio + path truncado
+    return 'Produto Importado'
+  } catch { return 'Produto Importado' }
 }
 
 function siReadCsv(input, storeId) {
