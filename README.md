@@ -281,6 +281,9 @@ npx wrangler pages secret put AWIN_PUBLISHER_ID --project-name shopping-compare
 | **Duplicado rejeitado ("Produto com mesmo nome")** | **import-links rejeitava ao invés de atualizar offer existente** | **Bloco reescrito para UPDATE offer com novos dados (preço, imagem, affiliateUrl)** |
 | **Em Massa 39→20 (19 perdidos)** | **Social links com `hint_mlb_id` caíam no Caso B e eram descartados silenciosamente** | **Caso B exige `!hint_mlb_id`; social links isolados viram Caso A** |
 | **Card da loja mostra contador desatualizado após import** | **`renderStores()` não é chamado após o modal de import fechar — UI fica stale** | **`_refreshStoreCard(storeId)` busca dados frescos via API e atualiza apenas o card afetado** |
+| **Admin count ≠ contador da página pública** | **Admin usava `best_store_id`; página pública usava `offer.store_id` — métricas diferentes** | **Admin agora usa `COUNT(DISTINCT p.id) via offers JOIN` — igual à página pública** |
+| **"27 importados" mas contador não sobe** | **`imported++` contava tanto novos quanto atualizações — UI enganosa** | **Separado `updated` counter; UI mostra "N novos · M atualizados"; `_refreshStoreCard` só dispara para genuinamente novos** |
+| **Links /social/ novos tratados como atualização** | **`effectiveMlbId` com prefixo duplo "MLB" → LIKE `%MLB-MLB...%` nunca encontrava nada (Bug 1). Mesmo corrigido, `affiliate_url` armazenada é `/social/` sem MLB no texto → LIKE ainda falha (Bug 2)** | **Bug 1: `rawMlbId.replace(/^MLB[\-_]?/i, '')` normaliza para dígitos. Bug 2: busca fallback em `products.ml_item_id`; `ml_item_id` gravado no INSERT de novos produtos** |
 
 ---
 
