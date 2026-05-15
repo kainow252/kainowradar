@@ -852,9 +852,10 @@ function openStoreImport(storeId, storeName) {
 
         <!-- Tabs -->
         <div class="flex gap-1 bg-slate-100 rounded-xl p-1 mb-4">
-          <button id="si-tab-paste"   onclick="siTab('paste')"           class="flex-1 text-xs font-semibold py-2 rounded-lg bg-white shadow-sm text-slate-800 transition-all">&#128203; Colar Links</button>
-          <button id="si-tab-csv"     onclick="siTab('csv')"             class="flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700 transition-all">&#128196; CSV</button>
-          <button id="si-tab-history" onclick="siTab('history',${storeId})" class="flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700 transition-all">&#128339; Hist&oacute;rico</button>
+          <button id="si-tab-paste"   onclick="siTab('paste')"              class="flex-1 text-xs font-semibold py-2 rounded-lg bg-white shadow-sm text-slate-800 transition-all">&#128203; Colar</button>
+          <button id="si-tab-mass"    onclick="siTab('mass')"               class="flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700 transition-all">&#128230; Em Massa</button>
+          <button id="si-tab-csv"     onclick="siTab('csv')"                class="flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700 transition-all">&#128196; CSV</button>
+          <button id="si-tab-history" onclick="siTab('history',${storeId})" class="flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700 transition-all">&#128339; Hist</button>
         </div>
 
         <!-- PAINEL: Colar Links -->
@@ -931,6 +932,38 @@ function openStoreImport(storeId, storeName) {
           <div id="si-csv-live-area" class="mt-3"></div>
         </div>
 
+        <!-- PAINEL: Em Massa (fila assíncrona ilimitada) -->
+        <div id="si-panel-mass" class="hidden">
+          <div class="bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 rounded-xl p-3 mb-3">
+            <p class="text-xs font-bold text-indigo-800">&#128230; Importação em Massa — sem limite de links</p>
+            <p class="text-xs text-indigo-600 mt-0.5">Cole 10, 1.000 ou 10.000 links. O sistema enfileira tudo e processa <strong>100 por rodada</strong> automaticamente.</p>
+          </div>
+
+          <div class="mb-3">
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-xs font-semibold text-slate-600">Links (um por linha)</label>
+              <span id="si-mass-count" class="text-xs text-slate-400">0 links</span>
+            </div>
+            <textarea id="si-mass-textarea" rows="8"
+              class="w-full rounded-xl border border-slate-200 bg-slate-50 text-sm font-mono p-3 resize-none focus:outline-none focus:border-indigo-400 focus:bg-white transition-all"
+              placeholder="Cole quantos links quiser — meli.la, mercadolivre.com.br, etc.&#10;&#10;https://meli.la/1guaPXV&#10;https://meli.la/1vTGDBn&#10;https://meli.la/1piMeCE&#10;..."
+              oninput="siMassCount()" onpaste="setTimeout(siMassCount,50)" ondrop="setTimeout(siMassCount,50)"></textarea>
+            <div class="flex items-center justify-between mt-1">
+              <span class="text-xs text-slate-400">Sem limite — aceita qualquer quantidade</span>
+              <button onclick="document.getElementById('si-mass-textarea').value='';siMassCount()" class="text-xs text-slate-400 hover:text-red-500">&#10005; Limpar</button>
+            </div>
+          </div>
+
+          <!-- Status / progresso -->
+          <div id="si-mass-status" class="hidden mb-3"></div>
+
+          <button id="si-mass-btn" onclick="siMassImport(${storeId})"
+            class="w-full py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 active:scale-95 transition-all">
+            &#128640; Enfileirar e Processar
+          </button>
+          <p class="text-xs text-slate-400 text-center mt-2">Os links são salvos na fila e processados em lotes de 100. Você pode fechar o modal — o processamento continua.</p>
+        </div>
+
         <!-- PAINEL: Histórico -->
         <div id="si-panel-history" class="hidden">
           <div id="si-history-content"><div class="text-center py-10 text-slate-400 text-sm">&#128260; Carregando...</div></div>
@@ -942,7 +975,7 @@ function openStoreImport(storeId, storeName) {
 }
 
 function siTab(tab, storeId) {
-  ['paste','csv','history'].forEach(t => {
+  ['paste','mass','csv','history'].forEach(t => {
     const btn   = document.getElementById('si-tab-' + t)
     const panel = document.getElementById('si-panel-' + t)
     if (!btn || !panel) return
@@ -956,7 +989,179 @@ function siTab(tab, storeId) {
   if (tab === 'history' && storeId) siLoadHistory(storeId)
 }
 
-// ── CSV: lê arquivo e envia para importação ───────────────────────
+// ── EM MASSA: fila assíncrona ilimitada ──────────────────────────
+
+function siMassCount() {
+  const val = document.getElementById('si-mass-textarea')?.value || ''
+  const urls = (val.match(/https?:\/\/[^\s,;"'<>\n\r]+/g) || [])
+    .map(u => u.replace(/[.,;]+$/, '').trim()).filter(Boolean)
+  const n = new Set(urls).size
+  const el = document.getElementById('si-mass-count')
+  if (!el) return
+  el.textContent = n === 0 ? '0 links'
+    : n === 1 ? '1 link detectado'
+    : `${n.toLocaleString('pt-BR')} links detectados`
+  el.className = 'text-xs font-semibold ' + (n > 0 ? 'text-green-600' : 'text-slate-400')
+}
+
+async function siMassImport(storeId) {
+  const ta  = document.getElementById('si-mass-textarea')
+  const btn = document.getElementById('si-mass-btn')
+  const statusEl = document.getElementById('si-mass-status')
+
+  const val = ta?.value || ''
+  const rawUrls = (val.match(/https?:\/\/[^\s,;"'<>\n\r]+/g) || [])
+    .map(u => u.replace(/[.,;]+$/, '').trim()).filter(Boolean)
+  const urls = [...new Set(rawUrls)]
+
+  if (!urls.length) { toast('Cole pelo menos um link!', 'error'); return }
+
+  // ── Passo 1: Enfileirar em lotes de 5000 ─────────────────
+  btn.disabled = true
+  btn.textContent = '⏳ Enfileirando ' + urls.length.toLocaleString('pt-BR') + ' links...'
+  statusEl.classList.remove('hidden')
+
+  const showStatus = (html) => { statusEl.innerHTML = html }
+
+  showStatus(`
+    <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-3 text-xs text-indigo-800">
+      <div class="font-bold mb-1">📥 Enfileirando ${urls.length.toLocaleString('pt-BR')} links...</div>
+      <div class="h-2 bg-indigo-100 rounded-full overflow-hidden mt-2">
+        <div id="si-mass-bar-enq" class="h-full bg-indigo-400 rounded-full transition-all duration-300" style="width:5%"></div>
+      </div>
+    </div>`)
+
+  // Converte URLs em items para o feed/ingest
+  const items = urls.map(u => ({
+    name: nameFromUrl(u) || ('Produto ' + u.split('/').pop()?.slice(0,30) || 'Importado'),
+    affiliate_url: u,
+    product_url: u,
+    price: null
+  }))
+
+  // Enfileira em lotes de 5000 (limite do endpoint)
+  const INGEST_CHUNK = 5000
+  let totalQueued = 0
+  let batchIds = []
+
+  for (let i = 0; i < items.length; i += INGEST_CHUNK) {
+    const chunk = items.slice(i, i + INGEST_CHUNK)
+    const pct = Math.round(((i + chunk.length) / items.length) * 100)
+    const bar = document.getElementById('si-mass-bar-enq')
+    if (bar) bar.style.width = Math.max(pct, 5) + '%'
+
+    const res = await api('POST', '/admin/api/feed/ingest', {
+      store_id: storeId,
+      network: 'manual',
+      notes: `importação em massa — ${urls.length} links — lote ${Math.floor(i/INGEST_CHUNK)+1}`,
+      items: chunk
+    }, 30000)
+
+    if (!res?.ok) {
+      showStatus(`<div class="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-700">❌ Erro ao enfileirar: ${res?.error || 'falha'}</div>`)
+      btn.disabled = false
+      btn.textContent = '⚠ Tentar novamente'
+      return
+    }
+    totalQueued += res.total_queued || chunk.length
+    batchIds.push(res.batch_id)
+  }
+
+  // ── Passo 2: Processar de 100 em 100 com polling ──────────
+  showStatus(`
+    <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-3">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs font-bold text-indigo-800">⚙️ Processando fila...</span>
+        <span id="si-mass-pct" class="text-xs font-bold text-indigo-600">0%</span>
+      </div>
+      <div class="h-3 bg-indigo-100 rounded-full overflow-hidden mb-2">
+        <div id="si-mass-bar" class="h-full bg-gradient-to-r from-indigo-500 to-blue-500 rounded-full transition-all duration-500" style="width:0%"></div>
+      </div>
+      <div class="flex justify-between text-xs text-indigo-600">
+        <span id="si-mass-done">0 processados</span>
+        <span class="text-indigo-400">de ${totalQueued.toLocaleString('pt-BR')} enfileirados</span>
+      </div>
+      <div id="si-mass-log" class="mt-2 max-h-28 overflow-y-auto text-xs text-slate-500 font-mono space-y-0.5"></div>
+    </div>`)
+
+  let totalProcessed = 0
+  let totalImported  = 0
+  let totalErrors    = 0
+  let round = 0
+  const PROCESS_BATCH = 100
+
+  // Processa todas as batches em sequência
+  for (const batchId of batchIds) {
+    let pendingInBatch = Infinity
+
+    while (pendingInBatch > 0) {
+      round++
+      const res = await api('POST', `/admin/api/feed/process?batch_id=${batchId}&limit=${PROCESS_BATCH}`, {}, 30000)
+      if (!res) break
+
+      pendingInBatch = res.pending_remaining ?? 0
+      const proc = res.processed || 0
+      totalProcessed += proc
+      totalImported  += (res.imported || 0) + (res.matched || 0) + (res.updated || 0)
+      totalErrors    += res.errors || 0
+
+      const pct = totalQueued > 0 ? Math.round((totalProcessed / totalQueued) * 100) : 0
+      const bar  = document.getElementById('si-mass-bar')
+      const pctEl = document.getElementById('si-mass-pct')
+      const doneEl = document.getElementById('si-mass-done')
+      const log  = document.getElementById('si-mass-log')
+      if (bar) bar.style.width = Math.min(pct, 100) + '%'
+      if (pctEl) pctEl.textContent = pct + '%'
+      if (doneEl) doneEl.textContent = totalProcessed.toLocaleString('pt-BR') + ' processados'
+      if (log) {
+        const line = document.createElement('div')
+        line.textContent = `Rodada ${round}: +${proc} | ✅ ${res.imported||0} salvos | ⚠ ${res.errors||0} erros | 🔁 ${pendingInBatch} restantes`
+        log.prepend(line)
+      }
+
+      if (proc === 0 || pendingInBatch === 0) break
+    }
+  }
+
+  // ── Passo 3: Resultado final ──────────────────────────────
+  const enrichTip = totalImported > 0
+    ? `<p class="text-xs text-indigo-600 mt-2">💡 Use <strong>Enriquecer Ofertas</strong> para completar preço, nome e imagem dos produtos importados.</p>`
+    : ''
+
+  showStatus(`
+    <div class="bg-green-50 border border-green-200 rounded-xl p-4">
+      <p class="text-sm font-bold text-green-800">✅ Importação concluída!</p>
+      <div class="grid grid-cols-3 gap-2 mt-3">
+        <div class="bg-white rounded-lg p-2 text-center border border-green-100">
+          <div class="text-xl font-black text-green-700">${totalQueued.toLocaleString('pt-BR')}</div>
+          <div class="text-xs text-green-500">Enfileirados</div>
+        </div>
+        <div class="bg-white rounded-lg p-2 text-center border border-green-100">
+          <div class="text-xl font-black text-blue-700">${totalImported.toLocaleString('pt-BR')}</div>
+          <div class="text-xs text-blue-500">Salvos</div>
+        </div>
+        <div class="bg-white rounded-lg p-2 text-center border border-green-100">
+          <div class="text-xl font-black text-${totalErrors>0?'red':'slate'}-600">${totalErrors.toLocaleString('pt-BR')}</div>
+          <div class="text-xs text-${totalErrors>0?'red':'slate'}-400">Erros</div>
+        </div>
+      </div>
+      ${enrichTip}
+    </div>`)
+
+  toast('✓ ' + totalImported.toLocaleString('pt-BR') + ' produtos importados!', 'success')
+  btn.disabled = false
+  btn.textContent = '🔄 Importar mais'
+  btn.onclick = () => {
+    ta.value = ''
+    siMassCount()
+    statusEl.classList.add('hidden')
+    btn.textContent = '🚀 Enfileirar e Processar'
+    btn.onclick = () => siMassImport(storeId)
+  }
+}
+
+// ── CSV: lê arquivo e envia para importação ──────────────────────
+
 
 // Extrai nome legível do slug da URL do produto ML
 // ex: "estaco-de-musculaco-completa-com-66kg" → "Estação De Musculação Completa Com 66kg"

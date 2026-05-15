@@ -6486,7 +6486,7 @@ admin.post('/api/feed/ingest', async (c) => {
 
   if (!store_id) return c.json({ error: 'store_id obrigatório' }, 400)
   if (!Array.isArray(items) || items.length === 0) return c.json({ error: 'items[] não pode ser vazio' }, 400)
-  if (items.length > 5000) return c.json({ error: 'Máximo 5000 itens por lote' }, 400)
+  if (items.length > 10000) return c.json({ error: 'Máximo 10000 itens por lote' }, 400)
 
   // Valida que a loja existe
   const store = await db.prepare('SELECT id FROM stores WHERE id = ?').bind(store_id).first<{ id: number }>()
@@ -6893,6 +6893,19 @@ admin.post('/api/feed/process', async (c) => {
     ok: true,
     processed: pending.length,
     duration_ms: Date.now() - started,
+    // Contadores agregados para o frontend de progresso
+    imported:  Object.values(batchStats).reduce((s, b) => s + b.created,  0),
+    matched:   Object.values(batchStats).reduce((s, b) => s + b.matched,  0),
+    updated:   Object.values(batchStats).reduce((s, b) => s + b.updated,  0),
+    skipped:   Object.values(batchStats).reduce((s, b) => s + b.skipped,  0),
+    errors:    Object.values(batchStats).reduce((s, b) => s + b.errors,   0),
+    // Quantos ainda restam pendentes neste batch (para polling do frontend)
+    pending_remaining: batchId
+      ? await (async () => {
+          const r = await db.prepare(`SELECT COUNT(*) as n FROM raw_links WHERE batch_id = ? AND status = 'pending'`).bind(batchId).first<{n:number}>()
+          return r?.n ?? 0
+        })()
+      : null,
     batches: batchStats
   })
 })
