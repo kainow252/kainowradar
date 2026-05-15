@@ -861,14 +861,11 @@ function _updateStoreSectionTotals(storesArr) {
   try {
     const totalProds  = storesArr.reduce((s, x) => s + (x.product_count || 0), 0)
     const totalOffers = storesArr.reduce((s, x) => s + (x.offer_count  || 0), 0)
-    // Os stat-cards do topo são identificáveis pelo texto da legenda
-    document.querySelectorAll('.stat-card').forEach(el => {
-      const label = el.querySelector('.text-sm')?.textContent || ''
-      const val   = el.querySelector('.text-3xl, .text-2xl')
-      if (!val) return
-      if (label.includes('produtos') || label.toLowerCase().includes('produto')) val.textContent = totalProds
-      if (label.includes('ofertas')  || label.toLowerCase().includes('oferta'))  val.textContent = totalOffers
-    })
+    // Atualiza via IDs diretos (mais confiável que buscar por texto)
+    const elProds  = document.getElementById('stores-stat-prods')
+    const elOffers = document.getElementById('stores-stat-offers')
+    if (elProds)  elProds.textContent  = totalProds
+    if (elOffers) elOffers.textContent = totalOffers
   } catch (_) { /* silencioso */ }
 }
 
@@ -2849,11 +2846,11 @@ async function renderStores(area) {
           <div class="text-sm text-slate-500 mt-1">Com produtos</div>
         </div>
         <div class="stat-card text-center border-t-4 border-violet-400">
-          <div class="text-3xl font-black text-violet-700">${totalProds}</div>
+          <div class="text-3xl font-black text-violet-700" id="stores-stat-prods">${totalProds}</div>
           <div class="text-sm text-slate-500 mt-1">Produtos no banco</div>
         </div>
         <div class="stat-card text-center border-t-4 border-sky-400">
-          <div class="text-3xl font-black text-sky-700">${totalOffers}</div>
+          <div class="text-3xl font-black text-sky-700" id="stores-stat-offers">${totalOffers}</div>
           <div class="text-sm text-slate-500 mt-1">Ofertas ativas</div>
         </div>
       </div>
