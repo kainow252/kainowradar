@@ -4060,7 +4060,7 @@ async function renderFooterAdmin(area) {
         </div>
         <div class="flex gap-3 mt-6">
           <button onclick="closeFooterModal()" class="btn-secondary flex-1">Cancelar</button>
-          <button onclick="confirmAddFooterItem()" class="btn-primary flex-1">Adicionar</button>
+          <button id="footer-modal-confirm-btn" onclick="confirmAddFooterItem()" class="btn-primary flex-1">Adicionar</button>
         </div>
       </div>
     </div>
@@ -4171,23 +4171,32 @@ async function deleteFooterItem(section, key) {
   } else toast('Erro ao remover', 'error')
 }
 
-// Estado do modal de adição
+// Estado do modal de adição/edição
 let _footerModalSection = ''
+let _footerEditKey = null   // null = modo adicionar; string = modo editar
+let _footerEditSortOrder = 99
+
 function openAddFooterModal(section, label1, label2) {
   _footerModalSection = section
+  _footerEditKey = null
+  _footerEditSortOrder = 99
   const titles = { stores: 'Adicionar Loja Parceira', categories: 'Adicionar Categoria', info: 'Adicionar Link' }
   document.getElementById('footer-modal-title').textContent = titles[section] || 'Adicionar Item'
   document.getElementById('footer-modal-label1').textContent = label1
   document.getElementById('footer-modal-label2').textContent = label2
   document.getElementById('footer-modal-key').value = ''
+  document.getElementById('footer-modal-key').readOnly = false
   document.getElementById('footer-modal-value').value = ''
   document.getElementById('footer-modal-visible').checked = true
+  const confirmBtn = document.getElementById('footer-modal-confirm-btn')
+  if (confirmBtn) confirmBtn.textContent = 'Adicionar'
   document.getElementById('footer-add-modal').classList.remove('hidden')
   setTimeout(() => document.getElementById('footer-modal-key').focus(), 100)
 }
 
 function closeFooterModal() {
   document.getElementById('footer-add-modal').classList.add('hidden')
+  _footerEditKey = null
 }
 
 async function confirmAddFooterItem() {
@@ -4195,19 +4204,33 @@ async function confirmAddFooterItem() {
   const value = document.getElementById('footer-modal-value').value.trim()
   const vis   = document.getElementById('footer-modal-visible').checked
   if (!key) { toast('Preencha o nome / label', 'error'); return }
-  const res = await api('POST', `/admin/api/footer-config/${_footerModalSection}`, {
-    key, value, is_visible: vis, sort_order: 99
-  })
-  if (res?.ok) {
-    toast('✓ Item adicionado', 'success')
-    closeFooterModal()
-    renderFooterAdmin(document.getElementById('content-area'))
-  } else toast('Erro ao adicionar', 'error')
+  if (_footerEditKey !== null) {
+    // Modo edição → PUT
+    const res = await api('PUT', `/admin/api/footer-config/${_footerModalSection}/${encodeURIComponent(_footerEditKey)}`,
+      { value, is_visible: vis, sort_order: _footerEditSortOrder })
+    if (res?.ok) {
+      toast('✓ Atualizado com sucesso', 'success')
+      closeFooterModal()
+      renderFooterAdmin(document.getElementById('content-area'))
+    } else toast('Erro ao atualizar', 'error')
+  } else {
+    // Modo adição → POST
+    const res = await api('POST', `/admin/api/footer-config/${_footerModalSection}`, {
+      key, value, is_visible: vis, sort_order: 99
+    })
+    if (res?.ok) {
+      toast('✓ Item adicionado', 'success')
+      closeFooterModal()
+      renderFooterAdmin(document.getElementById('content-area'))
+    } else toast('Erro ao adicionar', 'error')
+  }
 }
 
 // Edição inline de categoria (reutiliza modal)
 function editFooterCategory(key, value, is_visible, sort_order) {
   _footerModalSection = 'categories'
+  _footerEditKey = key
+  _footerEditSortOrder = sort_order
   document.getElementById('footer-modal-title').textContent = 'Editar Categoria'
   document.getElementById('footer-modal-label1').textContent = 'Nome da categoria'
   document.getElementById('footer-modal-label2').textContent = 'URL (ex: /categoria/smartphones)'
@@ -4215,6 +4238,8 @@ function editFooterCategory(key, value, is_visible, sort_order) {
   document.getElementById('footer-modal-key').readOnly = true
   document.getElementById('footer-modal-value').value = value
   document.getElementById('footer-modal-visible').checked = !!is_visible
+  const confirmBtn = document.getElementById('footer-modal-confirm-btn')
+  if (confirmBtn) confirmBtn.textContent = 'Salvar'
   document.getElementById('footer-add-modal').classList.remove('hidden')
   setTimeout(() => document.getElementById('footer-modal-value').focus(), 100)
 }
@@ -4222,6 +4247,8 @@ function editFooterCategory(key, value, is_visible, sort_order) {
 // Edição inline de loja (reutiliza modal)
 function editFooterStore(key, value, is_visible, sort_order) {
   _footerModalSection = 'stores'
+  _footerEditKey = key
+  _footerEditSortOrder = sort_order
   document.getElementById('footer-modal-title').textContent = 'Editar Loja Parceira'
   document.getElementById('footer-modal-label1').textContent = 'Nome da loja'
   document.getElementById('footer-modal-label2').textContent = 'URL da categoria'
@@ -4229,25 +4256,16 @@ function editFooterStore(key, value, is_visible, sort_order) {
   document.getElementById('footer-modal-key').readOnly = true
   document.getElementById('footer-modal-value').value = value
   document.getElementById('footer-modal-visible').checked = !!is_visible
+  const confirmBtn = document.getElementById('footer-modal-confirm-btn')
+  if (confirmBtn) confirmBtn.textContent = 'Salvar'
   document.getElementById('footer-add-modal').classList.remove('hidden')
-  // troca botão para salvar edição
-  const btn = document.querySelector('#footer-add-modal [onclick="confirmAddFooterItem()"]')
-  if (btn) {
-    btn.onclick = async () => {
-      const newVal = document.getElementById('footer-modal-value').value.trim()
-      const newVis = document.getElementById('footer-modal-visible').checked
-      await api('PUT', `/admin/api/footer-config/stores/${encodeURIComponent(key)}`, { value: newVal, is_visible: newVis, sort_order })
-      toast('✓ Loja atualizada', 'success')
-      closeFooterModal()
-      document.getElementById('footer-modal-key').readOnly = false
-      btn.onclick = confirmAddFooterItem
-      renderFooterAdmin(document.getElementById('content-area'))
-    }
-  }
+  setTimeout(() => document.getElementById('footer-modal-value').focus(), 100)
 }
 
 function editFooterInfo(key, value, is_visible, sort_order) {
   _footerModalSection = 'info'
+  _footerEditKey = key
+  _footerEditSortOrder = sort_order
   document.getElementById('footer-modal-title').textContent = 'Editar Link'
   document.getElementById('footer-modal-label1').textContent = 'Label do link'
   document.getElementById('footer-modal-label2').textContent = 'URL'
@@ -4255,22 +4273,11 @@ function editFooterInfo(key, value, is_visible, sort_order) {
   document.getElementById('footer-modal-key').readOnly = true
   document.getElementById('footer-modal-value').value = value
   document.getElementById('footer-modal-visible').checked = !!is_visible
+  const confirmBtn = document.getElementById('footer-modal-confirm-btn')
+  if (confirmBtn) confirmBtn.textContent = 'Salvar'
   document.getElementById('footer-add-modal').classList.remove('hidden')
-  const btn = document.querySelector('#footer-add-modal [onclick="confirmAddFooterItem()"]')
-  if (btn) {
-    btn.onclick = async () => {
-      const newVal = document.getElementById('footer-modal-value').value.trim()
-      const newVis = document.getElementById('footer-modal-visible').checked
-      await api('PUT', `/admin/api/footer-config/info/${encodeURIComponent(key)}`, { value: newVal, is_visible: newVis, sort_order })
-      toast('✓ Link atualizado', 'success')
-      closeFooterModal()
-      document.getElementById('footer-modal-key').readOnly = false
-      btn.onclick = confirmAddFooterItem
-      renderFooterAdmin(document.getElementById('content-area'))
-    }
-  }
+  setTimeout(() => document.getElementById('footer-modal-value').focus(), 100)
 }
-
 async function renderApiConfigs(area) {
   // Garante que todos os 18 registros existam no banco (idempotente)
   await api('POST', '/admin/api/api-configs/seed').catch(() => {})
