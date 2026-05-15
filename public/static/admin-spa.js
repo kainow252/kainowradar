@@ -2204,29 +2204,42 @@ async function siImportDual(storeId, pairs) {
 
     const lines = []
     metaArr.forEach((m, i) => {
-      if (!m || !m.name) return
-      const u = pairs[i].url1
+      const p = pairs[i]
+      const u = p.url1
+      // Se fetch falhou mas temos url2 (/social/) + mlbId extraído do url1 → envia assim mesmo
+      // O backend usa 'Produto MLBXXXXXX' como nome temporário e enrich completa depois
+      const hasSocialFallback = p.url2 && u
+      if (!m || !m.name) {
+        if (!hasSocialFallback) return  // sem nome e sem par → descarta
+        // Par com /social/ mas sem nome: envia só a URL social + hint mlb: do url1
+        const saveUrl = p.url2
+        const mlbMatch = (u || '').match(/\b(MLB[\-]?\d{8,12})\b/i)
+        const mlbHint  = mlbMatch ? ' | mlb:' + mlbMatch[1].replace('-','').toUpperCase() : ''
+        if (!mlbHint) return  // sem MLB-ID extraível → descarta (não há como deduplicar)
+        lines.push(saveUrl + mlbHint)
+        return
+      }
       // PRIORIDADE: url2 = link /social/ colado pelo usuário → sempre usa esse!
       // Fallback: affiliateUrl do backend → URL do produto
-      const saveUrl = pairs[i].url2 || m.affiliateUrl || u
+      const saveUrl = p.url2 || m.affiliateUrl || u
       let line = saveUrl + ' | ' + m.name
       if (m.price) line += ' | ' + m.price
       if (m.image) line += ' | ' + m.image
       // Passa mlbId como 5º campo quando temos /social/ como saveUrl mas mlbId do produto
       // Isso permite ao backend deduplicar corretamente pelo MLB-ID mesmo sem ele na URL /social/
-      if (m.mlbId && pairs[i].url2) line += ' | mlb:' + m.mlbId
+      if (m.mlbId && p.url2) line += ' | mlb:' + m.mlbId
       lines.push(line)
     })
 
     const semNome = pairs.length - lines.length
     const progWrap = document.getElementById('si-prog-wrap')
     if (!lines.length) {
-      if (progWrap) progWrap.innerHTML = '<p class="text-xs text-red-500 font-semibold text-center py-1">⚠ Nenhum produto com nome encontrado. Verifique os links.</p>'
+      if (progWrap) progWrap.innerHTML = '<p class="text-xs text-red-500 font-semibold text-center py-1">⚠ Nenhum produto importável encontrado. Verifique os links.</p>'
       siBtnReset(btn, storeId, '⚠ Tentar novamente')
       return
     }
     if (progWrap) {
-      const aviso = semNome > 0 ? ` (${semNome} sem nome, ignorados)` : ''
+      const aviso = semNome > 0 ? ` (${semNome} sem dados completos, enrich completará depois)` : ''
       progWrap.innerHTML = '<p class="text-xs text-green-600 font-semibold text-center py-1">✓ ' + lines.length + ' produto(s) prontos' + aviso + ' — salvando...</p>'
     }
 
@@ -2236,11 +2249,20 @@ async function siImportDual(storeId, pairs) {
     if (resEl && data) siRenderResult(data, resEl)
 
     if (data?.ok) {
-      toast('✓ ' + data.imported + ' produto(s) importados!', 'success')
+      if ((data.imported||0) > 0) {
+        toast('✓ ' + data.imported + ' produto(s) novos importados!', 'success')
+      } else if ((data.updated||0) > 0) {
+        toast('🔄 ' + data.updated + ' offer(s) atualizadas — nenhum produto novo.', 'info')
+      } else if ((data.duplicates||0) > 0) {
+        toast('🔁 ' + data.duplicates + ' já importado(s) — nenhuma novidade.', 'info')
+      } else {
+        toast('✓ Importação concluída.', 'success')
+      }
       if (btn) {
         btn.disabled = false
         btn.className = 'w-full py-3 rounded-xl bg-green-600 text-white text-sm font-bold'
-        btn.innerHTML = '✓ ' + data.imported + ' produto(s) salvos! Importar mais'
+        const importedCount = (data.imported||0) + (data.updated||0)
+        btn.innerHTML = '✓ ' + importedCount + ' processado(s)! Importar mais'
         btn.onclick = function() {
           document.getElementById('si-textarea').value = ''
           siCountLinks()
