@@ -10655,6 +10655,7 @@ async function startEnrichOffers() {
   let totalEnriched = 0
   let totalFailed   = 0
   let rounds        = 0
+  let zeroRounds    = 0   // rodadas consecutivas sem enriquecimento
   const MAX_ROUNDS  = 60  // máximo 60 rodadas × 20 itens = 1200 offers
 
   while (rounds < MAX_ROUNDS) {
@@ -10676,12 +10677,29 @@ async function startEnrichOffers() {
     totalEnriched += data.enriched || 0
     totalFailed   += data.failed   || 0
 
+    // Controle de parada: 5 rodadas seguidas sem enriquecimento = para
+    if (data.enriched === 0 && data.processed > 0) {
+      zeroRounds++
+      if (zeroRounds >= 5) {
+        if (log) {
+          const li = document.createElement('div')
+          li.className = 'text-amber-600 font-medium'
+          li.textContent = `⚠️ 5 rodadas sem progresso — links podem não estar resolvendo. Parando.`
+          log.appendChild(li); log.scrollTop = log.scrollHeight
+        }
+        break
+      }
+    } else {
+      zeroRounds = 0  // reseta contador se progrediu
+    }
+
     if (log && data.details?.length) {
       data.details.forEach(d => {
         const li = document.createElement('div')
         li.className = d.status === 'ok' ? 'text-green-700' : 'text-slate-400'
         const priceStr = d.price ? `R$ ${d.price.toFixed(2)}` : 'sem preço'
-        li.textContent = `${d.status === 'ok' ? '✓' : '·'} ${(d.name||'').substring(0,45)} — ${priceStr} img:${d.image}`
+        const mlbStr   = d.mlb   ? ` [${d.mlb}]` : ''
+        li.textContent = `${d.status === 'ok' ? '✓' : '·'} ${(d.name||'').substring(0,45)}${mlbStr} — ${priceStr} img:${d.image}`
         log.appendChild(li)
         log.scrollTop = log.scrollHeight
       })
@@ -10694,11 +10712,6 @@ async function startEnrichOffers() {
     // Progresso visual (estimado)
     const pct = rem === 0 ? 100 : Math.min(95, Math.round((rounds / MAX_ROUNDS) * 100))
     if (bar) bar.style.width = pct + '%'
-
-    if (data.enriched === 0 && data.processed > 0) {
-      // Todos os itens desta rodada já não tinham como enriquecer → tenta mais 2x
-      if (rounds > 2) break
-    }
 
     if (rem === 0 || data.processed === 0) break
 

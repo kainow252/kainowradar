@@ -2957,44 +2957,72 @@ admin.post('/api/enrich-offers', async (c) => {
   for (const offer of offers) {
     try {
       const url = offer.affiliate_url
-      // Tenta buscar página do produto ML via Googlebot UA
       let price: number | null = null
       let image = ''
-      const mlbId = extractMlbId(url)
-      const fetchUrl = mlbId
-        ? `https://produto.mercadolivre.com.br/${mlbId}`
-        : url
 
-      const res = await fetch(fetchUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-          'Accept': 'text/html,application/xhtml+xml',
-          'Accept-Language': 'pt-BR,pt;q=0.9',
-          'Referer': 'https://www.mercadolivre.com.br/',
-        },
-        signal: AbortSignal.timeout(8000),
-      })
+      // Passo 1: tenta extrair MLB da affiliate_url diretamente
+      let mlbId = extractMlbId(url)
 
-      if (res.ok) {
-        const html = await res.text()
-        price = extractPrice(html)
-        image = extractImage(html)
+      // Passo 2: se não achou MLB na URL (links /social/?ref=...), segue os redirects
+      // para obter a URL final do produto e extrair o MLB dela
+      if (!mlbId && url.includes('/social/')) {
+        try {
+          const redir = await fetch(url, {
+            redirect: 'follow',
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+              'Accept': 'text/html,application/xhtml+xml',
+            },
+            signal: AbortSignal.timeout(10000),
+          })
+          // URL final após redirect contém /MLB...
+          mlbId = extractMlbId(redir.url)
+          // Aproveita HTML já carregado se redirect chegou na página do produto
+          if (mlbId && redir.ok) {
+            const html = await redir.text()
+            price = extractPrice(html)
+            image = extractImage(html)
+          }
+        } catch { /* ignora timeout de redirect */ }
       }
 
-      // Se não achou pelo produto.mercadolivre, tenta o link /social/ direto
-      if ((!price || !image) && url.includes('/social/')) {
-        const res2 = await fetch(url, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
-            'Accept': 'text/html,application/xhtml+xml',
-          },
-          signal: AbortSignal.timeout(8000),
-        })
-        if (res2.ok) {
-          const html2 = await res2.text()
-          if (!price) price = extractPrice(html2)
-          if (!image) image = extractImage(html2)
-        }
+      // Passo 3: se achou MLB, tenta API pública do ML (JSON limpo, sem scraping)
+      if (mlbId && (!price || !image)) {
+        try {
+          const apiRes = await fetch(`https://api.mercadolibre.com/items/${mlbId}`, {
+            headers: { 'Accept': 'application/json' },
+            signal: AbortSignal.timeout(8000),
+          })
+          if (apiRes.ok) {
+            const item: any = await apiRes.json()
+            if (!price && item.price) price = item.price
+            if (!image && item.thumbnail) {
+              // thumbnail padrão: https://...JPG-I.jpg → troca sufixo por -O.jpg (original)
+              image = (item.pictures?.[0]?.url || item.thumbnail || '')
+                .replace(/-[A-Z](-\d+)?(\.(webp|jpg|png))(\?.*)?$/i, '-O$2')
+            }
+          }
+        } catch { /* ignora erro de API */ }
+      }
+
+      // Passo 4: fallback — scraping da página produto.mercadolivre.com.br/MLB via Googlebot
+      if (mlbId && (!price || !image)) {
+        try {
+          const res = await fetch(`https://produto.mercadolivre.com.br/${mlbId}`, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+              'Accept': 'text/html,application/xhtml+xml',
+              'Accept-Language': 'pt-BR,pt;q=0.9',
+              'Referer': 'https://www.mercadolivre.com.br/',
+            },
+            signal: AbortSignal.timeout(8000),
+          })
+          if (res.ok) {
+            const html = await res.text()
+            if (!price) price = extractPrice(html)
+            if (!image) image = extractImage(html)
+          }
+        } catch { /* ignora */ }
       }
 
       if (price || image) {
@@ -3017,10 +3045,10 @@ admin.post('/api/enrich-offers', async (c) => {
         `).bind(image, image, price || 0, price || 0, offer.product_id).run()
 
         enriched++
-        details.push({ name: offer.name, price, image: image ? '✓' : '✗', status: 'ok' })
+        details.push({ name: offer.name, price, image: image ? '✓' : '✗', mlb: mlbId, status: 'ok' })
       } else {
         failed++
-        details.push({ name: offer.name, price: null, image: '✗', status: 'sem_dados' })
+        details.push({ name: offer.name, price: null, image: '✗', mlb: mlbId, status: 'sem_dados' })
       }
     } catch (e: any) {
       failed++
@@ -7156,7 +7184,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260515i"><\/script>
+<script src="/static/admin-spa.js?v=20260515j"><\/script>
 </body>
 </html>`
 }
