@@ -2703,18 +2703,22 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
 
     const isSocialLink = /mercadolivre\.com\.br\/social\//.test(item.url)
 
-    // Caso B: linha pura "/social/" sem nome — tenta associar ao produto anterior
-    if (isSocialLink && !item.name && pairedItems.length > 0 && pairedItems[pairedItems.length - 1].affiliateUrl === null) {
+    // Caso B: linha pura "/social/" sem nome E sem hint_mlb_id
+    //   → associa ao produto anterior como affiliate_url (par produto+social em 2 linhas)
+    //   CONDIÇÃO: sem hint_mlb_id — se tem hint, veio da aba "Em Massa" e é link principal (Caso A)
+    if (isSocialLink && !item.name && !item.hint_mlb_id && pairedItems.length > 0 && pairedItems[pairedItems.length - 1].affiliateUrl === null) {
       pairedItems[pairedItems.length - 1].affiliateUrl = item.url
       continue
     }
 
-    // Caso A: linha completa com /social/ (tem nome) — socialUrl É o affiliate_url
-    // O frontend passa hint_mlb_id no 5º campo para deduplicação correta
-    if (isSocialLink && item.name) {
+    // Caso A: link /social/ com nome OU com hint_mlb_id (veio da aba "Em Massa")
+    //   → socialUrl É o affiliate_url principal (já tem tracking embutido)
+    //   Também cobre /social/ puro sem par anterior (affiliateUrl != null ou lista vazia)
+    //   nesses casos cria item sem nome — enrich completará depois
+    if (isSocialLink) {
       pairedItems.push({ productUrl: item.url, affiliateUrl: item.url, name: item.name, price: item.price, image_url: item.image_url, hint_mlb_id: item.hint_mlb_id })
     } else {
-      // Caso C: produto normal
+      // Caso C: produto normal (não é /social/)
       pairedItems.push({ productUrl: item.url, affiliateUrl: null, name: item.name, price: item.price, image_url: item.image_url, hint_mlb_id: item.hint_mlb_id })
     }
   }
