@@ -6932,11 +6932,27 @@ admin.get('/api/categories', async (c) => {
     LEFT JOIN products p
       ON p.category = c.slug
       AND p.is_active = 1
-      AND p.best_price IS NOT NULL
     GROUP BY c.id
     ORDER BY c.sort_order ASC, COUNT(p.id) DESC
   `).all<any>()
-  return c.json(results)
+
+  // Conta produtos sem categoria (não vinculados a nenhuma cat)
+  const uncategorized = await DB.prepare(`
+    SELECT COUNT(*) as n FROM products
+    WHERE is_active = 1
+      AND (category IS NULL OR category = '' OR category = 'outros')
+  `).first<{ n: number }>()
+
+  // Total real de produtos ativos no banco
+  const totalReal = await DB.prepare(`
+    SELECT COUNT(*) as n FROM products WHERE is_active = 1
+  `).first<{ n: number }>()
+
+  return c.json({
+    categories: results,
+    uncategorized: uncategorized?.n || 0,
+    total_products: totalReal?.n || 0,
+  })
 })
 
 // ── POST /admin/api/categories/recategorize ───────────────
@@ -7042,7 +7058,7 @@ admin.post('/api/categories/sync', async (c) => {
   const { results: counts } = await DB.prepare(`
     SELECT category as slug, COUNT(*) as cnt
     FROM products
-    WHERE is_active = 1 AND best_price IS NOT NULL AND category IS NOT NULL
+    WHERE is_active = 1 AND category IS NOT NULL AND category != '' AND category != 'outros'
     GROUP BY category
   `).all<{ slug: string; cnt: number }>()
 
@@ -7064,7 +7080,7 @@ admin.post('/api/categories/sync', async (c) => {
     UPDATE categories SET product_count = 0
     WHERE slug NOT IN (
       SELECT DISTINCT category FROM products
-      WHERE is_active = 1 AND best_price IS NOT NULL AND category IS NOT NULL
+      WHERE is_active = 1 AND category IS NOT NULL AND category != '' AND category != 'outros'
     )
   `).run()
 

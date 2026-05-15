@@ -10404,13 +10404,19 @@ async function feedDeleteBatch(id) {
 async function renderCategories(area) {
   area.innerHTML = `<div class="flex items-center justify-center py-16"><div class="text-slate-400 text-sm">Carregando categorias...</div></div>`
 
-  const cats = await api('GET', '/admin/api/categories')
-  if (!cats) return
+  const res = await api('GET', '/admin/api/categories')
+  if (!res) return
+
+  // Suporta resposta nova {categories, uncategorized, total_products} e legada (array)
+  const cats         = Array.isArray(res) ? res : (res.categories || [])
+  const uncategorized = Array.isArray(res) ? 0   : (res.uncategorized || 0)
+  const totalProds   = Array.isArray(res)
+    ? cats.reduce((s, c) => s + (c.product_count || 0), 0)
+    : (res.total_products || cats.reduce((s, c) => s + (c.product_count || 0), 0))
 
   // Totais
   const totalCats  = cats.length
   const activeCats = cats.filter(c => c.is_active).length
-  const totalProds = cats.reduce((s, c) => s + (c.product_count || 0), 0)
   const emptyCats  = cats.filter(c => (c.product_count || 0) === 0).length
 
   const statusBadge = (cat) => {
@@ -10435,23 +10441,25 @@ async function renderCategories(area) {
       <div class="flex items-center justify-between">
         <div>
           <h2 class="text-xl font-black text-slate-800">🗂️ Categorias</h2>
-          <p class="text-sm text-slate-500 mt-0.5">${activeCats} ativas · ${totalProds} produtos · ${emptyCats} vazias</p>
+          <p class="text-sm text-slate-500 mt-0.5">${activeCats} ativas · ${totalProds} produtos no banco · ${emptyCats} vazias${uncategorized > 0 ? ` · <span class="text-amber-600 font-semibold">${uncategorized} sem categoria</span>` : ''}</p>
         </div>
-        <button onclick="syncCategories()" id="btn-sync-cats"
-          class="btn-primary flex items-center gap-2">
-          🔄 Sincronizar Contadores
-        </button>
-        <button onclick="recategorizeProducts()" id="btn-recat"
-          class="btn-secondary flex items-center gap-2 ml-2">
-          🤖 Recategorizar Produtos
-        </button>
+        <div class="flex gap-2">
+          <button onclick="syncCategories()" id="btn-sync-cats"
+            class="btn-primary flex items-center gap-2">
+            🔄 Sincronizar Contadores
+          </button>
+          <button onclick="recategorizeProducts()" id="btn-recat"
+            class="btn-secondary flex items-center gap-2">
+            🤖 Recategorizar Produtos
+          </button>
+        </div>
       </div>
 
       <!-- Cards resumo -->
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <div class="stat-card text-center">
           <div class="text-2xl font-black text-blue-600">${totalCats}</div>
-          <div class="text-xs text-slate-500 mt-1">Total de categorias</div>
+          <div class="text-xs text-slate-500 mt-1">Total categorias</div>
         </div>
         <div class="stat-card text-center">
           <div class="text-2xl font-black text-green-600">${activeCats}</div>
@@ -10459,11 +10467,15 @@ async function renderCategories(area) {
         </div>
         <div class="stat-card text-center">
           <div class="text-2xl font-black text-slate-800">${totalProds}</div>
-          <div class="text-xs text-slate-500 mt-1">Produtos reais</div>
+          <div class="text-xs text-slate-500 mt-1">Produtos no banco</div>
         </div>
         <div class="stat-card text-center">
           <div class="text-2xl font-black ${emptyCats > 0 ? 'text-amber-500' : 'text-green-600'}">${emptyCats}</div>
           <div class="text-xs text-slate-500 mt-1">Vazias</div>
+        </div>
+        <div class="stat-card text-center">
+          <div class="text-2xl font-black ${uncategorized > 0 ? 'text-orange-500' : 'text-green-600'}">${uncategorized}</div>
+          <div class="text-xs text-slate-500 mt-1">Sem categoria</div>
         </div>
       </div>
 
