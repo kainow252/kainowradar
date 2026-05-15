@@ -2969,51 +2969,63 @@ admin.post('/api/enrich-offers', async (c) => {
 
   if (!offers.length) return c.json({ ok: true, enriched: 0, message: 'Nenhum offer para enriquecer' })
 
-  // Helper: extrai MLB ID de URL
+  // ── UAs ──────────────────────────────────────────────────────────────────
+  const mobileUA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+  const botUA    = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+
+  // Helper: extrai MLB ID de URL/string
   const extractMlbId = (s: string): string | null => {
     const m = s.match(/\b(MLB\d{7,12})\b/i)
     return m ? m[1].toUpperCase() : null
   }
 
-  // Helper: extrai preço de HTML
+  // Helper: extrai preço de HTML — igual ao resolve-url (prioridade: current_price > price > itemprop > R$)
   const extractPrice = (html: string): number | null => {
     const patterns = [
-      // Formato JSON da página de produto ML: "price":2569.9
-      /"price"\s*:\s*(\d+\.?\d*)/,
-      // Formato JSON interno: "current_price":{"value":2569}
-      /"current_price"\s*:\s*\{"value"\s*:\s*(\d+\.?\d*)/,
+      // /social/ forceInApp=true: "current_price":{"value":14.54} — PRIORIDADE MÁXIMA
+      /"current_price"\s*:\s*\{"value"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/,
+      // produto.mercadolivre.com.br: "price":119.9
+      /"price"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/,
       // Schema.org itemprop
       /content=["']([\d.,]+)["'][^>]*itemprop=["']price["']/i,
       /itemprop=["']price["'][^>]*content=["']([\d.,]+)["']/i,
-      // Preço formatado: R$\s1.234,56
-      /R\$\s*([\d]{1,3}(?:\.\d{3})*,\d{2})/,
+      // "amount":14.54
+      /"amount"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/,
     ]
     for (const pat of patterns) {
       const m = html.match(pat)
       if (m) {
-        // Normaliza: R$ 1.234,56 → 1234.56
-        const raw = m[1].replace(/\./g, '').replace(',', '.')
+        const raw = m[1].replace(/\.(?=\d{3})/g, '').replace(',', '.')
         const val = parseFloat(raw)
-        if (!isNaN(val) && val >= 5 && val < 9_000_000) return val
+        if (!isNaN(val) && val > 0 && val < 9_000_000) return val
       }
     }
     return null
   }
 
-  // Helper: extrai imagem de HTML
-  const extractImage = (html: string): string => {
-    const og = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
-              || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
-    let img = og?.[1] || ''
-    if (img.startsWith('//')) img = 'https:' + img
+  // Helper: extrai preço do og:title "Nome - R$ 62,35" — igual ao resolve-url
+  const extractPriceFromTitle = (title: string): number | null => {
+    const m = title.match(/R\$\s*([\d]+(?:[.,][\d]{1,2})?)\s*$/i)
+    if (!m) return null
+    const val = parseFloat(m[1].replace(',', '.'))
+    return (!isNaN(val) && val > 0 && val < 9_000_000) ? val : null
+  }
+
+  // Helper: normaliza URL de imagem mlstatic — igual ao resolve-url
+  const fixImgUrl = (img: string): string => {
+    if (!img || img.startsWith('data:')) return ''
     img = img.replace(/\\u002F/g, '/').replace(/\\/g, '')
-    // Garante resolução original
+    if (img.startsWith('//')) img = 'https:' + img
     img = img.replace(/_[A-Z](-\d+)?(\.(webp|jpg|png))(\?.*)?$/, '_O$2')
     return img
   }
 
-  // Obtém token ML uma vez para todos os itens do lote
-  const mlToken = await getMlBearerToken(c.env).catch(() => null)
+  // Helper: extrai og:image de HTML (meta tag padrão)
+  const extractImage = (html: string): string => {
+    const og = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+              || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
+    return fixImgUrl(og?.[1] || '')
+  }
 
   let enriched = 0
   let failed   = 0
@@ -3028,92 +3040,94 @@ admin.post('/api/enrich-offers', async (c) => {
 
       // Passo 1: tenta extrair MLB da affiliate_url diretamente
       let mlbId = extractMlbId(url)
-      let productUrl = ''  // URL real da página do produto no ML
 
-      // Passo 2: para links /social/ — busca a página de perfil do vendedor
-      // Essa página contém: og:image do produto destacado + hrefs com URLs reais dos produtos
+      // ══════════════════════════════════════════════════════════════════
+      // PASSO 2: /social/ com Mobile UA + forceInApp=true
+      //   IGUAL ao resolve-url — o único jeito que funciona no Cloudflare Worker
+      //   Mobile UA + forceInApp=true → ML serve JSON SSR com:
+      //     "current_price":{"value":14.54}   ← preço
+      //     "item_id":"MLB27071946"            ← MLB ID (mais confiável que href)
+      //     "type":"og:image","content":"..."  ← imagem
+      //     "type":"og:title","content":"Nome - R$ 62,35" ← preço alternativo
+      // ══════════════════════════════════════════════════════════════════
       if (url.includes('/social/')) {
         try {
-          const socialRes = await fetch(url, {
+          // Adiciona forceInApp=true (essencial para o ML retornar JSON com preço)
+          let fetchUrl = url
+          if (!url.includes('forceInApp=true')) {
+            try {
+              const u = new URL(url)
+              u.searchParams.set('forceInApp', 'true')
+              fetchUrl = u.toString()
+            } catch { /* mantém URL original */ }
+          }
+
+          const socialRes = await fetch(fetchUrl, {
             redirect: 'follow',
             headers: {
-              'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-              'Accept': 'text/html,application/xhtml+xml',
+              'User-Agent':      mobileUA,   // ← MOBILE (não Googlebot)
+              'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
               'Accept-Language': 'pt-BR,pt;q=0.9',
             },
             signal: AbortSignal.timeout(10000),
           })
           if (socialRes.ok) {
             const html = await socialRes.text()
-            // Extrai og:image (produto principal da vitrine)
+
+            // 1) MLB ID via "item_id":"MLB..." (mais confiável que href)
+            if (!mlbId) {
+              const itemIdM = html.match(/"item_id"\s*:\s*"(MLB\d{7,12})"/i)
+              if (itemIdM) mlbId = itemIdM[1].toUpperCase()
+            }
+
+            // 2) Preço via "current_price":{"value":14.54} — presente no JSON do /social/ com forceInApp
+            if (!price) price = extractPrice(html)
+
+            // 3) Preço via og:title: {"type":"og:title","content":"Nome - R$ 62,35"}
+            if (!price) {
+              const titleM = html.match(/"type"\s*:\s*"og:title"\s*,\s*"content"\s*:\s*"([^"]+)"/)
+                          || html.match(/"content"\s*:\s*"([^"]+)"\s*,\s*"type"\s*:\s*"og:title"/)
+              if (titleM) price = extractPriceFromTitle(titleM[1])
+            }
+
+            // 4) Imagem via og:image no JSON inline
+            if (!image) {
+              const imgM = html.match(/"type"\s*:\s*"og:image"\s*,\s*"content"\s*:\s*"([^"]+)"/)
+                        || html.match(/"content"\s*:\s*"([^"]+)"\s*,\s*"type"\s*:\s*"og:image"/)
+              if (imgM) image = fixImgUrl(imgM[1])
+            }
+            // 5) Imagem fallback: og:image via meta tag padrão
             if (!image) image = extractImage(html)
-            // Extrai a primeira URL real do produto (href com /MLB ou /p/MLB)
-            // Formato: href="https://www.mercadolivre.com.br/SLUG/p/MLB12345678?..."
-            const hrefMatch = html.match(/href="(https:\/\/www\.mercadolivre\.com\.br\/[^"]+\/p\/MLB\d+[^"]*)"/)
-                           || html.match(/href="(https:\/\/www\.mercadolivre\.com\.br\/[^"]+\/MLB\d+[^"]*?\.html[^"]*?)"/)
-            if (hrefMatch) {
-              // Limpa parâmetros de tracking, mantém só o path limpo
-              try {
-                const u = new URL(hrefMatch[1].replace(/&amp;/g, '&'))
-                productUrl = u.origin + u.pathname
-                if (!mlbId) mlbId = extractMlbId(productUrl)
-              } catch { productUrl = '' }
+
+            // 6) Fallback MLB ID via href do produto na página
+            if (!mlbId) {
+              const hrefM = html.match(/href="(https:\/\/www\.mercadolivre\.com\.br\/[^"]+\/p\/MLB\d+[^"]*)"/)
+                         || html.match(/href="(https:\/\/www\.mercadolivre\.com\.br\/[^"]+\/MLB\d+[^"]*?\.html[^"]*?)"/)
+              if (hrefM) {
+                try {
+                  const u = new URL(hrefM[1].replace(/&amp;/g, '&'))
+                  mlbId = extractMlbId(u.origin + u.pathname)
+                } catch { /* ignora */ }
+              }
             }
           }
         } catch { /* ignora timeout */ }
       }
 
-      // Passo 3: API ML com token client_credentials — retorna price + thumbnail (mais confiável)
-      if (mlbId && mlToken && !price) {
-        try {
-          const apiRes = await fetch(`https://api.mercadolibre.com/items/${mlbId}`, {
-            headers: {
-              'Authorization': `Bearer ${mlToken}`,
-              'Accept': 'application/json',
-            },
-            signal: AbortSignal.timeout(8000),
-          })
-          if (apiRes.ok) {
-            const item: any = await apiRes.json()
-            if (item.price)     price = item.price
-            if (!image && (item.pictures?.[0]?.url || item.thumbnail)) {
-              image = (item.pictures?.[0]?.url || item.thumbnail)
-                .replace(/-[A-Z](-\d+)?(\.(?:webp|jpg|png))(\?.*)?$/i, '-O$2')
-            }
-          }
-        } catch { /* ignora */ }
-      }
-
-      // Passo 4: scraping da URL real do produto — fallback quando API ML não tem token
-      // Funciona para: https://www.mercadolivre.com.br/SLUG/p/MLBXXXXXX
-      if (productUrl && !price) {
-        try {
-          const prodRes = await fetch(productUrl, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-              'Accept': 'text/html,application/xhtml+xml',
-              'Accept-Language': 'pt-BR,pt;q=0.9',
-              'Referer': 'https://www.mercadolivre.com.br/',
-            },
-            signal: AbortSignal.timeout(10000),
-          })
-          if (prodRes.ok) {
-            const html = await prodRes.text()
-            price = extractPrice(html)
-            if (!image) image = extractImage(html)
-          }
-        } catch { /* ignora */ }
-      }
-
-      // Passo 5: fallback — scraping de produto.mercadolivre.com.br/MLBXXXXXX via Googlebot
+      // ══════════════════════════════════════════════════════════════════
+      // PASSO 3 (fallback): produto.mercadolivre.com.br/MLBXXXXXX via Googlebot
+      //   Funciona para Item IDs curtos — serve SSR completo para bots
+      //   NOTA: IPs da Cloudflare são bloqueados para scraping de produto normal,
+      //   mas produto.mercadolivre.com.br tem menos bloqueio
+      // ══════════════════════════════════════════════════════════════════
       if (mlbId && (!price || !image)) {
         try {
-          const res = await fetch(`https://produto.mercadolivre.com.br/${mlbId}`, {
+          const mlbDash = mlbId.replace(/^MLB/i, 'MLB-')
+          const res = await fetch(`https://produto.mercadolivre.com.br/${mlbDash}`, {
             headers: {
-              'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-              'Accept': 'text/html,application/xhtml+xml',
+              'User-Agent':      botUA,
+              'Accept':          'text/html,application/xhtml+xml',
               'Accept-Language': 'pt-BR,pt;q=0.9',
-              'Referer': 'https://www.mercadolivre.com.br/',
             },
             signal: AbortSignal.timeout(8000),
           })
