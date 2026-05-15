@@ -2644,7 +2644,11 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
   }
 
   if (dataLines.length === 0) return c.json({ error: 'Nenhuma linha válida encontrada' }, 400)
-  // Sem limite de linhas — o frontend envia em lotes de 50, então não há risco de timeout
+  // Limita a 50 itens por chamada para não estourar o timeout do Worker (cada item faz 4-5 queries D1)
+  // Frontend deve enviar em chunks de 50 e combinar os resultados
+  const CHUNK_LIMIT = 50
+  const dataChunk = dataLines.slice(0, CHUNK_LIMIT)
+  const hasMore   = dataLines.length > CHUNK_LIMIT
 
   // ── Processa cada linha ──────────────────────────────────────
   function slugify(text: string): string {
@@ -2671,8 +2675,8 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
   }
   const pairedItems: PairItem[] = []
 
-  for (let i = 0; i < dataLines.length; i++) {
-    const line = dataLines[i]
+  for (let i = 0; i < dataChunk.length; i++) {
+    const line = dataChunk[i]
     const item = parseLine(line)
     if (!item) { continue }
 
@@ -2960,7 +2964,9 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
     ok: true,
     store_id: storeId,
     store_name: store.name,
-    total: dataLines.length,
+    total: dataChunk.length,
+    total_received: dataLines.length,
+    has_more: hasMore,
     imported,
     duplicates,
     skipped,

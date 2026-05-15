@@ -1804,73 +1804,11 @@ async function siImportAuto(storeId) {
     btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> ' + msg
   }
 
-  // ── MODO RÁPIDO: >20 links → importa direto sem buscar metadados ──
+  // ── MODO RÁPIDO: >20 links → importa em chunks de 50 sem buscar metadados ──
   // Envia as URLs para o backend (nome vazio = usa slug da URL)
   // O enrich-offers completa nome/preço/imagem depois automaticamente
   if (urls.length > 20) {
-    try {
-      setBtnLoading('Importando ' + urls.length + ' links...')
-      live.innerHTML = `
-        <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-3">
-          <p class="text-sm font-semibold text-indigo-800">⚡ Modo rápido ativado (${urls.length} links)</p>
-          <p class="text-xs text-indigo-600 mt-1">Importando sem buscar metadados — use <strong>Enriquecer Ofertas</strong> depois para completar nome/preço/imagem.</p>
-          <div class="h-2 bg-indigo-100 rounded-full mt-3 overflow-hidden">
-            <div id="si-fast-bar" class="h-full bg-indigo-500 rounded-full transition-all duration-500" style="width:10%"></div>
-          </div>
-        </div>`
-
-      // Anima a barra enquanto aguarda
-      let fp = 10
-      const fInterval = setInterval(() => {
-        fp = Math.min(fp + 5, 85)
-        const bar = document.getElementById('si-fast-bar')
-        if (bar) bar.style.width = fp + '%'
-      }, 500)
-
-      // Envia diretamente — sem metadados (nome='' → backend extrai do slug)
-      const lines = urls.map(u => u) // só URLs, sem nome/preço/imagem
-      const data = await api('POST', '/admin/api/stores/' + storeId + '/import-links', { links: lines.join('\n') }, 60000)
-
-      clearInterval(fInterval)
-      const bar = document.getElementById('si-fast-bar')
-      if (bar) bar.style.width = '100%'
-
-      const resEl = document.getElementById('si-live-area')
-      if (resEl && data) {
-        const alertHtml = data.ok
-          ? `<div class="bg-green-50 border border-green-200 rounded-xl p-4 mb-3">
-               <p class="text-sm font-semibold text-green-800">✅ ${data.imported} produto(s) importados em ${data.store_name || 'Mercado Livre'}!</p>
-               ${data.skipped ? `<p class="text-xs text-slate-500 mt-1">${data.skipped} ignorados (duplicados)</p>` : ''}
-               <p class="text-xs text-indigo-600 mt-2">💡 Use <strong>Enriquecer Ofertas</strong> (menu Importar → enrich-offers) para completar preço, nome e imagem.</p>
-             </div>`
-          : `<div class="bg-red-50 border border-red-200 rounded-xl p-4 mb-3">
-               <p class="text-sm font-semibold text-red-700">❌ Erro: ${data.error || 'Falha ao importar'}</p>
-             </div>`
-        live.innerHTML = alertHtml
-        siRenderResult(data, live)
-      }
-
-      if (data?.ok) {
-        toast('✓ ' + data.imported + ' importados (modo rápido)!', 'success')
-        if (btn) {
-          btn.disabled = false
-          btn.className = 'w-full py-3 rounded-xl bg-green-600 text-white text-sm font-bold mt-0'
-          btn.innerHTML = '✓ ' + data.imported + ' salvos! Importar mais'
-          btn.onclick = function() {
-            document.getElementById('si-textarea').value = ''
-            siCountLinks()
-            document.getElementById('si-live-area').innerHTML = ''
-            siBtnReset(btn, storeId)
-          }
-        }
-      } else {
-        toast((data && data.error) || 'Erro ao salvar', 'error')
-        siBtnReset(btn, storeId, '⚠ Tentar novamente')
-      }
-    } catch(err) {
-      toast('Erro: ' + (err?.message || String(err)), 'error')
-      siBtnReset(btn, storeId, '⚠ Tentar novamente')
-    }
+    await siFastImportChunked(storeId, urls.map(u => u), live, btn)
     return
   }
 
@@ -1985,6 +1923,134 @@ async function siImportAuto(storeId) {
 //   2) Browser busca HTML da página ML como fallback (sem bloqueio de IP)
 //   3) API ML direto do browser como fallback (só funciona para Item IDs ≥11 dígitos)
 // Para outros links: allorigins.win como fallback
+// ── siFastImportChunked: modo rápido com chunks de 50 ────────────
+// Divide `lines` em fatias de 50 e chama /import-links sequencialmente
+// Mostra barra de progresso real (chunk atual / total chunks)
+async function siFastImportChunked(storeId, lines, live, btn) {
+  const CHUNK = 50
+  const total  = lines.length
+  const chunks = []
+  for (let i = 0; i < total; i += CHUNK) chunks.push(lines.slice(i, i + CHUNK))
+
+  const setBtnLoading = (msg) => {
+    if (!btn) return
+    btn.disabled = true
+    btn.className = 'w-full py-3 rounded-xl bg-indigo-400 text-white text-sm font-bold cursor-not-allowed mt-0'
+    btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> ' + msg
+  }
+
+  setBtnLoading('Importando ' + total + ' links...')
+
+  live.innerHTML = `
+    <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-3">
+      <p class="text-sm font-semibold text-indigo-800">⚡ Modo rápido — <span id="si-fast-label">${total} links em ${chunks.length} lote(s)</span></p>
+      <p class="text-xs text-indigo-600 mt-1">Importando em lotes de 50 — use <strong>Enriquecer Ofertas</strong> depois para completar nome/preço/imagem.</p>
+      <div class="flex justify-between text-xs text-slate-500 mt-2 mb-1">
+        <span id="si-fast-status">Preparando...</span>
+        <span id="si-fast-count" class="font-bold text-indigo-600">0/${total}</span>
+      </div>
+      <div class="h-2.5 bg-indigo-100 rounded-full overflow-hidden">
+        <div id="si-fast-bar" class="h-full bg-indigo-500 rounded-full transition-all duration-300" style="width:2%"></div>
+      </div>
+    </div>
+    <div id="si-fast-log" class="text-xs text-slate-500 space-y-0.5 max-h-32 overflow-y-auto"></div>`
+
+  let totalImported  = 0
+  let totalDuplicates = 0
+  let totalErrors    = 0
+  let processedLines = 0
+  let storeName      = ''
+
+  try {
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const chunk = chunks[ci]
+      const pct   = Math.round((ci / chunks.length) * 100)
+
+      const barEl    = document.getElementById('si-fast-bar')
+      const statusEl = document.getElementById('si-fast-status')
+      const countEl  = document.getElementById('si-fast-count')
+      if (barEl)    barEl.style.width = Math.max(pct, 2) + '%'
+      if (statusEl) statusEl.textContent = `Lote ${ci + 1} de ${chunks.length}...`
+      if (countEl)  countEl.textContent  = processedLines + '/' + total
+
+      setBtnLoading(`Lote ${ci + 1}/${chunks.length} — ${processedLines}/${total} links`)
+
+      const data = await api('POST', '/admin/api/stores/' + storeId + '/import-links',
+        { links: chunk.join('\n') }, 60000)
+
+      if (!data) {
+        // timeout ou erro de rede — para e avisa
+        const logEl = document.getElementById('si-fast-log')
+        if (logEl) logEl.innerHTML += `<div class="text-red-500">⚠ Lote ${ci+1}: sem resposta (timeout) — interrompido.</div>`
+        break
+      }
+
+      processedLines += chunk.length
+      totalImported   += data.imported   || 0
+      totalDuplicates += data.duplicates || 0
+      totalErrors     += data.errors     || 0
+      if (data.store_name) storeName = data.store_name
+
+      const logEl = document.getElementById('si-fast-log')
+      if (logEl) {
+        const icon = data.ok ? '✅' : '⚠'
+        logEl.innerHTML += `<div>${icon} Lote ${ci+1}: ${data.imported||0} importados, ${data.duplicates||0} duplicados, ${data.errors||0} erros</div>`
+        logEl.scrollTop = logEl.scrollHeight
+      }
+    }
+
+    // Barra 100% + resumo final
+    const barEl    = document.getElementById('si-fast-bar')
+    const statusEl = document.getElementById('si-fast-status')
+    const countEl  = document.getElementById('si-fast-count')
+    if (barEl)    barEl.style.width = '100%'
+    if (barEl)    barEl.className   = barEl.className.replace('bg-indigo-500', 'bg-green-500')
+    if (statusEl) statusEl.textContent = '✓ Concluído!'
+    if (countEl)  countEl.textContent  = processedLines + '/' + total
+
+    const summaryEl = document.getElementById('si-fast-label')
+    if (summaryEl) summaryEl.textContent =
+      `${totalImported} importados · ${totalDuplicates} duplicados · ${totalErrors} erros`
+
+    if (totalImported > 0) {
+      toast('✓ ' + totalImported + ' de ' + total + ' importados!', 'success')
+      if (btn) {
+        btn.disabled  = false
+        btn.className = 'w-full py-3 rounded-xl bg-green-600 text-white text-sm font-bold mt-0'
+        btn.innerHTML = '✓ ' + totalImported + ' salvos! Importar mais'
+        btn.onclick = function() {
+          document.getElementById('si-textarea').value = ''
+          siCountLinks()
+          document.getElementById('si-live-area').innerHTML = ''
+          btn.disabled  = false
+          btn.className = 'w-full py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 transition-all mt-0'
+          btn.textContent = '🚀 Importar Automaticamente'
+        }
+      }
+    } else {
+      toast('Todos os links já estavam importados (duplicados).', 'warning')
+      if (btn) {
+        btn.disabled  = false
+        btn.className = 'w-full py-3 rounded-xl bg-slate-500 text-white text-sm font-bold mt-0'
+        btn.innerHTML = '↩ Todos duplicados — Importar outros'
+        btn.onclick = function() {
+          document.getElementById('si-textarea').value = ''
+          siCountLinks()
+          document.getElementById('si-live-area').innerHTML = ''
+        }
+      }
+    }
+
+  } catch(err) {
+    toast('Erro: ' + (err?.message || String(err)), 'error')
+    if (btn) {
+      btn.disabled  = false
+      btn.className = 'w-full py-3 rounded-xl bg-red-600 text-white text-sm font-bold mt-0'
+      btn.innerHTML = '⚠ Erro — Tentar novamente'
+    }
+  }
+}
+
 // ── siImportDual: importa pares url1+url2 (também usado pelo modo simples quando detecta pares) ──
 async function siImportDual(storeId, pairs) {
   const live = document.getElementById('si-live-area')
@@ -1996,71 +2062,17 @@ async function siImportDual(storeId, pairs) {
     btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> ' + msg
   }
 
-  // ── MODO RÁPIDO: >20 pares → envia direto sem buscar metadados ──
+  // ── MODO RÁPIDO: >20 pares → chunks de 50, sem buscar metadados ──
   // url2 = link /social/ já contém imagem e preço; backend resolve tudo
   if (pairs.length > 20) {
-    try {
-      setBtnLoading('Importando ' + pairs.length + ' pares...')
-      live.innerHTML = `
-        <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-3">
-          <p class="text-sm font-semibold text-indigo-800">⚡ Modo rápido ativado (${pairs.length} pares produto+afiliado)</p>
-          <p class="text-xs text-indigo-600 mt-1">Importando sem buscar metadados individualmente — use <strong>Enriquecer Ofertas</strong> depois para completar nome/preço/imagem.</p>
-          <div class="h-2 bg-indigo-100 rounded-full mt-3 overflow-hidden">
-            <div id="si-fast-bar" class="h-full bg-indigo-500 rounded-full transition-all duration-500" style="width:10%"></div>
-          </div>
-        </div>`
-
-      let fp = 10
-      const fInterval = setInterval(() => {
-        fp = Math.min(fp + 5, 85)
-        const bar = document.getElementById('si-fast-bar')
-        if (bar) bar.style.width = fp + '%'
-      }, 400)
-
-      // Monta linhas: usa url2 (/social/) como URL salva + mlb: hint quando possível
-      const lines = pairs.map(p => {
-        const saveUrl = p.url2 || p.url1
-        // Tenta extrair MLB ID da url1 para hint de deduplicação
-        const mlbMatch = (p.url1 || '').match(/\b(MLB[\-]?\d{8,12})\b/i)
-        const mlbHint  = mlbMatch ? ' | mlb:' + mlbMatch[1].replace('-','').toUpperCase() : ''
-        return saveUrl + mlbHint
-      })
-
-      const data = await api('POST', '/admin/api/stores/' + storeId + '/import-links', { links: lines.join('\n') }, 60000)
-
-      clearInterval(fInterval)
-      const bar = document.getElementById('si-fast-bar')
-      if (bar) bar.style.width = '100%'
-
-      if (data?.ok) {
-        live.innerHTML = `<div class="bg-green-50 border border-green-200 rounded-xl p-4 mb-3">
-          <p class="text-sm font-semibold text-green-800">✅ ${data.imported} produto(s) importados!</p>
-          ${data.skipped ? `<p class="text-xs text-slate-500 mt-1">${data.skipped} ignorados (duplicados)</p>` : ''}
-          <p class="text-xs text-indigo-600 mt-2">💡 Use <strong>Enriquecer Ofertas</strong> para completar preço, nome e imagem.</p>
-        </div>`
-        toast('✓ ' + data.imported + ' importados (modo rápido)!', 'success')
-        if (btn) {
-          btn.disabled = false
-          btn.className = 'w-full py-3 rounded-xl bg-green-600 text-white text-sm font-bold mt-0'
-          btn.innerHTML = '✓ ' + data.imported + ' salvos! Importar mais'
-          btn.onclick = function() {
-            document.getElementById('si-textarea').value = ''
-            siCountLinks()
-            document.getElementById('si-live-area').innerHTML = ''
-            siBtnReset(btn, storeId)
-          }
-        }
-      } else {
-        live.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-xl p-4">
-          <p class="text-sm font-semibold text-red-700">❌ Erro: ${data?.error || 'Falha ao importar'}</p>
-        </div>`
-        toast((data?.error) || 'Erro ao salvar', 'error')
-        siBtnReset(btn, storeId, '⚠ Tentar novamente')
-      }
-    } catch(err) {
-      toast('Erro: ' + (err?.message || String(err)), 'error')
-      siBtnReset(btn, storeId, '⚠ Tentar novamente')
-    }
+    // Monta linhas: usa url2 (/social/) como URL salva + mlb: hint quando possível
+    const lines = pairs.map(p => {
+      const saveUrl = p.url2 || p.url1
+      const mlbMatch = (p.url1 || '').match(/\b(MLB[\-]?\d{8,12})\b/i)
+      const mlbHint  = mlbMatch ? ' | mlb:' + mlbMatch[1].replace('-','').toUpperCase() : ''
+      return saveUrl + mlbHint
+    })
+    await siFastImportChunked(storeId, lines, live, btn)
     return
   }
 
