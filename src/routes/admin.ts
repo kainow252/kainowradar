@@ -2743,23 +2743,35 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
     // Se veio sem nome, tenta extrair do slug da URL do produto
     if (!name) {
       const tryUrl = productUrl || affiliateUrl
-      try {
-        const pth = new URL(tryUrl).pathname
-        const slug = pth
-          .replace(/\/p\/MLB[\w-]*/i, '').replace(/\/MLB[\w-]*/i, '')
-          .replace(/\/$/, '').split('/').filter(Boolean).pop() || ''
-        if (slug && slug.length >= 4 && !/^MLB\d/i.test(slug)) {
-          name = slug.replace(/-+/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()).trim().substring(0, 120)
-        }
-        if (!name) {
-          const mlb = (pth + new URL(tryUrl).search).match(/\b(MLB\d{6,12})\b/i)
-          if (mlb) name = 'Produto ' + mlb[1].toUpperCase()
-        }
-      } catch { /* ignora */ }
+      // Para URLs /social/ não usar o publisher_id como nome (é igual para todos os produtos)
+      const isSocialTryUrl = /mercadolivre\.com\.br\/social\//.test(tryUrl)
+      if (!isSocialTryUrl) {
+        try {
+          const pth = new URL(tryUrl).pathname
+          const slug = pth
+            .replace(/\/p\/MLB[\w-]*/i, '').replace(/\/MLB[\w-]*/i, '')
+            .replace(/\/$/, '').split('/').filter(Boolean).pop() || ''
+          if (slug && slug.length >= 4 && !/^MLB\d/i.test(slug)) {
+            name = slug.replace(/-+/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()).trim().substring(0, 120)
+          }
+          if (!name) {
+            const mlb = (pth + new URL(tryUrl).search).match(/\b(MLB\d{6,12})\b/i)
+            if (mlb) name = 'Produto ' + mlb[1].toUpperCase()
+          }
+        } catch { /* ignora */ }
+      }
     }
 
     // Último recurso: nome genérico (nunca rejeita por falta de nome)
-    if (!name) name = 'Produto Importado ' + Date.now().toString(36).toUpperCase()
+    // Para /social/ com hint_mlb_id, usa o MLB-ID como referência temporária
+    if (!name) {
+      if (hint_mlb_id) {
+        const digitsOnly = hint_mlb_id.replace(/^MLB[\-_]?/i, '')
+        name = 'Produto MLB' + digitsOnly
+      } else {
+        name = 'Produto Importado ' + Date.now().toString(36).toUpperCase()
+      }
+    }
 
     const price   = rawPrice ?? 0
     const imgUrl  = image_url || null
