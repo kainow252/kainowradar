@@ -283,11 +283,23 @@ admin.patch('/api/products/:id', async (c) => {
   return c.json({ ok: true })
 })
 
-// ── DELETE /admin/api/products/:id — Desativar produto ────
+// ── DELETE /admin/api/products/:id — Excluir produto permanentemente ─
 admin.delete('/api/products/:id', async (c) => {
   const { DB } = c.env
   const id = parseInt(c.req.param('id'))
-  await DB.prepare("UPDATE products SET is_active = 0 WHERE id = ?").bind(id).run()
+  if (!id) return c.json({ ok: false, error: 'ID inválido' }, 400)
+  // Remove ofertas associadas primeiro (FK), depois o produto
+  await DB.prepare("DELETE FROM offers WHERE product_id = ?").bind(id).run()
+  await DB.prepare("DELETE FROM products WHERE id = ?").bind(id).run()
+  return c.json({ ok: true })
+})
+
+// ── DELETE /admin/api/offers/:id — Excluir oferta permanentemente ──
+admin.delete('/api/offers/:id', async (c) => {
+  const { DB } = c.env
+  const id = parseInt(c.req.param('id'))
+  if (!id) return c.json({ ok: false, error: 'ID inválido' }, 400)
+  await DB.prepare("DELETE FROM offers WHERE id = ?").bind(id).run()
   return c.json({ ok: true })
 })
 
@@ -7561,8 +7573,16 @@ function renderAdminSPA(): string {
           </div>
           <div>
             <label class="block text-sm font-medium text-slate-600 mb-1.5">Senha</label>
-            <input type="password" id="login-password" class="input" placeholder="••••••••"
-              onkeydown="if(event.key==='Enter') doLogin()">
+            <div class="relative">
+              <input type="password" id="login-password" class="input pr-10" placeholder="••••••••"
+                onkeydown="if(event.key==='Enter') doLogin()">
+              <button type="button" onclick="togglePwdVisibility('login-password', this)"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors focus:outline-none" tabindex="-1">
+                <svg id="eye-login-password" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -7570,8 +7590,16 @@ function renderAdminSPA(): string {
         <div id="login-master-fields" class="space-y-3 hidden">
           <div>
             <label class="block text-sm font-medium text-slate-600 mb-1.5">Senha master</label>
-            <input type="password" id="login-master-password" class="input" placeholder="••••••••"
-              onkeydown="if(event.key==='Enter') doLogin()">
+            <div class="relative">
+              <input type="password" id="login-master-password" class="input pr-10" placeholder="••••••••"
+                onkeydown="if(event.key==='Enter') doLogin()">
+              <button type="button" onclick="togglePwdVisibility('login-master-password', this)"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors focus:outline-none" tabindex="-1">
+                <svg id="eye-login-master-password" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -7611,9 +7639,7 @@ function renderAdminSPA(): string {
         <span class="text-lg">📊</span> Dashboard
       </div>
       <div class="px-3 pt-4 pb-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Catálogo</div>
-      <div onclick="showSection('top-deals')" class="sidebar-link" data-section="top-deals">
-        <span class="text-lg">🏷️</span> Top Deals
-      </div>
+      <!-- top-deals: oculto do menu -->
       <div onclick="showSection('products')" class="sidebar-link" data-section="products">
         <span class="text-lg">📦</span> Produtos
       </div>

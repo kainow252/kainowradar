@@ -11,6 +11,22 @@ const App = {
 // ── Auth ─────────────────────────────────────────────────
 let _loginMode = 'user' // 'user' | 'master'
 
+function togglePwdVisibility(inputId, btn) {
+  const inp = document.getElementById(inputId)
+  if (!inp) return
+  const showing = inp.type === 'text'
+  inp.type = showing ? 'password' : 'text'
+  // Troca o ícone: olho aberto ↔ olho riscado
+  const svg = btn.querySelector('svg')
+  if (svg) {
+    if (showing) {
+      svg.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'
+    } else {
+      svg.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
+    }
+  }
+}
+
 function setLoginMode(mode) {
   _loginMode = mode
   const tabUser   = document.getElementById('tab-user')
@@ -641,6 +657,9 @@ async function renderProducts(area, page = 1) {
           <button onclick="toggleProduct(${p.id}, ${p.is_active})" class="${p.is_active?'btn-danger':'btn-success'} text-xs">
             ${p.is_active?'Desativar':'Ativar'}
           </button>
+          <button onclick="deleteProduct(${p.id}, ${JSON.stringify(p.name)})" class="text-xs px-2 py-1 rounded-lg bg-red-100 text-red-700 hover:bg-red-200 transition-colors font-semibold">
+            🗑 Excluir
+          </button>
         </div>
       </td>
     </tr>
@@ -677,9 +696,18 @@ async function renderProducts(area, page = 1) {
 }
 
 async function toggleProduct(id, currentActive) {
-  await api('DELETE', `/admin/api/products/${id}`)
+  await api('PATCH', `/admin/api/products/${id}`, { is_active: currentActive ? 0 : 1 })
   toast(currentActive ? 'Produto desativado' : 'Produto ativado', 'success')
   renderProducts(document.getElementById('content-area'))
+}
+
+async function deleteProduct(id, name) {
+  if (!confirm(`Excluir permanentemente "${name}"?\n\nIsso removerá o produto e TODAS as ofertas associadas. Ação irreversível.`)) return
+  const res = await api('DELETE', `/admin/api/products/${id}`)
+  if (res?.ok) {
+    toast('🗑 Produto excluído permanentemente', 'success')
+    renderProducts(document.getElementById('content-area'))
+  } else toast('Erro ao excluir produto', 'error')
 }
 
 function editProduct(id) {
@@ -710,6 +738,11 @@ async function renderOffers(area, page = 1) {
       <td class="table-td">
         ${o.checkout_url ? `<a href="${o.checkout_url}" target="_blank" class="text-blue-600 text-xs hover:underline">Abrir →</a>` : '—'}
       </td>
+      <td class="table-td">
+        <button onclick="deleteOffer(${o.id}, ${JSON.stringify(o.product_name)})" class="text-xs px-2 py-1 rounded-lg bg-red-100 text-red-700 hover:bg-red-200 transition-colors font-semibold whitespace-nowrap">
+          🗑 Excluir
+        </button>
+      </td>
     </tr>
   `).join('')
 
@@ -731,6 +764,7 @@ async function renderOffers(area, page = 1) {
               <th class="table-th">Frete</th>
               <th class="table-th">Atualizado</th>
               <th class="table-th">Link</th>
+              <th class="table-th">Ações</th>
             </tr></thead>
             <tbody>${rows}</tbody>
           </table>
@@ -742,6 +776,15 @@ async function renderOffers(area, page = 1) {
 }
 
 // ── STORES ────────────────────────────────────────────────
+async function deleteOffer(id, productName) {
+  if (!confirm(`Excluir oferta de "${productName}"?\n\nA oferta será removida permanentemente. Ação irreversível.`)) return
+  const res = await api('DELETE', `/admin/api/offers/${id}`)
+  if (res?.ok) {
+    toast('🗑 Oferta excluída', 'success')
+    renderOffers(document.getElementById('content-area'))
+  } else toast('Erro ao excluir oferta', 'error')
+}
+
 // ── Mapa de cores por rede ─────────────────────────────────
 const NETWORK_COLORS = {
   'amazon-pa-api':      { bg: '#fff8ee', border: '#FF9900', label: 'Amazon PA-API' },
