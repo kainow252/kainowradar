@@ -978,20 +978,115 @@ function siReadCsv(input, storeId) {
   reader.readAsText(file, 'UTF-8')
 }
 
-// Executa importação dos itens lidos do CSV
+// Executa importação dos itens lidos do CSV — com chunking automático
 async function siImportCsvItems(storeId, items) {
   const liveArea = document.getElementById('si-csv-live-area')
   if (!liveArea) return
-  liveArea.innerHTML = `<div class="flex items-center gap-2 text-sm text-slate-600 py-3">
-    <div class="animate-spin text-xl">⏳</div> Importando ${items.length} itens...
-  </div>`
 
-  // Monta o texto no mesmo formato da aba Colar (um par por linha)
-  const textLines = items.map(it => it.url2 ? `${it.url1} ${it.url2}` : it.url1)
-  const raw = textLines.join('\n')
+  const CHUNK_SIZE = 200  // pares por lote
+  const chunks = []
+  for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+    chunks.push(items.slice(i, i + CHUNK_SIZE))
+  }
 
-  const data = await api('POST', `/admin/api/stores/${storeId}/import-links`, { links: raw }, 30000)
-  siShowImportResult(data, liveArea)
+  // Mostra barra de progresso
+  liveArea.innerHTML = `
+    <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 mt-2">
+      <div class="flex items-center justify-between text-xs text-slate-600 mb-2">
+        <span id="csv-prog-label">Preparando lote 1 de ${chunks.length}...</span>
+        <span id="csv-prog-pct">0%</span>
+      </div>
+      <div class="w-full bg-slate-200 rounded-full h-2.5 mb-3">
+        <div id="csv-prog-bar" class="bg-indigo-500 h-2.5 rounded-full transition-all duration-300" style="width:0%"></div>
+      </div>
+      <div id="csv-prog-stats" class="grid grid-cols-3 gap-2 text-center">
+        <div class="bg-green-50 rounded-lg p-2"><div id="csv-count-ok" class="text-lg font-black text-green-700">0</div><div class="text-xs text-green-500">Importados</div></div>
+        <div class="bg-amber-50 rounded-lg p-2"><div id="csv-count-dup" class="text-lg font-black text-amber-700">0</div><div class="text-xs text-amber-500">Duplicados</div></div>
+        <div class="bg-red-50 rounded-lg p-2"><div id="csv-count-err" class="text-lg font-black text-red-700">0</div><div class="text-xs text-red-500">Erros</div></div>
+      </div>
+      <div id="csv-prog-log" class="mt-3 max-h-40 overflow-y-auto text-xs text-slate-500 space-y-0.5 font-mono"></div>
+    </div>
+  `
+
+  let totalOk = 0, totalDup = 0, totalErr = 0
+
+  const bar     = document.getElementById('csv-prog-bar')
+  const label   = document.getElementById('csv-prog-label')
+  const pct     = document.getElementById('csv-prog-pct')
+  const countOk = document.getElementById('csv-count-ok')
+  const countDup= document.getElementById('csv-count-dup')
+  const countErr= document.getElementById('csv-count-err')
+  const log     = document.getElementById('csv-prog-log')
+
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const chunk = chunks[ci]
+    if (label) label.textContent = `Enviando lote ${ci + 1} de ${chunks.length} (${chunk.length} itens)...`
+    const progress = Math.round((ci / chunks.length) * 100)
+    if (bar) bar.style.width = progress + '%'
+    if (pct) pct.textContent = progress + '%'
+
+    // Monta texto: "prodUrl socialUrl" por linha (par) ou só url
+    const textLines = chunk.map(it => it.url2 ? `${it.url1} ${it.url2}` : it.url1)
+    const raw = textLines.join('\n')
+
+    try {
+      const data = await api('POST', `/admin/api/stores/${storeId}/import-links`, { links: raw }, 60000)
+      if (data && !data.error) {
+        totalOk  += data.imported  || 0
+        totalDup += data.duplicates|| 0
+        totalErr += data.errors    || 0
+        if (countOk)  countOk.textContent  = totalOk
+        if (countDup) countDup.textContent = totalDup
+        if (countErr) countErr.textContent = totalErr
+        if (log) {
+          const li = document.createElement('div')
+          li.textContent = `✅ Lote ${ci+1}: +${data.imported || 0} importados, ${data.duplicates||0} dup, ${data.errors||0} erros`
+          log.appendChild(li)
+          log.scrollTop = log.scrollHeight
+        }
+      } else {
+        totalErr += chunk.length
+        if (countErr) countErr.textContent = totalErr
+        if (log) {
+          const li = document.createElement('div')
+          li.className = 'text-red-500'
+          li.textContent = `❌ Lote ${ci+1}: ${data?.error || 'Erro desconhecido'}`
+          log.appendChild(li)
+          log.scrollTop = log.scrollHeight
+        }
+      }
+    } catch(e) {
+      totalErr += chunk.length
+      if (countErr) countErr.textContent = totalErr
+      if (log) {
+        const li = document.createElement('div')
+        li.className = 'text-red-500'
+        li.textContent = `❌ Lote ${ci+1}: timeout ou erro de rede`
+        log.appendChild(li)
+      }
+    }
+
+    // Pequena pausa entre lotes para não sobrecarregar
+    if (ci < chunks.length - 1) await new Promise(r => setTimeout(r, 500))
+  }
+
+  // Finaliza
+  if (bar) bar.style.width = '100%'
+  if (pct) pct.textContent = '100%'
+  if (label) label.textContent = `✅ Concluído! ${chunks.length} lote(s) processado(s)`
+
+  const total = totalOk + totalDup + totalErr
+  if (totalOk > 0)   toast(`✅ ${totalOk} produto(s) importado(s) com sucesso!`, 'success')
+  else if (totalDup > 0) toast(`🔁 ${totalDup} item(ns) já existiam no banco`, 'info')
+  else if (totalErr > 0) toast(`❌ ${totalErr} erro(s) durante a importação`, 'error')
+
+  if (log) {
+    const summary = document.createElement('div')
+    summary.className = 'font-semibold text-slate-700 mt-1 pt-1 border-t border-slate-200'
+    summary.textContent = `Total: ${total} itens — ${totalOk} novos · ${totalDup} duplicados · ${totalErr} erros`
+    log.appendChild(summary)
+    log.scrollTop = log.scrollHeight
+  }
 }
 
 // ── HISTÓRICO: carrega importações da loja ────────────────────────

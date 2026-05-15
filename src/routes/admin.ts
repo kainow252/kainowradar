@@ -2605,7 +2605,7 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
   }
 
   if (dataLines.length === 0) return c.json({ error: 'Nenhuma linha válida encontrada' }, 400)
-  if (dataLines.length > 500) return c.json({ error: 'Máximo 500 links por importação' }, 400)
+  if (dataLines.length > 2000) return c.json({ error: 'Máximo 1000 pares (2000 linhas) por importação' }, 400)
 
   // ── Processa cada linha ──────────────────────────────────────
   function slugify(text: string): string {
@@ -7001,7 +7001,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260515d"><\/script>
+<script src="/static/admin-spa.js?v=20260515e"><\/script>
 </body>
 </html>`
 }
