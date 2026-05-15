@@ -2952,6 +2952,7 @@ admin.post('/api/enrich-offers', async (c) => {
   const { DB } = c.env
   const body: any = await c.req.json().catch(() => ({}))
   const BATCH = Math.min(parseInt(body.limit) || 20, 50)
+  const DELETE_FAILED = body.delete_failed === true // só deleta se explicitamente solicitado
 
   // Busca offers sem preço ou sem imagem, que têm affiliate_url
   const { results: offers } = await DB.prepare(`
@@ -2973,10 +2974,12 @@ admin.post('/api/enrich-offers', async (c) => {
   const mobileUA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
   const botUA    = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
 
-  // Helper: extrai MLB ID de URL/string
+  // Helper: extrai MLB ID de URL/string (aceita MLB-XXXXXXX e MLBXXXXXXX)
   const extractMlbId = (s: string): string | null => {
-    const m = s.match(/\b(MLB\d{7,12})\b/i)
-    return m ? m[1].toUpperCase() : null
+    // Aceita MLB-68335778 (com hífen) e MLB68335778 (sem hífen)
+    const m = s.match(/\b(MLB)-?(\d{6,12})\b/i)
+    if (m) return ('MLB' + m[2]).toUpperCase()
+    return null
   }
 
   // Helper: extrai preço de HTML — igual ao resolve-url (prioridade: current_price > price > itemprop > R$)
@@ -3115,6 +3118,41 @@ admin.post('/api/enrich-offers', async (c) => {
       }
 
       // ══════════════════════════════════════════════════════════════════
+      // PASSO 2b: se URL já é produto.mercadolivre.com.br, tenta buscar direto
+      //   (affiliate_url não continha /social/, mas tem MLB ID na própria URL)
+      // ══════════════════════════════════════════════════════════════════
+      if (!price && !image && url.includes('produto.mercadolivre.com.br') && mlbId) {
+        try {
+          const mlbDash = mlbId.replace(/^MLB/i, 'MLB-')
+          const prodRes = await fetch(`https://produto.mercadolivre.com.br/${mlbDash}`, {
+            redirect: 'follow',
+            headers: {
+              'User-Agent':      mobileUA,
+              'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'pt-BR,pt;q=0.9',
+            },
+            signal: AbortSignal.timeout(10000),
+          })
+          if (prodRes.ok) {
+            const html = await prodRes.text()
+            // Tenta item_id no JSON da página
+            if (!mlbId) {
+              const itemIdM = html.match(/"item_id"\s*:\s*"(MLB\d{6,12})"/i)
+              if (itemIdM) mlbId = itemIdM[1].toUpperCase()
+            }
+            if (!price) price = extractPrice(html)
+            if (!image) image = extractImage(html)
+            // og:title fallback
+            if (!price) {
+              const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+                           || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+              if (ogTitle) price = extractPriceFromTitle(ogTitle[1])
+            }
+          }
+        } catch { /* ignora timeout */ }
+      }
+
+      // ══════════════════════════════════════════════════════════════════
       // PASSO 3 (fallback): produto.mercadolivre.com.br/MLBXXXXXX via Googlebot
       //   Funciona para Item IDs curtos — serve SSR completo para bots
       //   NOTA: IPs da Cloudflare são bloqueados para scraping de produto normal,
@@ -3161,21 +3199,28 @@ admin.post('/api/enrich-offers', async (c) => {
         enriched++
         details.push({ name: offer.name, price, image: image ? '✓' : '✗', mlb: mlbId, status: 'ok' })
       } else {
-        // Não conseguiu enriquecer — deleta offer e produto do banco
-        try {
-          await DB.prepare(`DELETE FROM offers WHERE id = ?`).bind(offer.offer_id).run()
-          // Deleta o produto se não tiver outros offers vinculados
-          const otherOffers = await DB.prepare(
-            `SELECT COUNT(*) as n FROM offers WHERE product_id = ?`
-          ).bind(offer.product_id).first<{ n: number }>()
-          if (!otherOffers?.n) {
-            await DB.prepare(`DELETE FROM products WHERE id = ?`).bind(offer.product_id).run()
+        // Não conseguiu enriquecer
+        if (DELETE_FAILED) {
+          // Deleta offer e produto do banco SOMENTE se delete_failed=true no body
+          try {
+            await DB.prepare(`DELETE FROM offers WHERE id = ?`).bind(offer.offer_id).run()
+            // Deleta o produto se não tiver outros offers vinculados
+            const otherOffers = await DB.prepare(
+              `SELECT COUNT(*) as n FROM offers WHERE product_id = ?`
+            ).bind(offer.product_id).first<{ n: number }>()
+            if (!otherOffers?.n) {
+              await DB.prepare(`DELETE FROM products WHERE id = ?`).bind(offer.product_id).run()
+            }
+            deleted++
+            details.push({ name: offer.name, mlb: mlbId, status: 'deletado' })
+          } catch (de: any) {
+            failed++
+            details.push({ name: offer.name, mlb: mlbId, status: 'sem_dados', error: de?.message })
           }
-          deleted++
-          details.push({ name: offer.name, mlb: mlbId, status: 'deletado' })
-        } catch (de: any) {
+        } else {
+          // Mantém no banco — só loga como falha sem dados
           failed++
-          details.push({ name: offer.name, mlb: mlbId, status: 'sem_dados', error: de?.message })
+          details.push({ name: offer.name, mlb: mlbId || null, status: 'sem_dados' })
         }
       }
     } catch (e: any) {
