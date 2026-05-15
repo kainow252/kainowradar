@@ -2923,16 +2923,23 @@ admin.post('/api/enrich-offers', async (c) => {
   // Helper: extrai preço de HTML
   const extractPrice = (html: string): number | null => {
     const patterns = [
+      // Formato JSON da página de produto ML: "price":2569.9 ou "price":2569
+      /"price"\s*:\s*([\d]{2,6}(?:\.[\d]{1,2})?)\b/,
+      // Formato JSON interno: "current_price":{"value":2569}
       /"current_price"\s*:\s*\{"value"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/,
-      /"price"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/,
+      // Schema.org itemprop
       /content=["']([\d.,]+)["'][^>]*itemprop=["']price["']/i,
       /itemprop=["']price["'][^>]*content=["']([\d.,]+)["']/i,
+      // Preço em BRL exibido: R$\s1.234,56 ou 1234,56
+      /R\$\s*([\d]{2,6}(?:[.,][\d]{1,3})*(?:[.,]\d{2}))/,
     ]
     for (const pat of patterns) {
       const m = html.match(pat)
       if (m) {
-        const val = parseFloat(m[1].replace(',', '.'))
-        if (!isNaN(val) && val > 0.5 && val < 9_000_000) return val
+        // Normaliza: remove separador de milhar, troca vírgula decimal por ponto
+        const raw = m[1].replace(/\./g, '').replace(',', '.')
+        const val = parseFloat(raw)
+        if (!isNaN(val) && val >= 5 && val < 9_000_000) return val
       }
     }
     return null
@@ -2962,50 +2969,63 @@ admin.post('/api/enrich-offers', async (c) => {
 
       // Passo 1: tenta extrair MLB da affiliate_url diretamente
       let mlbId = extractMlbId(url)
+      let productUrl = ''  // URL real da página do produto no ML
 
-      // Passo 2: se não achou MLB na URL (links /social/?ref=...), segue os redirects
-      // para obter a URL final do produto e extrair o MLB dela
-      if (!mlbId && url.includes('/social/')) {
+      // Passo 2: para links /social/ — busca a página de perfil do vendedor
+      // Essa página contém: og:image do produto destacado + hrefs com URLs reais dos produtos
+      if (url.includes('/social/')) {
         try {
-          const redir = await fetch(url, {
+          const socialRes = await fetch(url, {
             redirect: 'follow',
             headers: {
               'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
               'Accept': 'text/html,application/xhtml+xml',
+              'Accept-Language': 'pt-BR,pt;q=0.9',
             },
             signal: AbortSignal.timeout(10000),
           })
-          // URL final após redirect contém /MLB...
-          mlbId = extractMlbId(redir.url)
-          // Aproveita HTML já carregado se redirect chegou na página do produto
-          if (mlbId && redir.ok) {
-            const html = await redir.text()
-            price = extractPrice(html)
-            image = extractImage(html)
-          }
-        } catch { /* ignora timeout de redirect */ }
-      }
-
-      // Passo 3: se achou MLB, tenta API pública do ML (JSON limpo, sem scraping)
-      if (mlbId && (!price || !image)) {
-        try {
-          const apiRes = await fetch(`https://api.mercadolibre.com/items/${mlbId}`, {
-            headers: { 'Accept': 'application/json' },
-            signal: AbortSignal.timeout(8000),
-          })
-          if (apiRes.ok) {
-            const item: any = await apiRes.json()
-            if (!price && item.price) price = item.price
-            if (!image && item.thumbnail) {
-              // thumbnail padrão: https://...JPG-I.jpg → troca sufixo por -O.jpg (original)
-              image = (item.pictures?.[0]?.url || item.thumbnail || '')
-                .replace(/-[A-Z](-\d+)?(\.(webp|jpg|png))(\?.*)?$/i, '-O$2')
+          if (socialRes.ok) {
+            const html = await socialRes.text()
+            // Extrai og:image (produto principal da vitrine)
+            if (!image) image = extractImage(html)
+            // Extrai a primeira URL real do produto (href com /MLB ou /p/MLB)
+            // Formato: href="https://www.mercadolivre.com.br/SLUG/p/MLB12345678?..."
+            const hrefMatch = html.match(/href="(https:\/\/www\.mercadolivre\.com\.br\/[^"]+\/p\/MLB\d+[^"]*)"/)
+                           || html.match(/href="(https:\/\/www\.mercadolivre\.com\.br\/[^"]+\/MLB\d+[^"]*?\.html[^"]*?)"/)
+            if (hrefMatch) {
+              // Limpa parâmetros de tracking, mantém só o path limpo
+              try {
+                const u = new URL(hrefMatch[1].replace(/&amp;/g, '&'))
+                productUrl = u.origin + u.pathname
+                if (!mlbId) mlbId = extractMlbId(productUrl)
+              } catch { productUrl = '' }
             }
           }
-        } catch { /* ignora erro de API */ }
+        } catch { /* ignora timeout */ }
       }
 
-      // Passo 4: fallback — scraping da página produto.mercadolivre.com.br/MLB via Googlebot
+      // Passo 3: faz GET na URL real do produto para extrair preço (e imagem como fallback)
+      // Funciona para: https://www.mercadolivre.com.br/SLUG/p/MLBXXXXXX
+      if (productUrl && !price) {
+        try {
+          const prodRes = await fetch(productUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+              'Accept': 'text/html,application/xhtml+xml',
+              'Accept-Language': 'pt-BR,pt;q=0.9',
+              'Referer': 'https://www.mercadolivre.com.br/',
+            },
+            signal: AbortSignal.timeout(10000),
+          })
+          if (prodRes.ok) {
+            const html = await prodRes.text()
+            price = extractPrice(html)
+            if (!image) image = extractImage(html)
+          }
+        } catch { /* ignora */ }
+      }
+
+      // Passo 4: fallback — scraping de produto.mercadolivre.com.br/MLBXXXXXX via Googlebot
       if (mlbId && (!price || !image)) {
         try {
           const res = await fetch(`https://produto.mercadolivre.com.br/${mlbId}`, {
@@ -7184,7 +7204,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260515j"><\/script>
+<script src="/static/admin-spa.js?v=20260515k"><\/script>
 </body>
 </html>`
 }
