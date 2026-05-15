@@ -2923,20 +2923,20 @@ admin.post('/api/enrich-offers', async (c) => {
   // Helper: extrai preço de HTML
   const extractPrice = (html: string): number | null => {
     const patterns = [
-      // Formato JSON da página de produto ML: "price":2569.9 ou "price":2569
-      /"price"\s*:\s*([\d]{2,6}(?:\.[\d]{1,2})?)\b/,
+      // Formato JSON da página de produto ML: "price":2569.9
+      /"price"\s*:\s*(\d+\.?\d*)/,
       // Formato JSON interno: "current_price":{"value":2569}
-      /"current_price"\s*:\s*\{"value"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/,
+      /"current_price"\s*:\s*\{"value"\s*:\s*(\d+\.?\d*)/,
       // Schema.org itemprop
       /content=["']([\d.,]+)["'][^>]*itemprop=["']price["']/i,
       /itemprop=["']price["'][^>]*content=["']([\d.,]+)["']/i,
-      // Preço em BRL exibido: R$\s1.234,56 ou 1234,56
-      /R\$\s*([\d]{2,6}(?:[.,][\d]{1,3})*(?:[.,]\d{2}))/,
+      // Preço formatado: R$\s1.234,56
+      /R\$\s*([\d]{1,3}(?:\.\d{3})*,\d{2})/,
     ]
     for (const pat of patterns) {
       const m = html.match(pat)
       if (m) {
-        // Normaliza: remove separador de milhar, troca vírgula decimal por ponto
+        // Normaliza: R$ 1.234,56 → 1234.56
         const raw = m[1].replace(/\./g, '').replace(',', '.')
         const val = parseFloat(raw)
         if (!isNaN(val) && val >= 5 && val < 9_000_000) return val
@@ -7204,7 +7204,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260515k"><\/script>
+<script src="/static/admin-spa.js?v=20260515l"><\/script>
 </body>
 </html>`
 }
