@@ -223,6 +223,17 @@ npx wrangler pages secret put AWIN_PUBLISHER_ID --project-name shopping-compare
 
 ---
 
+## Estado do Banco (Produção)
+
+| Métrica | Valor |
+|---------|-------|
+| **Produtos ativos** | 264 |
+| **Offers** | 264 (todas com `price > 0` e `image_url`) |
+| **Home** | 16 produtos aleatórios por carga (`ORDER BY RANDOM()`) |
+| **Enriquecer** | 0 restantes (correto — todas as offers já estão completas) |
+
+---
+
 ## Features Implementadas ✅
 
 - [x] Homepage com hero, busca, sugestões autocomplete, destaques, categorias
@@ -243,6 +254,27 @@ npx wrangler pages secret put AWIN_PUBLISHER_ID --project-name shopping-compare
 - [x] Top-deals com `GROUP BY p.id + MIN(o.price)` correlated subquery
 - [x] Auth admin: Bearer token + sessão em DB + fallback ADMIN_SECRET
 - [x] Deploy Cloudflare Pages com D1 + KV bindings reais
+- [x] **Importação em massa** via aba "Em Massa" → `/import-links` direto (chunks de 50)
+- [x] **Home rotativa** com `ORDER BY RANDOM()` — 16 produtos diferentes a cada refresh
+- [x] **`/api/sync-products-from-offers`** — sincroniza `price`/`image_url`/`name` das offers para `products`
+- [x] **`/api/fix-names`** — remove produtos com nome inválido (`cfegdhabc%`)
+- [x] **`parseLine`** aceita hint `mlb:` em qualquer campo (não apenas posição fixa)
+
+---
+
+## Fixes do Ciclo 2026-05-15
+
+| Bug | Causa | Fix |
+|-----|-------|-----|
+| Aba "Em Massa": 0 salvos | Pipeline `feed/ingest→process` não suporta links `/social/` | `siMassImport` reescrita usando `/import-links` direto |
+| 26 erros na importação | `parseLine` esperava `mlb:` em `parts[4]` fixo | `parseLine` varre todos os campos com `for` |
+| Home não atualizava | D1 binding não configurado no Cloudflare Pages | PATCH API Cloudflare + redeploy |
+| Home excluía importados | `WHERE best_price IS NOT NULL` em 11 lugares | Removido de `index.tsx` (2x) e `pages.ts` (9x via `sed`) |
+| Home mostrava sempre os mesmos 8 | `ORDER BY created_at` — todos importados no mesmo segundo | `ORDER BY RANDOM()` + `image_url IS NOT NULL` |
+| 4 produtos sem offer (IDs 890-894) | Bug anterior no `parseLine` criou produto sem offer | Desativados via `PATCH is_active=0` |
+| `products.image_url` NULL | Enrich salvou nas offers mas não propagou para `products` | Novo endpoint `/api/sync-products-from-offers` |
+
+---
 
 ## Roadmap 🔜
 
@@ -267,4 +299,4 @@ npx wrangler pages secret put AWIN_PUBLISHER_ID --project-name shopping-compare
 - **Build:** Vite + @hono/vite-cloudflare-pages
 - **Dev:** Wrangler 4.x + PM2
 
-**Última atualização:** 2026-05-09
+**Última atualização:** 2026-05-15
