@@ -3897,14 +3897,54 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
     for (const line of rawLines) {
       if (line.includes('|')) {
         const parts = line.split('|').map((p: string) => p.trim())
-        if (!parts[0].startsWith('http')) continue
-        parsed.push({
-          url:         parts[0],
-          name:        parts[1] || '',
-          price:       parts[2] ? parseFloat(parts[2].replace(/[^0-9.,]/g, '').replace(',', '.')) || null : null,
-          image_url:   parts[3] && parts[3].startsWith('http') ? parts[3] : null,
-          external_id: parts[4] || null,
-        })
+
+        // ── Formato A (padrão): URL | Nome | Preço | Imagem ─────────────
+        // Ex: https://s.shopee.com.br/xxx | Tênis Nike | 299.90 | https://img...
+        if (parts[0].startsWith('http')) {
+          parsed.push({
+            url:         parts[0],
+            name:        parts[1] || '',
+            price:       parts[2] ? parseFloat(parts[2].replace(/[^0-9.,]/g, '').replace(',', '.')) || null : null,
+            image_url:   parts[3] && parts[3].startsWith('http') ? parts[3] : null,
+            external_id: parts[4] || null,
+          })
+          continue
+        }
+
+        // ── Formato B (Shopee simplificado): Nome | R$Valor | Imagem | URL ─
+        // Ex: Tênis Nike | R$299,90 | https://img... | https://s.shopee.com.br/xxx
+        // Detecta: último campo é URL OU campo com http é a URL
+        const urlIdx = parts.findIndex((p: string) => p.startsWith('http') && (p.includes('shopee') || p.includes('s.shopee') || p.includes('meli') || p.includes('amazon') || p.includes('mercadolivre')))
+        if (urlIdx > 0) {
+          const url      = parts[urlIdx]
+          const imgIdx   = parts.findIndex((p: string, i: number) => i !== urlIdx && p.startsWith('http'))
+          const priceStr = parts.find((p: string, i: number) => i !== urlIdx && i !== imgIdx && /\d/.test(p))
+          const nameParts = parts.filter((_: string, i: number) => i !== urlIdx && i !== imgIdx && !(priceStr && parts[i] === priceStr))
+          parsed.push({
+            url,
+            name:        nameParts.join(' ').trim(),
+            price:       priceStr ? parseFloat(priceStr.replace(/[^0-9.,]/g, '').replace(',', '.')) || null : null,
+            image_url:   imgIdx >= 0 ? parts[imgIdx] : null,
+            external_id: null,
+          })
+          continue
+        }
+
+        // ── Formato C: qualquer campo http é a URL (fallback) ────────────
+        const anyUrlIdx = parts.findIndex((p: string) => p.startsWith('http'))
+        if (anyUrlIdx >= 0) {
+          const url    = parts[anyUrlIdx]
+          const imgIdx = parts.findIndex((p: string, i: number) => i !== anyUrlIdx && p.startsWith('http'))
+          const priceStr = parts.find((p: string, i: number) => i !== anyUrlIdx && i !== imgIdx && /R?\$?\d/.test(p))
+          const nameParts = parts.filter((_: string, i: number) => i !== anyUrlIdx && i !== imgIdx && !(priceStr && parts[i] === priceStr))
+          parsed.push({
+            url,
+            name:        nameParts.join(' ').trim(),
+            price:       priceStr ? parseFloat(priceStr.replace(/[^0-9.,]/g, '').replace(',', '.')) || null : null,
+            image_url:   imgIdx >= 0 ? parts[imgIdx] : null,
+            external_id: null,
+          })
+        }
       } else if (line.startsWith('http')) {
         parsed.push({ url: line, name: '', price: null, image_url: null, external_id: null })
       }

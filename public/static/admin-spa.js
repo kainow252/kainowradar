@@ -1244,18 +1244,52 @@ function openShopeeAfiliados(storeId) {
               </ol>
             </div>
 
-            <!-- Manual -->
-            <div class="text-[10px] text-slate-500 font-semibold uppercase tracking-wide mb-1.5">Cole links manualmente</div>
-            <textarea id="sh-manual-textarea" rows="3"
-              class="w-full rounded-xl border border-slate-200 bg-slate-50 text-xs font-mono p-2.5 resize-none focus:outline-none focus:border-orange-400 transition-all"
-              placeholder="https://s.shopee.com.br/7AaQssz5iE&#10;https://s.shopee.com.br/8BbRtty6jF&#10;(um link por linha)"></textarea>
-            <div class="flex items-center justify-between mt-1 mb-2">
-              <span id="sh-manual-count" class="text-[10px] text-slate-400">0 links</span>
-              <button onclick="document.getElementById('sh-manual-textarea').value='';shCountManual()" class="text-[10px] text-slate-400 hover:text-red-500">✕ limpar</button>
+            <!-- Abas de formato -->
+            <div class="flex gap-1 mb-2" id="sh-tab-bar">
+              <button onclick="shSwitchTab('link')" id="sh-tab-link"
+                class="flex-1 py-1.5 rounded-lg text-[10px] font-bold transition-all bg-orange-500 text-white">
+                🔗 Só o Link
+              </button>
+              <button onclick="shSwitchTab('rich')" id="sh-tab-rich"
+                class="flex-1 py-1.5 rounded-lg text-[10px] font-bold transition-all bg-slate-100 text-slate-600 hover:bg-slate-200">
+                📋 Nome | Preço | Img | Link
+              </button>
             </div>
+
+            <!-- Aba: só link -->
+            <div id="sh-tab-content-link">
+              <textarea id="sh-manual-textarea" rows="3"
+                class="w-full rounded-xl border border-slate-200 bg-slate-50 text-xs font-mono p-2.5 resize-none focus:outline-none focus:border-orange-400 transition-all"
+                placeholder="https://s.shopee.com.br/7AaQssz5iE&#10;https://s.shopee.com.br/8BbRtty6jF&#10;(um link por linha)"
+              oninput="shCountManual()"></textarea>
+              <div class="flex items-center justify-between mt-1 mb-2">
+                <span id="sh-manual-count" class="text-[10px] text-slate-400">0 links</span>
+                <button onclick="document.getElementById('sh-manual-textarea').value='';shCountManual()" class="text-[10px] text-slate-400 hover:text-red-500">✕ limpar</button>
+              </div>
+            </div>
+
+            <!-- Aba: formato rico Nome | Preço | Img | Link -->
+            <div id="sh-tab-content-rich" class="hidden">
+              <div class="mb-2 bg-blue-50 border border-blue-200 rounded-xl p-2">
+                <div class="text-[10px] font-bold text-blue-700 mb-0.5">Formato aceito (separado por |):</div>
+                <code class="text-[9px] text-blue-600 block leading-relaxed">
+                  Nome do Produto | R$99,90 | https://imagem.jpg | https://s.shopee.com.br/xxx<br>
+                  <span class="text-blue-400">ou também: https://s.shopee.com.br/xxx | Nome | 99.90 | https://img</span>
+                </code>
+              </div>
+              <textarea id="sh-rich-textarea" rows="4"
+                class="w-full rounded-xl border border-slate-200 bg-slate-50 text-xs font-mono p-2.5 resize-none focus:outline-none focus:border-orange-400 transition-all"
+                placeholder="Tênis Nike Air Max | R$299,90 | https://down-br.img.susercontent.com/file/xxx | https://s.shopee.com.br/abc&#10;Bolsa Couro | R$89,99 | https://down-br.img.susercontent.com/file/yyy | https://s.shopee.com.br/def"
+                oninput="shCountRich()"></textarea>
+              <div class="flex items-center justify-between mt-1 mb-2">
+                <span id="sh-rich-count" class="text-[10px] text-slate-400">0 itens</span>
+                <button onclick="document.getElementById('sh-rich-textarea').value='';shCountRich()" class="text-[10px] text-slate-400 hover:text-red-500">✕ limpar</button>
+              </div>
+            </div>
+
             <button onclick="shImportManual(${storeId})"
               class="w-full py-2 rounded-xl border-2 border-orange-300 bg-orange-50 text-orange-700 text-xs font-bold hover:bg-orange-100 transition-all">
-              📥 Importar Links Colados
+              📥 Importar
             </button>
           </div>
         </div>
@@ -1778,10 +1812,36 @@ function shCountManual() {
   if (el) el.textContent = lines.length + ' links'
 }
 
+function shCountRich() {
+  const lines = (document.getElementById('sh-rich-textarea')?.value || '')
+    .split('\n').filter(l => l.trim().length > 0)
+  const el = document.getElementById('sh-rich-count')
+  if (el) el.textContent = lines.length + ' itens'
+}
+
+function shSwitchTab(tab) {
+  const isLink = tab === 'link'
+  document.getElementById('sh-tab-link').className = 'flex-1 py-1.5 rounded-lg text-[10px] font-bold transition-all ' + (isLink ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200')
+  document.getElementById('sh-tab-rich').className = 'flex-1 py-1.5 rounded-lg text-[10px] font-bold transition-all ' + (!isLink ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200')
+  document.getElementById('sh-tab-content-link').classList.toggle('hidden', !isLink)
+  document.getElementById('sh-tab-content-rich').classList.toggle('hidden', isLink)
+}
+
 async function shImportManual(storeId) {
-  const lines = (document.getElementById('sh-manual-textarea')?.value || '')
-    .split('\n').map(l => l.trim()).filter(l => l.startsWith('http'))
-  if (!lines.length) { alert('Cole pelo menos um link da Shopee!'); return }
+  // Detecta qual aba está ativa
+  const isRich = !document.getElementById('sh-tab-content-rich')?.classList.contains('hidden')
+  let lines
+  if (isRich) {
+    // Formato rico: qualquer linha não vazia (parser do backend aceita nome|preco|img|url)
+    lines = (document.getElementById('sh-rich-textarea')?.value || '')
+      .split('\n').map(l => l.trim()).filter(l => l.length > 0)
+    if (!lines.length) { alert('Cole pelo menos um produto no formato Nome | R$Valor | Imagem | Link!'); return }
+  } else {
+    lines = (document.getElementById('sh-manual-textarea')?.value || '')
+      .split('\n').map(l => l.trim()).filter(l => l.startsWith('http'))
+    if (!lines.length) { alert('Cole pelo menos um link da Shopee!'); return }
+  }
+  if (!lines.length) { alert('Cole pelo menos um item!'); return }
 
   // Esconde seções extras e mostra progresso
   const extSec = document.getElementById('sh-ext-section')
