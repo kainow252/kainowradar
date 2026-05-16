@@ -1020,14 +1020,17 @@ function siTab(tab, storeId) {
 
 function siMassCount() {
   const val = document.getElementById('si-mass-textarea')?.value || ''
-  // Usa o mesmo parser inteligente da aba Colar Links (preserva wid=, dedup real)
+  const rawLineCount = val.split(/\n/).filter(l => l.trim() && /https?:\/\//.test(l)).length
   const items = siParseTextarea(val)
   const n = items.length
   const el = document.getElementById('si-mass-count')
   if (!el) return
-  el.textContent = n === 0 ? '0 links'
+  const dupRemoved = rawLineCount - n
+  let msg = n === 0 ? '0 links'
     : n === 1 ? '1 link detectado'
     : `${n.toLocaleString('pt-BR')} links detectados`
+  if (dupRemoved > 0) msg += ` <span class="text-amber-500 text-[10px]">(+${dupRemoved} dup.)</span>`
+  el.innerHTML = msg
   el.className = 'text-xs font-semibold ' + (n > 0 ? 'text-green-600' : 'text-slate-400')
 }
 
@@ -1627,16 +1630,37 @@ function siExtractUrlsFromText(text) {
 //   1) Mesma linha: "URL_produto URL_social" ou grudadas (https://...https://...)
 //   2) Linhas adjacentes: linha N tem só URL produto + linha N+1 tem só URL /social/ (ou vice-versa)
 //      → detecta padrões de "bloco de notas" com pares alternados
+// Deduplicação inteligente: por wid= (variante ML), ref= (social) ou URL base
 function siParseTextarea(val) {
-  const items = []
-  const seen  = new Set()
+  const items  = []
+  const seen   = new Set()   // dedup por chave de par (url1|url2)
+  const seenKey = new Set()  // dedup por wid= ou ref= (evita duplicatas do mesmo produto)
+
+  // Limpeza prévia: remove textos de erro do ML colados junto das URLs
+  // Ex: "https://...#...&wid=MLB... ⚠️ Este URL não é permitido pelo Programa."
+  const cleanLine = (s) => s
+    .replace(/\s*[⚠️🚫]\s*Este URL[^]*$/u, '')
+    .replace(/\s*Este URL não é permitido[^]*/i, '')
+    .trim()
+
+  // Extrai chave de deduplicação de uma URL (wid= tem prioridade, depois ref=, depois base)
+  const dedupKey = (u) => {
+    const wid = u.match(/[?&]wid=(MLB[\w-]+)/i)
+    if (wid) return 'wid:' + wid[1]
+    const ref = u.match(/[?&]ref=([A-Za-z0-9+/=%-]{20,})/i)
+    if (ref) return 'ref:' + ref[1].substring(0, 30)
+    try { return 'url:' + new URL(u).origin + new URL(u).pathname } catch { return 'url:' + u.substring(0, 80) }
+  }
+
   // Extrai todas as linhas não-vazias com suas URLs
   const lineUrls = []
   for (const line of val.split(/\n/)) {
-    if (!line.trim()) continue
-    const raw = siExtractUrlsFromText(line)
+    const cl = cleanLine(line)
+    if (!cl) continue
+    const raw = siExtractUrlsFromText(cl)
     if (raw.length) lineUrls.push(raw)
   }
+
 
   for (let li = 0; li < lineUrls.length; li++) {
     const raw = lineUrls[li]
@@ -1646,8 +1670,14 @@ function siParseTextarea(val) {
       const socialIdx  = raw.findIndex(u => siIsSocialUrl(u))
       const productIdx = raw.findIndex(u => siIsProductUrl(u))
       if (socialIdx !== -1 && productIdx !== -1 && socialIdx !== productIdx) {
-        const key = raw[productIdx] + '|' + raw[socialIdx]
-        if (!seen.has(key)) { seen.add(key); items.push({ url1: raw[productIdx], url2: raw[socialIdx] }) }
+        const u1 = raw[productIdx], u2 = raw[socialIdx]
+        const dk = dedupKey(u1) || dedupKey(u2)
+        const key = u1 + '|' + u2
+        if (!seen.has(key) && !seenKey.has(dk)) {
+          seen.add(key)
+          if (dk) seenKey.add(dk)
+          items.push({ url1: u1, url2: u2 })
+        }
         raw.forEach((u, i) => {
           if (i !== socialIdx && i !== productIdx && !seen.has(u)) { seen.add(u); items.push({ url1: u }) }
         })
@@ -1661,32 +1691,43 @@ function siParseTextarea(val) {
       const next = lineUrls[li + 1]
       if (next && next.length === 1) {
         const v = next[0]
-        // Par: (produto, social) ou (social, produto) em linhas consecutivas
         const uIsSocial  = siIsSocialUrl(u),  vIsSocial  = siIsSocialUrl(v)
         const uIsProduct = siIsProductUrl(u), vIsProduct = siIsProductUrl(v)
         if (uIsProduct && vIsSocial) {
+          const dk = dedupKey(u) || dedupKey(v)
           const key = u + '|' + v
-          if (!seen.has(key)) { seen.add(key); items.push({ url1: u, url2: v }) }
-          seen.add(u); seen.add(v)
-          li++ // pula a próxima linha (já consumida no par)
-          continue
+          if (!seen.has(key) && !seenKey.has(dk)) {
+            seen.add(key); seen.add(u); seen.add(v)
+            if (dk) seenKey.add(dk)
+            items.push({ url1: u, url2: v })
+          }
+          li++; continue
         }
         if (uIsSocial && vIsProduct) {
+          const dk = dedupKey(v) || dedupKey(u)
           const key = v + '|' + u
-          if (!seen.has(key)) { seen.add(key); items.push({ url1: v, url2: u }) }
-          seen.add(u); seen.add(v)
-          li++
-          continue
+          if (!seen.has(key) && !seenKey.has(dk)) {
+            seen.add(key); seen.add(u); seen.add(v)
+            if (dk) seenKey.add(dk)
+            items.push({ url1: v, url2: u })
+          }
+          li++; continue
         }
       }
       // Linha individual
-      if (!seen.has(u)) { seen.add(u); items.push({ url1: u }) }
+      const dk = dedupKey(u)
+      if (!seen.has(u) && !seenKey.has(dk)) {
+        seen.add(u)
+        if (dk) seenKey.add(dk)
+        items.push({ url1: u })
+      }
       continue
     }
 
     // ── Linha com múltiplas URLs sem par → itens individuais ──
     for (const u of raw) {
-      if (!seen.has(u)) { seen.add(u); items.push({ url1: u }) }
+      const dk = dedupKey(u)
+      if (!seen.has(u) && !seenKey.has(dk)) { seen.add(u); if (dk) seenKey.add(dk); items.push({ url1: u }) }
     }
   }
   return items
@@ -1694,6 +1735,8 @@ function siParseTextarea(val) {
 
 function siCountLinks() {
   const val   = document.getElementById('si-textarea')?.value || ''
+  // Conta linhas brutas para comparar com únicos
+  const rawLineCount = val.split(/\n/).filter(l => l.trim() && /https?:\/\//.test(l)).length
   const items = siParseTextarea(val)
   const pairs = items.filter(i => i.url2).length
   const solo  = items.filter(i => !i.url2).length
@@ -1703,8 +1746,11 @@ function siCountLinks() {
   const parts = []
   if (pairs) parts.push(pairs + (pairs === 1 ? ' par produto+afiliado' : ' pares produto+afiliado'))
   if (solo)  parts.push(solo  + (solo  === 1 ? ' link'                  : ' links'))
-  el.textContent = parts.join(' + ') + ' detectado' + (items.length === 1 ? '' : 's')
-  // wid= é preservado como ?wid= — sem aviso necessário
+  let msg = parts.join(' + ') + ' detectado' + (items.length === 1 ? '' : 's')
+  // Se tinha muito mais linhas → mostra quantas duplicatas foram removidas
+  const dupRemoved = rawLineCount - items.length
+  if (dupRemoved > 0) msg += ` <span class="text-amber-500">(+${dupRemoved} duplicadas removidas)</span>`
+  el.innerHTML = msg
   const warnEl = document.getElementById('si-wid-warn')
   if (warnEl) warnEl.classList.add('hidden')
 }
