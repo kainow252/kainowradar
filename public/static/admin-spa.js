@@ -1017,6 +1017,41 @@ function openShopeeAfiliados(storeId) {
           </div>
         </div>
 
+        <!-- Extensão Chrome -->
+        <div class="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-4 mb-4 border border-slate-700">
+          <div class="flex items-start gap-3">
+            <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
+              <svg class="w-5 h-5" viewBox="0 0 24 24" fill="white"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="text-sm font-bold text-white mb-0.5">Extensão Chrome <span class="text-[10px] bg-orange-500 text-white rounded px-1.5 py-0.5 ml-1 font-semibold">RECOMENDADO</span></div>
+              <div class="text-xs text-slate-400 mb-3">Coleta automática de até 1 milhão de links — roda no seu navegador com sua sessão Shopee já ativa. <strong class="text-slate-300">Login permanente, zero re-autenticação.</strong></div>
+              <div class="flex gap-2 flex-wrap">
+                <a href="/static/kainow-shopee-extension.zip" download="kainow-shopee-extension.zip"
+                  class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-white transition-all hover:opacity-90 active:scale-95"
+                  style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" stroke="white" stroke-width="2.5" stroke-linecap="round"/><polyline points="7 10 12 15 17 10" stroke="white" stroke-width="2.5" stroke-linecap="round"/><line x1="12" y1="15" x2="12" y2="3" stroke="white" stroke-width="2.5" stroke-linecap="round"/></svg>
+                  Baixar Extensão (.zip)
+                </a>
+                <button onclick="shShowExtInstructions()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 border border-slate-600 hover:bg-slate-700 transition-all">
+                  📖 Como instalar
+                </button>
+              </div>
+            </div>
+          </div>
+          <!-- Instruções colapsáveis -->
+          <div id="sh-ext-instructions" class="hidden mt-3 pt-3 border-t border-slate-700">
+            <ol class="text-xs text-slate-300 space-y-1.5 list-decimal list-inside">
+              <li>Baixe o <strong class="text-white">.zip</strong> acima e extraia numa pasta</li>
+              <li>No Chrome, abra <code class="bg-slate-700 px-1 rounded">chrome://extensions</code></li>
+              <li>Ative <strong class="text-white">"Modo do desenvolvedor"</strong> (canto superior direito)</li>
+              <li>Clique <strong class="text-white">"Carregar sem compactação"</strong> → selecione a pasta extraída</li>
+              <li>Clique no ícone <span style="color:#EE4D2D">●</span><strong class="text-white"> KainowRadar</strong> na barra do Chrome</li>
+              <li>Configure o <strong class="text-white">Store ID: ${storeId}</strong> e clique <strong class="text-white">Iniciar Coleta</strong></li>
+            </ol>
+          </div>
+        </div>
+
         <!-- Separador -->
         <div class="flex items-center gap-2 my-4">
           <div class="flex-1 h-px bg-slate-100"></div>
@@ -1273,6 +1308,11 @@ async function shStartScrape(storeId) {
         : 'Nenhum link encontrado. Verifique: você está logado no painel da Shopee Afiliados?'
     done.classList.remove('hidden')
   }
+}
+
+function shShowExtInstructions() {
+  const el = document.getElementById('sh-ext-instructions')
+  if (el) el.classList.toggle('hidden')
 }
 
 function shCountManual() {
