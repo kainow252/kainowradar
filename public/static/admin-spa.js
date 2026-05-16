@@ -1050,8 +1050,9 @@ async function siMassImport(storeId) {
     const saveUrl  = it.url2 || it.url1
     if (!it.url2) return saveUrl  // link simples
     // par produto+afiliado → extrai MLB do url1 como hint
-    const mlbMatch = (it.url1 || '').match(/\b(MLB[\-]?\d{8,12})\b/i)
-    const mlbHint  = mlbMatch ? ' | mlb:' + mlbMatch[1].replace('-','').toUpperCase() : ''
+    // Aceita MLB, MLBU (uplift), MLB- para cobrir todos os formatos de URL do ML
+    const mlbMatch = (it.url1 || '').match(/\bMLBU?[\-]?(\d{6,12})\b/i)
+    const mlbHint  = mlbMatch ? ' | mlb:MLB' + mlbMatch[1] : ''
     return saveUrl + mlbHint
   })
 
@@ -1389,7 +1390,7 @@ async function siImportCsvItems() {
     // Só URL produto:   "prodUrl | nome | preco | img"
     const textLines = chunk.map(it => {
       const saveUrl = it.url2 || it.url1   // prefere /social/ como URL salva
-      const mlbId   = (it.url1 || '').match(/MLB[-_]?(\d{7,12})/i)?.[0] || ''
+      const mlbId   = (it.url1 || '').match(/MLBU?[-_]?(\d{6,12})/i)?.[1] ? 'MLB' + (it.url1 || '').match(/MLBU?[-_]?(\d{6,12})/i)[1] : ''
       let line = saveUrl
       if (it.name) {
         line += ' | ' + it.name.replace(/\|/g, ' ')
@@ -1622,37 +1623,68 @@ function siExtractUrlsFromText(text) {
 }
 
 // Parseia o texto da textarea em itens: cada item é { url1, url2? }
-// Regra: se numa linha tiver URL de produto ML + URL /social/ → une como par
-// Suporta URLs grudadas (sem espaço/vírgula entre elas) — split em https://
+// Regras de detecção de par produto+afiliado:
+//   1) Mesma linha: "URL_produto URL_social" ou grudadas (https://...https://...)
+//   2) Linhas adjacentes: linha N tem só URL produto + linha N+1 tem só URL /social/ (ou vice-versa)
+//      → detecta padrões de "bloco de notas" com pares alternados
 function siParseTextarea(val) {
   const items = []
   const seen  = new Set()
-  const lines = val.split(/\n/)
-  for (const line of lines) {
+  // Extrai todas as linhas não-vazias com suas URLs
+  const lineUrls = []
+  for (const line of val.split(/\n/)) {
     if (!line.trim()) continue
-    // Extrai todas as URLs da linha — separa mesmo URLs grudadas
     const raw = siExtractUrlsFromText(line)
-    if (!raw.length) continue
+    if (raw.length) lineUrls.push(raw)
+  }
+
+  for (let li = 0; li < lineUrls.length; li++) {
+    const raw = lineUrls[li]
+
+    // ── Caso 1: mesma linha tem ≥2 URLs, tenta par produto+social ──
     if (raw.length >= 2) {
-      // Tenta achar par produto+social dentro da mesma linha
       const socialIdx  = raw.findIndex(u => siIsSocialUrl(u))
       const productIdx = raw.findIndex(u => siIsProductUrl(u))
       if (socialIdx !== -1 && productIdx !== -1 && socialIdx !== productIdx) {
         const key = raw[productIdx] + '|' + raw[socialIdx]
-        if (!seen.has(key)) {
-          seen.add(key)
-          items.push({ url1: raw[productIdx], url2: raw[socialIdx] })
-        }
-        // Adiciona demais URLs da linha como itens individuais
+        if (!seen.has(key)) { seen.add(key); items.push({ url1: raw[productIdx], url2: raw[socialIdx] }) }
         raw.forEach((u, i) => {
-          if (i !== socialIdx && i !== productIdx && !seen.has(u)) {
-            seen.add(u); items.push({ url1: u })
-          }
+          if (i !== socialIdx && i !== productIdx && !seen.has(u)) { seen.add(u); items.push({ url1: u }) }
         })
         continue
       }
     }
-    // Linha com 1 URL (ou sem par detectável) → itens individuais
+
+    // ── Caso 2: linha com só 1 URL → tenta combinar com linha seguinte ──
+    if (raw.length === 1) {
+      const u = raw[0]
+      const next = lineUrls[li + 1]
+      if (next && next.length === 1) {
+        const v = next[0]
+        // Par: (produto, social) ou (social, produto) em linhas consecutivas
+        const uIsSocial  = siIsSocialUrl(u),  vIsSocial  = siIsSocialUrl(v)
+        const uIsProduct = siIsProductUrl(u), vIsProduct = siIsProductUrl(v)
+        if (uIsProduct && vIsSocial) {
+          const key = u + '|' + v
+          if (!seen.has(key)) { seen.add(key); items.push({ url1: u, url2: v }) }
+          seen.add(u); seen.add(v)
+          li++ // pula a próxima linha (já consumida no par)
+          continue
+        }
+        if (uIsSocial && vIsProduct) {
+          const key = v + '|' + u
+          if (!seen.has(key)) { seen.add(key); items.push({ url1: v, url2: u }) }
+          seen.add(u); seen.add(v)
+          li++
+          continue
+        }
+      }
+      // Linha individual
+      if (!seen.has(u)) { seen.add(u); items.push({ url1: u }) }
+      continue
+    }
+
+    // ── Linha com múltiplas URLs sem par → itens individuais ──
     for (const u of raw) {
       if (!seen.has(u)) { seen.add(u); items.push({ url1: u }) }
     }
@@ -2153,8 +2185,8 @@ async function siImportDual(storeId, pairs) {
     // Monta linhas: usa url2 (/social/) como URL salva + mlb: hint quando possível
     const lines = pairs.map(p => {
       const saveUrl = p.url2 || p.url1
-      const mlbMatch = (p.url1 || '').match(/\b(MLB[\-]?\d{8,12})\b/i)
-      const mlbHint  = mlbMatch ? ' | mlb:' + mlbMatch[1].replace('-','').toUpperCase() : ''
+      const mlbMatch = (p.url1 || '').match(/\bMLBU?[\-]?(\d{6,12})\b/i)
+      const mlbHint  = mlbMatch ? ' | mlb:MLB' + mlbMatch[1] : ''
       return saveUrl + mlbHint
     })
     await siFastImportChunked(storeId, lines, live, btn)
@@ -2226,8 +2258,8 @@ async function siImportDual(storeId, pairs) {
         if (!hasSocialFallback) return  // sem nome e sem par → descarta
         // Par com /social/ mas sem nome: envia só a URL social + hint mlb: do url1
         const saveUrl = p.url2
-        const mlbMatch = (u || '').match(/\b(MLB[\-]?\d{8,12})\b/i)
-        const mlbHint  = mlbMatch ? ' | mlb:' + mlbMatch[1].replace('-','').toUpperCase() : ''
+        const mlbMatch = (u || '').match(/\bMLBU?[\-]?(\d{6,12})\b/i)
+        const mlbHint  = mlbMatch ? ' | mlb:MLB' + mlbMatch[1] : ''
         if (!mlbHint) return  // sem MLB-ID extraível → descarta (não há como deduplicar)
         lines.push(saveUrl + mlbHint)
         return
