@@ -2953,27 +2953,32 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       let existingAnyStore: any = null
 
       if (effectiveMlbId) {
-        // Temos MLB-ID → busca precisa por MLB-XXXXXXXX (cobre todos os formatos de URL)
-        existingAnyStore = await DB.prepare(
-          `SELECT o.id, o.product_id, o.title, o.store_id, o.affiliate_url, s.name as store_name
-           FROM offers o
+        // ── PRIORIDADE 1: ml_item_id no produto (chave canônica, mais confiável) ──
+        // Cobre TODOS os casos: affiliate_url /social/ (sem MLB na string),
+        // produto.mercadolivre.com.br/MLB-XXXX, mercadolivre.com.br/.../p/MLBXXXX, etc.
+        // ml_item_id salvo sempre como só dígitos, effectiveMlbId também é só dígitos → match direto
+        const byMlItemId = await DB.prepare(
+          `SELECT o.id, p.id as product_id, COALESCE(o.title, p.name) as title,
+                  o.store_id, o.affiliate_url, s.name as store_name
+           FROM products p
+           LEFT JOIN offers o ON o.product_id = p.id
            LEFT JOIN stores s ON s.id = o.store_id
-           WHERE o.affiliate_url LIKE ? OR o.affiliate_url LIKE ?
+           WHERE p.ml_item_id = ?
+           ORDER BY o.is_active DESC
            LIMIT 1`
-        ).bind(`%MLB-${effectiveMlbId}%`, `%MLB${effectiveMlbId}%`).first<any>()
+        ).bind(effectiveMlbId).first<any>()
+        if (byMlItemId) existingAnyStore = byMlItemId
 
-        // Fallback: affiliate_url pode ser /social/ sem MLB na string (ex: mercadolivre.com.br/social/cfeg...)
-        // Nesse caso, o MLB-ID está em products.ml_item_id (gravado na criação ou após enrichment)
+        // ── PRIORIDADE 2: MLB-ID na affiliate_url salva (produto.mercadolivre.com.br/MLB-XXXXX) ──
+        // Necessário quando ml_item_id ainda não foi preenchido (produto recém importado)
         if (!existingAnyStore) {
-          const existingProduct = await DB.prepare(
-            `SELECT o.id, p.id as product_id, o.title, o.store_id, o.affiliate_url, s.name as store_name
-             FROM products p
-             LEFT JOIN offers o ON o.product_id = p.id AND o.is_active = 1
+          existingAnyStore = await DB.prepare(
+            `SELECT o.id, o.product_id, o.title, o.store_id, o.affiliate_url, s.name as store_name
+             FROM offers o
              LEFT JOIN stores s ON s.id = o.store_id
-             WHERE p.ml_item_id = ? AND p.is_active = 1
+             WHERE o.affiliate_url LIKE ? OR o.affiliate_url LIKE ?
              LIMIT 1`
-          ).bind(effectiveMlbId).first<any>()
-          if (existingProduct) existingAnyStore = existingProduct
+          ).bind(`%MLB-${effectiveMlbId}%`, `%MLB${effectiveMlbId}%`).first<any>()
         }
       } else if (socialRef) {
         // /social/ sem MLB visível → ref= é fingerprint único por produto
@@ -3151,16 +3156,11 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       )
 
       const prodResult = await DB.prepare(`
-        INSERT INTO products (name, slug, category, source, is_active, created_at, updated_at, best_price, best_store_id)
-        VALUES (?, ?, ?, 'manual', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?)
-      `).bind(name, slug, detectedCategory || 'outros', price > 0 ? price : null, storeId).run()
+        INSERT INTO products (name, slug, category, source, is_active, ml_item_id, created_at, updated_at, best_price, best_store_id)
+        VALUES (?, ?, ?, 'manual', 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?)
+      `).bind(name, slug, detectedCategory || 'outros', effectiveMlbId || null, price > 0 ? price : null, storeId).run()
 
       productId = prodResult.meta.last_row_id as number
-
-      // Salva ml_item_id para deduplicação futura (evita /social/ URL falhar no LIKE)
-      if (effectiveMlbId) {
-        await DB.prepare(`UPDATE products SET ml_item_id = ? WHERE id = ?`).bind(effectiveMlbId, productId).run()
-      }
 
       if (imgUrl) {
         await DB.prepare(`UPDATE products SET image_url = ? WHERE id = ?`).bind(imgUrl, productId).run()
