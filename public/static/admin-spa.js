@@ -12437,3 +12437,4 @@ async function startEnrichOffers() {
 document.addEventListener('DOMContentLoaded', () => {
   setTimeout(loadEnrichCount, 500)
 })
+
