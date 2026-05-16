@@ -1754,8 +1754,8 @@ function siRenderResult(data, el) {
                      : 'text-slate-500'
     const extra = r.error   ? ' — ' + r.error
                 : r.message ? ' — ' + r.message
-                : r.name    ? ' — ' + r.name.slice(0,40)
-                : r.product_name ? ' — ' + r.product_name.slice(0,40)
+                : r.name    ? ' — ' + r.name.slice(0,60)
+                : r.product_name ? ' — ' + r.product_name.slice(0,60)
                 : ''
     return '<li class="flex items-start gap-1.5 text-xs py-0.5">'
       + '<span class="flex-shrink-0">' + icon + '</span>'
