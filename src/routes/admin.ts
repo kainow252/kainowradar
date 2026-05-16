@@ -3876,13 +3876,31 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
 
     const affiliateUrl = finalAffiliateUrl
     let name = (rawName || '').trim()
+    let resolvedPrice: number | null = rawPrice ?? null
+    let resolvedImage: string | null = image_url || null
+    let resolvedMlbId: string | null = hint_mlb_id || null
 
-    // Se veio sem nome, tenta extrair do slug da URL do produto
+    // ── RESOLUÇÃO AUTOMÁTICA de links curtos meli.la ─────────────
+    // Para links meli.la sem MLB ID conhecido, resolve o redirect e extrai
+    // MLB ID, nome, preço e imagem da página /social/ do ML
+    // Isso garante deduplicação correta por ml_item_id, não por nome
+    const isShortMeliLink = /meli\.la\/|mlv\.cl\/|merc\.ad\//i.test(affiliateUrl)
+    const hasNoMlb = !resolvedMlbId && !/MLB\d{6,12}/i.test(affiliateUrl) && !/MLB\d{6,12}/i.test(productUrl)
+    if (isShortMeliLink && hasNoMlb) {
+      try {
+        const resolved = await resolveAndFetchML(affiliateUrl)
+        if (resolved.mlbId) resolvedMlbId = resolved.mlbId.replace(/^MLB/i, '')
+        if (!name && resolved.title) name = resolved.title
+        if (!resolvedPrice && resolved.price) resolvedPrice = resolved.price
+        if (!resolvedImage && resolved.image) resolvedImage = resolved.image
+      } catch { /* ignora — continua com dados parciais */ }
+    }
     if (!name) {
       const tryUrl = productUrl || affiliateUrl
-      // Para URLs /social/ não usar o publisher_id como nome (é igual para todos os produtos)
+      // Para URLs /social/ ou meli.la não usar path como nome (não tem slug útil)
       const isSocialTryUrl = /mercadolivre\.com\.br\/social\//.test(tryUrl)
-      if (!isSocialTryUrl) {
+      const isMeliLa = /meli\.la\/|mlv\.cl\/|merc\.ad\//i.test(tryUrl)
+      if (!isSocialTryUrl && !isMeliLa) {
         try {
           const pth = new URL(tryUrl).pathname
           // Remove segmentos de ID do fim do path antes de pegar o slug:
@@ -3908,7 +3926,9 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
     // Último recurso: nome genérico (nunca rejeita por falta de nome)
     // Para /social/ com hint_mlb_id, usa o MLB-ID como referência temporária
     if (!name) {
-      if (hint_mlb_id) {
+      if (resolvedMlbId) {
+        name = 'Produto MLB' + resolvedMlbId
+      } else if (hint_mlb_id) {
         const digitsOnly = hint_mlb_id.replace(/^MLB[\-_]?/i, '')
         name = 'Produto MLB' + digitsOnly
       } else {
@@ -3916,8 +3936,8 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       }
     }
 
-    const price   = rawPrice ?? 0
-    const imgUrl  = image_url || null
+    const price   = resolvedPrice ?? 0
+    const imgUrl  = resolvedImage || null
     const slug    = slugify(name) + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6)
     const extId   = 'import-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6)
 
@@ -3941,11 +3961,13 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
                     || productUrl.match(/#[^?]*(?:^|[&?])wid=(MLB[\w-]+)/i)
       const widMlbId = widMatch ? widMatch[1].replace(/-/g, '') : null
 
-      // Prioridade 0: hint do frontend (MLB-ID resolvido via url1 quando saveUrl=/social/)
-      // Prioridade 1: wid= da URL (variante específica — mais preciso que MLB do path)
-      // Normaliza para sempre SÓ DÍGITOS — hint_mlb_id e widMlbId podem chegar com prefixo "MLB"
+      // Prioridade 0: resolvedMlbId — resolvido via resolveAndFetchML (link meli.la)
+      // Prioridade 1: hint do frontend (MLB-ID resolvido via url1 quando saveUrl=/social/)
+      // Prioridade 2: wid= da URL (variante específica — mais preciso que MLB do path)
+      // Normaliza para sempre SÓ DÍGITOS
       const rawMlbId: string | null =
-        hint_mlb_id                                            // frontend resolveu via url1
+        resolvedMlbId                                          // resolvido via resolveAndFetchML
+        ?? hint_mlb_id                                         // frontend resolveu via url1
         ?? widMlbId                                            // wid= da variante (query param)
         ?? productUrl.match(/MLB[\-_]?(\d+)/i)?.[1]           // MLB na url do produto
         ?? affiliateUrl.match(/MLB[\-_]?(\d+)/i)?.[1]         // MLB no affiliateUrl
