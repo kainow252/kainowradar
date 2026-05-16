@@ -3648,6 +3648,42 @@ admin.post('/api/sweep', async (c) => {
   })
 })
 
+// ── GET /admin/api/fetch-debug — Testa acesso a URL externa do Worker ──
+// Debug: verifica se o Worker consegue acessar URLs do ML
+admin.get('/api/fetch-debug', async (c) => {
+  const url = c.req.query('url') || 'https://produto.mercadolivre.com.br/MLB-6463890784'
+  const ua  = c.req.query('ua')  || 'bot'
+  const userAgent = ua === 'mobile'
+    ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+    : 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+  try {
+    const t0 = Date.now()
+    const res = await fetch(url, {
+      redirect: 'follow',
+      headers: { 'User-Agent': userAgent, 'Accept': 'text/html', 'Accept-Language': 'pt-BR,pt;q=0.9' },
+      signal: AbortSignal.timeout(12000),
+    })
+    const elapsed = Date.now() - t0
+    const html    = await res.text()
+    const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1]
+                 || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)?.[1]
+    const ogImage = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1]
+                 || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)?.[1]
+    const price   = html.match(/"price"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/)?.[1]
+    const isMLBU  = url.includes('/up/MLBU')
+    return c.json({
+      ok: true, status: res.status, elapsed_ms: elapsed,
+      url: res.url, size: html.length,
+      og_title: ogTitle || null, og_image: ogImage || null,
+      price_json: price || null,
+      is_microlanding: isMLBU,
+      html_snippet: html.substring(0, 500),
+    })
+  } catch (e: any) {
+    return c.json({ ok: false, error: e?.message, url }, 500)
+  }
+})
+
 // ── POST /admin/api/enrich-offers — Enriquece offers sem preço/imagem ──
 // Busca preço e imagem via resolve-url para offers importadas manualmente
 // sem preço (price=0) ou sem imagem (image_url=null)
@@ -3747,7 +3783,54 @@ admin.post('/api/enrich-offers', async (c) => {
       const hasInvalidName = /^(Produto MLB|Produto Import|cfegdhabc)/i.test(offer.name || '')
 
       // Passo 1: tenta extrair MLB da affiliate_url diretamente
-      let mlbId = extractMlbId(url)
+      // Prioridade: wid=MLB... (query param) > MLB no path
+      const widInQuery  = url.match(/[?&]wid=(MLB[\w-]+)/i)
+      const mlbFromWid  = widInQuery ? widInQuery[1].replace(/-/g, '') : null
+      let mlbId: string | null = mlbFromWid ? (mlbFromWid.startsWith('MLB') ? mlbFromWid : 'MLB' + mlbFromWid) : extractMlbId(url)
+
+      // ══════════════════════════════════════════════════════════════════
+      // PASSO 1b: Para URLs /up/MLBU...?wid=MLB... (micro-landing de afiliado)
+      //   A URL é uma micro-landing de bot challenge (sem preço real).
+      //   Se temos o mlbId do wid=, vamos direto para produto.mercadolivre.com.br
+      //   com Googlebot UA — que retorna SSR completo com preço e imagem.
+      //   Isso evita perder tempo com a micro-landing.
+      // ══════════════════════════════════════════════════════════════════
+      if (mlbId && url.includes('/up/MLBU')) {
+        try {
+          const mlbDash = mlbId.replace(/^MLB/i, 'MLB-')
+          // Tenta com Googlebot (SSR bot-mode — sem JS, serve meta tags completas)
+          const prodRes = await fetch(`https://produto.mercadolivre.com.br/${mlbDash}`, {
+            redirect: 'follow',
+            headers: {
+              'User-Agent':      botUA,
+              'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'pt-BR,pt;q=0.9',
+            },
+            signal: AbortSignal.timeout(12000),
+          })
+          if (prodRes.ok) {
+            const html = await prodRes.text()
+            // item_id no JSON inline
+            if (!mlbId) {
+              const itemIdM = html.match(/"item_id"\s*:\s*"(MLB\d{6,12})"/i)
+              if (itemIdM) mlbId = itemIdM[1].toUpperCase()
+            }
+            // Preço via padrões JSON
+            if (!price) price = extractPrice(html)
+            // Imagem via og:image meta tag
+            if (!image) image = extractImage(html)
+            // og:title → preço e nome
+            const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+                         || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+            if (ogTitle) {
+              if (!price) price = extractPriceFromTitle(ogTitle[1])
+              if (hasInvalidName && ogTitle[1] && ogTitle[1].length > 5) {
+                newName = ogTitle[1].replace(/\s*-\s*R\$\s*[\d.,]+\s*$/i, '').trim()
+              }
+            }
+          }
+        } catch { /* ignora timeout */ }
+      }
 
       // ══════════════════════════════════════════════════════════════════
       // PASSO 2: /social/ com Mobile UA + forceInApp=true
@@ -3758,7 +3841,7 @@ admin.post('/api/enrich-offers', async (c) => {
       //     "type":"og:image","content":"..."  ← imagem
       //     "type":"og:title","content":"Nome - R$ 62,35" ← preço alternativo
       // ══════════════════════════════════════════════════════════════════
-      if (url.includes('/social/')) {
+      if (!price && !image && url.includes('/social/')) {
         try {
           // Adiciona forceInApp=true (essencial para o ML retornar JSON com preço)
           let fetchUrl = url
@@ -3830,8 +3913,9 @@ admin.post('/api/enrich-offers', async (c) => {
       // ══════════════════════════════════════════════════════════════════
       // PASSO 2b: se URL é www.mercadolivre.com.br/slug/p/MLB... sem /social/
       //   Tenta buscar direto com Mobile UA (serve SSR em algumas páginas)
+      //   Pula URLs /up/MLBU (micro-landing — já tratado no Passo 1b)
       // ══════════════════════════════════════════════════════════════════
-      if (!price && !image && url.includes('mercadolivre.com.br') && !url.includes('/social/')) {
+      if (!price && !image && url.includes('mercadolivre.com.br') && !url.includes('/social/') && !url.includes('/up/MLBU')) {
         try {
           const directRes = await fetch(url, {
             redirect: 'follow',
@@ -3910,8 +3994,9 @@ admin.post('/api/enrich-offers', async (c) => {
       //   Funciona para Item IDs curtos — serve SSR completo para bots
       //   NOTA: IPs da Cloudflare são bloqueados para scraping de produto normal,
       //   mas produto.mercadolivre.com.br tem menos bloqueio
+      //   Pula URLs /up/MLBU (já tratado no Passo 1b — evita double fetch)
       // ══════════════════════════════════════════════════════════════════
-      if (mlbId && (!price || !image)) {
+      if (mlbId && (!price || !image) && !url.includes('/up/MLBU')) {
         try {
           const mlbDash = mlbId.replace(/^MLB/i, 'MLB-')
           const res = await fetch(`https://produto.mercadolivre.com.br/${mlbDash}`, {
@@ -3920,12 +4005,23 @@ admin.post('/api/enrich-offers', async (c) => {
               'Accept':          'text/html,application/xhtml+xml',
               'Accept-Language': 'pt-BR,pt;q=0.9',
             },
-            signal: AbortSignal.timeout(8000),
+            signal: AbortSignal.timeout(10000),
           })
           if (res.ok) {
             const html = await res.text()
             if (!price) price = extractPrice(html)
             if (!image) image = extractImage(html)
+            // Fallback: preço do og:title "Nome - R$ 261,5"
+            if (!price) {
+              const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+                           || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+              if (ogTitle) {
+                price = extractPriceFromTitle(ogTitle[1])
+                if (!price && hasInvalidName && ogTitle[1] && ogTitle[1].length > 5) {
+                  newName = ogTitle[1].replace(/\s*-\s*R\$\s*[\d.,]+\s*$/i, '').trim()
+                }
+              }
+            }
           }
         } catch { /* ignora */ }
       }
