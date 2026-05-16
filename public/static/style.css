@@ -829,6 +829,15 @@ main, section, article, header, footer, nav {
   50%       { box-shadow: 0 0 0 8px rgba(22,163,74,0); }
 }
 
+/* ── OFFER CARD: logo e botão —— base (desktop) ─────────────── */
+.offer-card-logo {
+  width: 120px;
+  height: 52px;
+}
+.offer-card-btn {
+  flex-shrink: 0;
+}
+
 /* ── RESPONSIVE ───────────────────────────────────────────── */
 @media (max-width: 768px) {
   .hero-section h1 { font-size: 1.75rem; }
@@ -845,6 +854,25 @@ main, section, article, header, footer, nav {
 
   /* Títulos de seção menores em telas < 768 */
   .section-title { font-size: 1.05rem !important; }
+
+  /* ── OFFER CARD mobile: logo menor, botão embaixo em full-width ── */
+  .offer-card-logo {
+    width: 72px;
+    height: 44px;
+    padding: 0 8px;
+  }
+  .offer-price {
+    font-size: 1.625rem; /* 26px — cabe bem ao lado do logo menor */
+  }
+  .offer-card-btn {
+    flex: 1 1 100%;        /* quebra para linha própria */
+    text-align: center;
+    justify-content: center;
+    padding: 0.75rem 1rem;
+    font-size: 1rem;
+    border-radius: 0.875rem;
+    margin-top: 0.25rem;
+  }
 }
 
 /* Telas muito pequenas (< 400px) — ajustes finos */

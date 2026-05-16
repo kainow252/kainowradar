@@ -354,11 +354,11 @@ pages.get('/produto/:slug', async (c) => {
         </span>
       </div>` : ''}
 
-      <!-- Corpo do card -->
-      <div class="flex items-center gap-4 px-4 py-3">
+      <!-- Corpo do card: flex-wrap para quebrar no mobile -->
+      <div class="offer-card-body flex flex-wrap items-center gap-3 px-4 py-3">
 
-        <!-- Logo da loja — container fixo e centralizado -->
-        <div class="flex-shrink-0 w-[120px] h-[52px] bg-white rounded-xl border border-gray-100 shadow-sm flex items-center justify-center px-3">
+        <!-- Logo da loja — largura adaptável no mobile -->
+        <div class="offer-card-logo flex-shrink-0 bg-white rounded-xl border border-gray-100 shadow-sm flex items-center justify-center px-3">
           ${storeLogo}
         </div>
 
@@ -369,7 +369,7 @@ pages.get('/produto/:slug', async (c) => {
             : '' }
           ${ (o.price <= 0.01)
             ? `<div class="text-base font-semibold text-gray-400 leading-none">Ver preço na loja</div>`
-            : `<div class="text-3xl font-black text-gray-900 leading-none">${formatCurrency(o.price)}</div>` }
+            : `<div class="offer-price text-3xl font-black text-gray-900 leading-none">${formatCurrency(o.price)}</div>` }
           <div class="flex flex-wrap items-center gap-2 mt-1.5">
             ${ o.free_shipping
               ? '<span class="inline-flex items-center gap-1 text-xs font-semibold text-green-600"><svg class=\'w-3 h-3\' fill=\'currentColor\' viewBox=\'0 0 20 20\'><path fill-rule=\'evenodd\' d=\'M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z\' clip-rule=\'evenodd\'/></svg>Frete grátis</span>'
@@ -386,10 +386,10 @@ pages.get('/produto/:slug', async (c) => {
             : '' }
         </div>
 
-        <!-- Botão Comprar -->
+        <!-- Botão Comprar: flex-shrink-0 no desktop, full-width no mobile -->
         <a href="${trackUrl}" target="_blank" rel="noopener sponsored"
            onclick="return requireLoginToBuy(event,'${trackUrl}',${o.id},${product!.id},${o.store_id})"
-           class="flex-shrink-0 btn-buy ${ isBest ? 'bg-green-600 hover:bg-green-700 shadow-green-200 shadow-md' : '' }">
+           class="btn-buy offer-card-btn ${ isBest ? 'bg-green-600 hover:bg-green-700 shadow-green-200 shadow-md' : '' }">
           Comprar →
         </a>
 
