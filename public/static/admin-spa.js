@@ -807,8 +807,11 @@ function _buildStoreCard(s) {
   const urlHint = s.checkout_pattern || s.deeplink_base || '—'
   const topBorderColor = prodCount > 0 ? '#8b5cf6' : (s.is_active ? '#f59e0b' : '#cbd5e1')
 
-  // Botões de importação — ocultos (upload manual via modal de edição)
-  const importBtn = ''
+  // Botão de importação via links (CSV/TXT)
+  const importBtn = s.is_active
+    ? `<button onclick="event.stopPropagation();openStoreImport(${s.id},'${(s.name||'').replace(/'/g,"\\'")}')"`
+    + ` class="w-full text-xs font-semibold py-2 px-3 rounded-xl border bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 transition-all mt-1.5">📥 Importar Links</button>`
+    : ''
   const shopeeConnectBtn = ''
 
   return (
