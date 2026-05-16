@@ -2884,10 +2884,16 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       if (!isSocialTryUrl) {
         try {
           const pth = new URL(tryUrl).pathname
-          const slug = pth
-            .replace(/\/p\/MLB[\w-]*/i, '').replace(/\/MLB[\w-]*/i, '')
-            .replace(/\/$/, '').split('/').filter(Boolean).pop() || ''
-          if (slug && slug.length >= 4 && !/^MLB\d/i.test(slug)) {
+          // Remove segmentos de ID do fim do path antes de pegar o slug:
+          // - /p/MLB123456     (URL universal de produto)
+          // - /MLB123456       (URL direta de produto)
+          // - /up/MLBU123456   (URL afiliada com rastreamento uplift)
+          const cleanPath = pth
+            .replace(/\/up\/MLBU[\w-]*/i, '')   // remove /up/MLBU...
+            .replace(/\/p\/MLB[\w-]*/i, '')     // remove /p/MLB...
+            .replace(/\/MLB[\w-]*/i, '')        // remove /MLB...
+          const slug = cleanPath.replace(/\/$/, '').split('/').filter(Boolean).pop() || ''
+          if (slug && slug.length >= 4 && !/^MLB[U]?\d/i.test(slug)) {
             name = slug.replace(/-+/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()).trim().substring(0, 120)
           }
           if (!name) {
@@ -7365,6 +7371,15 @@ admin.post('/api/feed/process', async (c) => {
         const linkFP      = extractFingerprint(link.name)
 
         if (linkFP.length > 0) {
+          // ── GUARD: nomes genéricos nunca devem fazer fuzzy match ──────────
+          // Nomes como 'Produto Importado', 'Cfegdhabc31955' têm tokens únicos
+          // que dariam score=1.0 por acidente (único candidato com aquele token)
+          const isGenericName = /^(Produto\s+Importado|Produto\s+MLB|Cfegdhabc|MLBU?\d{6,12})/i.test(link.name)
+          if (isGenericName) {
+            // Nome genérico → nunca fazer match, sempre criar produto novo
+            // (o enrich-offers vai corrigir nome/preço/imagem depois)
+          } else {
+
           // Busca candidatos: prioriza mesma marca/categoria
           let candidates: { id: number; name: string; brand: string | null }[] = []
 
@@ -7394,6 +7409,9 @@ admin.post('/api/feed/process', async (c) => {
           let bestMethod = 'name_fuzzy'
 
           for (const cand of candidates) {
+            // Pula candidatos com nome gen\u00e9rico no banco (evita match acidental por score=1.0)
+            if (/^(Produto\s+Importado|Produto\s+MLB|Cfegdhabc|MLBU?\d{6,12})/i.test(cand.name)) continue
+
             const candFP     = extractFingerprint(cand.name)
             const candFPSet  = new Set(candFP)
             const linkFPSet  = new Set(linkFP)
@@ -7435,6 +7453,7 @@ admin.post('/api/feed/process', async (c) => {
             matchScore  = bestScore
           }
         }
+          } // fim do else (nome não genérico)
       }
 
       // ── 5. Cria produto novo se não encontrou ─────────
