@@ -3714,6 +3714,8 @@ admin.post('/api/enrich-offers', async (c) => {
       const url = offer.affiliate_url
       let price: number | null = null
       let image = ''
+      let newName: string | null = null
+      const hasInvalidName = /^(Produto MLB|Produto Import|cfegdhabc)/i.test(offer.name || '')
 
       // Passo 1: tenta extrair MLB da affiliate_url diretamente
       let mlbId = extractMlbId(url)
@@ -3760,11 +3762,16 @@ admin.post('/api/enrich-offers', async (c) => {
             // 2) Preço via "current_price":{"value":14.54} — presente no JSON do /social/ com forceInApp
             if (!price) price = extractPrice(html)
 
-            // 3) Preço via og:title: {"type":"og:title","content":"Nome - R$ 62,35"}
-            if (!price) {
-              const titleM = html.match(/"type"\s*:\s*"og:title"\s*,\s*"content"\s*:\s*"([^"]+)"/)
-                          || html.match(/"content"\s*:\s*"([^"]+)"\s*,\s*"type"\s*:\s*"og:title"/)
-              if (titleM) price = extractPriceFromTitle(titleM[1])
+            // 3) Nome + Preço via og:title: {"type":"og:title","content":"Nome - R$ 62,35"}
+            const titleM = html.match(/"type"\s*:\s*"og:title"\s*,\s*"content"\s*:\s*"([^"]+)"/)
+                        || html.match(/"content"\s*:\s*"([^"]+)"\s*,\s*"type"\s*:\s*"og:title"/)
+            if (titleM) {
+              if (!price) price = extractPriceFromTitle(titleM[1])
+              // Salva nome se produto tem nome genérico
+              if (hasInvalidName && titleM[1] && titleM[1].length > 5) {
+                // Remove " - R$ XX,XX" do final se presente
+                newName = titleM[1].replace(/\s*-\s*R\$\s*[\d.,]+\s*$/i, '').trim()
+              }
             }
 
             // 4) Imagem via og:image no JSON inline
@@ -3861,14 +3868,24 @@ admin.post('/api/enrich-offers', async (c) => {
           WHERE id = ?
         `).bind(price || 0, price || 0, image, image, offer.offer_id).run()
 
-        // Atualiza produto
+        // Extrai dígitos do mlbId encontrado via /social/ para salvar em ml_item_id
+        const newMlItemId = mlbId ? mlbId.replace(/^MLB/i, '') : null
+
+        // Atualiza produto — inclui ml_item_id e nome (se genérico) quando encontrado via /social/
         await DB.prepare(`
           UPDATE products SET
             image_url  = CASE WHEN ? != '' AND (image_url IS NULL OR image_url = '') THEN ? ELSE image_url END,
             best_price = CASE WHEN ? > 0 AND (best_price IS NULL OR best_price = 0) THEN ? ELSE best_price END,
+            ml_item_id = CASE WHEN ? IS NOT NULL AND (ml_item_id IS NULL OR ml_item_id = '') THEN ? ELSE ml_item_id END,
+            name       = CASE WHEN ? IS NOT NULL THEN ? ELSE name END,
             updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
-        `).bind(image, image, price || 0, price || 0, offer.product_id).run()
+        `).bind(image, image, price || 0, price || 0, newMlItemId, newMlItemId, newName, newName, offer.product_id).run()
+
+        // Se atualizou nome, também atualiza o offer title
+        if (newName) {
+          await DB.prepare(`UPDATE offers SET title = ? WHERE id = ? AND (title IS NULL OR title = '' OR title LIKE 'Produto %' OR title LIKE 'cfegdhabc%')`).bind(newName, offer.offer_id).run()
+        }
 
         enriched++
         details.push({ name: offer.name, price, image: image ? '✓' : '✗', mlb: mlbId, status: 'ok' })
@@ -3876,8 +3893,7 @@ admin.post('/api/enrich-offers', async (c) => {
         // Não conseguiu enriquecer
         // Auto-deleta se o produto tem nome inválido (Produto MLB*, Produto Import*, cfegdhabc*)
         // — esses nunca vão resolver, são lixo do parseLine bugado
-        const isInvalidName = /^(Produto MLB|Produto Import|cfegdhabc)/i.test(offer.name || '')
-        if (DELETE_FAILED || isInvalidName) {
+        if (DELETE_FAILED || hasInvalidName) {
           try {
             await DB.prepare(`DELETE FROM offers WHERE id = ?`).bind(offer.offer_id).run()
             // Deleta o produto se não tiver outros offers vinculados
