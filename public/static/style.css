@@ -861,27 +861,28 @@ main, section, article, header, footer, nav {
   /* Títulos de seção menores em telas < 768 */
   .section-title { font-size: 1.05rem !important; }
 
-  /* ── OFFER CARD mobile: logo menor, botão embaixo em full-width ── */
+  /* ── OFFER CARD mobile: logo menor, botão compacto full-width ── */
   .offer-card-logo {
-    width: 72px;
-    height: 44px;
-    padding: 0 8px;
+    width: 52px;
+    height: 36px;
+    padding: 0 6px;
   }
   .offer-price {
-    font-size: 1.625rem; /* 26px — cabe bem ao lado do logo menor */
+    font-size: 1.25rem !important; /* 20px — compacto no mobile */
+    line-height: 1.1;
   }
   .offer-card-btn {
-    /* Força quebra para linha própria — width 100% é mais confiável
-       que flex: 1 1 100% quando há flex-shrink: 0 no base */
+    /* Força quebra para linha própria */
     width: 100% !important;
     flex-shrink: 1 !important;
     flex-grow: 1 !important;
     flex-basis: 100% !important;
     text-align: center;
     justify-content: center;
-    padding: 0.75rem 1rem;
-    font-size: 1rem;
-    border-radius: 0.875rem;
+    padding: 0.5rem 0.875rem;   /* menor que antes */
+    font-size: 0.8125rem;        /* 13px — compacto */
+    font-weight: 700;
+    border-radius: 0.75rem;
     margin-top: 0.25rem;
     box-sizing: border-box;
   }
