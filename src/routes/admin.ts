@@ -9771,8 +9771,15 @@ function renderAdminSPA(): string {
 }
 
 // ── POST /api/cron/shopee-refresh ─────────────────────────────────────────
-// Endpoint chamado a cada 1h por serviço externo (cron.org, Cloudflare Cron Worker, etc.)
-// Atualiza preço, imagem e título de todas as offers Shopee que têm shopee_product_url
+// Endpoint manual chamado via Admin ou serviço externo para refresh imediato.
+// Atualiza preço, imagem, título e link afiliado de todas as offers Shopee.
+//
+// Estratégia (em ordem de prioridade):
+//   1. API GraphQL Shopee Afiliados (open-api.affiliate.shopee.com.br/graphql)
+//      productOfferV2(itemId) → priceMin real, imageUrl CDN, offerLink curto afiliado
+//      Requer credenciais: api_configs WHERE id = 'shopee-afiliados'
+//   2. Fallback: facebookexternalhit + JSON-LD → preço via <script ld+json>
+//
 // Protegido por CRON_SECRET no header Authorization: Bearer <secret>
 admin.post('/api/cron/shopee-refresh', async (c) => {
   const DB = (c.env as any).DB as D1Database
@@ -9780,155 +9787,237 @@ admin.post('/api/cron/shopee-refresh', async (c) => {
   // Verificação de secret — opcional mas recomendada
   const cronSecret = (c.env as any).CRON_SECRET as string | undefined
   if (cronSecret) {
-    const auth = c.req.header('Authorization') || ''
+    const auth  = c.req.header('Authorization') || ''
     const token = auth.replace(/^Bearer\s+/i, '').trim()
     if (token !== cronSecret) {
       return c.json({ ok: false, error: 'Unauthorized' }, 401)
     }
   }
 
+  const t0 = Date.now()
+
   // Busca todas as offers Shopee ativas com shopee_product_url preenchida
   const { results: offers } = await DB.prepare(`
-    SELECT o.id, o.external_id, o.shopee_product_url, o.price, o.product_id
-    FROM offers o
-    WHERE o.store_id = 4
-      AND o.is_active = 1
-      AND o.shopee_product_url IS NOT NULL
-    ORDER BY o.last_updated ASC
-    LIMIT 50
+    SELECT o.id, o.external_id, o.shopee_product_url, o.price, o.product_id, o.affiliate_url
+    FROM   offers o
+    WHERE  o.store_id = 4
+      AND  o.is_active = 1
+      AND  o.shopee_product_url IS NOT NULL
+    ORDER  BY o.last_updated ASC
+    LIMIT  50
   `).all<any>()
 
   if (!offers || offers.length === 0) {
     return c.json({ ok: true, message: 'Nenhuma offer Shopee com shopee_product_url encontrada', updated: 0 })
   }
 
-  // Função interna de refresh (duplicada aqui para escopo autônomo do cron)
-  async function doRefresh(productUrl: string): Promise<{ price: number | null; image: string | null; title: string | null }> {
-    let price: number | null = null
-    let image: string | null = null
-    let title: string | null = null
+  // Tenta carregar credenciais da API GraphQL Shopee Afiliados
+  const cfg = await DB.prepare(
+    `SELECT api_key, extra_json FROM api_configs WHERE id = 'shopee-afiliados'`
+  ).first<any>().catch(() => null)
+
+  const shopeeAppId  = cfg?.api_key || ''
+  const shopeeSecret = cfg ? (JSON.parse(cfg.extra_json || '{}').secret || '') : ''
+  const useGraphQL   = !!(shopeeAppId && shopeeSecret)
+
+  // ── Helper: API GraphQL Shopee Afiliados ────────────────────
+  // Doc: https://www.affiliateshopee.com.br/documentacao
+  // Auth: SHA256 Credential={AppId}, Timestamp={ts}, Signature={SHA256(appId+ts+payload+secret)}
+  // Query: productOfferV2(itemId: X) → priceMin real, imageUrl CDN, offerLink curto
+  async function fetchViaGraphQL(itemId: string): Promise<{
+    price: number | null; image: string | null; title: string | null; offerLink: string | null
+  }> {
+    try {
+      const timestamp = Math.floor(Date.now() / 1000)
+      const query   = `{ productOfferV2(itemId: ${itemId}, page: 1, limit: 1) { nodes { itemId productName imageUrl priceMin priceMax offerLink } } }`
+      const payload = JSON.stringify({ query })
+      const sigInput = shopeeAppId + String(timestamp) + payload + shopeeSecret
+      const sigBuf   = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sigInput))
+      const signature = Array.from(new Uint8Array(sigBuf)).map((b: number) => b.toString(16).padStart(2,'0')).join('')
+
+      const res = await fetch('https://open-api.affiliate.shopee.com.br/graphql', {
+        method: 'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `SHA256 Credential=${shopeeAppId}, Timestamp=${timestamp}, Signature=${signature}`,
+        },
+        body: payload,
+      })
+
+      if (!res.ok) return { price: null, image: null, title: null, offerLink: null }
+
+      const json: any = await res.json()
+      const nodes = json?.data?.productOfferV2?.nodes
+      if (!Array.isArray(nodes) || nodes.length === 0) return { price: null, image: null, title: null, offerLink: null }
+
+      const node = nodes[0]
+      const rawPrice = node.priceMin ?? node.priceMax ?? null
+      let price: number | null = null
+      if (rawPrice !== null) {
+        const v = parseFloat(String(rawPrice).replace(',', '.'))
+        if (!isNaN(v) && v > 0) price = v
+      }
+      return {
+        price,
+        image:     node.imageUrl    || null,
+        title:     node.productName || null,
+        offerLink: node.offerLink   || null,  // link curto afiliado atualizado
+      }
+    } catch { return { price: null, image: null, title: null, offerLink: null } }
+  }
+
+  // ── Helper: Fallback HTML (facebookexternalhit + JSON-LD) ───
+  // NOTA: xTgkVC/KTJj8T = bloco de FRETE ("Frete grátis R$X,XX") — IGNORAR
+  // JSON-LD type=Product → off.price = preço real do produto
+  async function fetchViaHTML(productUrl: string): Promise<{
+    price: number | null; image: string | null; title: string | null
+  }> {
     try {
       const r = await fetch(productUrl, {
         redirect: 'follow',
         headers: {
-          'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
-          'Accept': 'text/html,application/xhtml+xml,*/*',
+          'User-Agent':      'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+          'Accept':          'text/html,application/xhtml+xml,*/*',
           'Accept-Language': 'pt-BR,pt;q=0.9',
         },
       })
+      if (!r.ok) return { price: null, image: null, title: null }
       const html = await r.text()
 
-      // JSON-LD — fonte mais confiável de preço
-      const jsonldMatches = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>(.*?)<\/script>/gis)]
-      for (const jm of jsonldMatches) {
+      let price: number | null = null
+      let image: string | null = null
+      let title: string | null = null
+
+      // JSON-LD Product → fonte mais confiável de preço
+      const jldRe = /<script[^>]+type=["']application\/ld\+json["'][^>]*>(.*?)<\/script>/gis
+      for (const jm of [...html.matchAll(jldRe)]) {
         try {
           const jd = JSON.parse(jm[1])
-          // Só extrai preço de JSON-LD de tipo Product
-          if (jd['@type'] === 'Product') {
-            const off = Array.isArray(jd.offers) ? jd.offers[0] : jd.offers
-            if (off?.price) {
-              const v = parseFloat(String(off.price).replace(',', '.'))
-              if (v > 0 && v < 1_000_000) price = v
-            }
-            if (!title && jd.name) title = jd.name
-            if (!image && jd.image) image = Array.isArray(jd.image) ? jd.image[0] : jd.image
-            break // achou Product, para
+          const off = Array.isArray(jd.offers) ? jd.offers[0] : jd.offers
+          if (off?.price) {
+            const v = parseFloat(String(off.price).replace(',', '.'))
+            if (v > 0 && v < 1_000_000) price = v
           }
+          if (!title && jd.name) title = jd.name
+          if (!image && jd.image) image = Array.isArray(jd.image) ? jd.image[0] : jd.image
         } catch { /* continua */ }
       }
 
-      // Fallback og:title
       if (!title) {
-        const tm = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
-                ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
-        if (tm) title = tm[1].replace(/\s*\|\s*Shopee Brasil\s*$/i, '').trim()
+        const m = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+               ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+        if (m) title = m[1].replace(/\s*\|\s*Shopee Brasil\s*$/i, '').trim()
       }
-
-      // Fallback og:image
       if (!image) {
-        const im = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+        const m = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
                ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
-        if (im) image = im[1].trim()
+        if (m) image = m[1].trim()
       }
 
-      // Fallback preço no HTML sem contexto de frete
+      // Fallback preço: remove blocos de frete antes de buscar R$
       if (!price) {
-        const htmlNoFrete = html.replace(/Frete[^<]*<[^>]*>[^<]*R\$[^<]*</gi, '')
-                                .replace(/KTJj8T[^<]*<[^<]*<[^<]*R\$[^<]*/g, '')
-        const priceM = htmlNoFrete.match(/R\$\s*([\d]+(?:[.,]\d{2})?)(?:\s|<|&|"|'|$)/i)
-        if (priceM) {
-          const raw = priceM[1]
-          const norm = /^\d{1,3}\.\d{3},\d{2}$/.test(raw)
-            ? raw.replace('.', '').replace(',', '.')
-            : raw.replace(',', '.')
-          const v = parseFloat(norm)
+        const noFrete = html.replace(/Frete[^<]*<[^>]*>[^<]*R\$[^<]*</gi, '')
+                            .replace(/KTJj8T[^<]*<[^<]*<[^<]*R\$[^<]*/g, '')
+        const m = noFrete.match(/R\$\s*([\d]+(?:[.,]\d{2})?)(?:\s|<|&|"|'|$)/i)
+        if (m) {
+          const raw  = m[1]
+          const norm = /^\d{1,3}\.\d{3},\d{2}$/.test(raw) ? raw.replace('.','').replace(',','.') : raw.replace(',','.')
+          const v    = parseFloat(norm)
           if (v > 0 && v < 1_000_000) price = v
         }
       }
-    } catch { /* ignora erros de rede */ }
-    return { price, image, title }
+
+      return { price, image, title }
+    } catch { return { price: null, image: null, title: null } }
   }
 
+  // ── Processamento ────────────────────────────────────────────
   const log: any[] = []
-  let updated = 0, failed = 0
+  let updated = 0, failed = 0, nodata = 0
 
-  // Processa em batches de 5 para não sobrecarregar a Shopee
   const BATCH = 5
   for (let i = 0; i < offers.length; i += BATCH) {
     const batch = offers.slice(i, i + BATCH)
     await Promise.all(batch.map(async (offer: any) => {
       try {
-        const { price, image, title } = await doRefresh(offer.shopee_product_url)
+        let price: number | null = null
+        let image: string | null = null
+        let title: string | null = null
+        let newAffiliateUrl: string | null = null
+
+        // 1. API GraphQL (se credenciais disponíveis)
+        if (useGraphQL && offer.external_id) {
+          const gql = await fetchViaGraphQL(offer.external_id)
+          price           = gql.price
+          image           = gql.image
+          title           = gql.title
+          newAffiliateUrl = gql.offerLink  // link curto afiliado atualizado pela API
+        }
+
+        // 2. Fallback HTML se ainda sem dados
+        if ((price === null || image === null) && offer.shopee_product_url) {
+          const html = await fetchViaHTML(offer.shopee_product_url)
+          if (price === null) price = html.price
+          if (image === null) image = html.image
+          if (title === null) title = html.title
+        }
 
         if (price === null && image === null) {
-          failed++
+          nodata++
           log.push({ id: offer.id, status: 'no-data', url: offer.shopee_product_url })
           return
         }
 
-        // Não atualiza preço se for valor suspeito de frete (< R$1)
-        const priceToSave = (price && price > 1) ? price : null
-
-        // Atualiza offer
+        // Atualiza offer (price + image + title + affiliate_url se renovado pela API)
         await DB.prepare(`
           UPDATE offers
-          SET price        = COALESCE(?, price),
-              image_url    = COALESCE(?, image_url),
-              title        = COALESCE(?, title),
-              last_updated = CURRENT_TIMESTAMP
+          SET price         = COALESCE(?, price),
+              image_url     = COALESCE(?, image_url),
+              title         = COALESCE(?, title),
+              affiliate_url = COALESCE(?, affiliate_url),
+              last_updated  = CURRENT_TIMESTAMP
           WHERE id = ?
-        `).bind(priceToSave, image, title, offer.id).run()
+        `).bind(price, image, title, newAffiliateUrl, offer.id).run()
 
-        // Atualiza produto (best_price e imagem se melhorou)
-        if (priceToSave) {
+        // Atualiza produto (best_price + imagem se melhorou)
+        if (price !== null) {
           await DB.prepare(`
             UPDATE products
             SET best_price = COALESCE(?, best_price),
                 image_url  = COALESCE(?, image_url),
                 name       = COALESCE(?, name)
-            WHERE id = ? AND (best_price IS NULL OR best_price < 1 OR ? <= best_price)
-          `).bind(priceToSave, image, title, offer.product_id, priceToSave).run()
+            WHERE id = ? AND (best_price IS NULL OR ? <= best_price)
+          `).bind(price, image, title, offer.product_id, price).run()
         }
 
         updated++
-        log.push({ id: offer.id, status: 'updated', price: priceToSave, url: offer.shopee_product_url })
+        log.push({
+          id:     offer.id,
+          status: 'updated',
+          price,
+          via:    (useGraphQL && offer.external_id) ? 'graphql' : 'html',
+          url:    offer.shopee_product_url,
+        })
       } catch (e: any) {
         failed++
-        log.push({ id: offer.id, status: 'error', error: e?.message })
+        log.push({ id: offer.id, status: 'error', error: (e as any)?.message })
       }
     }))
-    // Pequena pausa entre batches
+
     if (i + BATCH < offers.length) {
       await new Promise(res => setTimeout(res, 500))
     }
   }
 
   return c.json({
-    ok: true,
-    total: offers.length,
+    ok:         true,
+    total:      offers.length,
     updated,
     failed,
-    timestamp: new Date().toISOString(),
+    nodata,
+    graphql:    useGraphQL,
+    duration_ms: Date.now() - t0,
+    timestamp:  new Date().toISOString(),
     log,
   })
 })
