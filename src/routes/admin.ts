@@ -1869,24 +1869,59 @@ admin.post('/api/stores/ml/import-affiliate-links', async (c) => {
     }
   }
 
-  // Tenta descobrir MLB ID a partir de um link curto meli.la
-  // via API pública do ML (resolve o item_id no endpoint de redirects, se disponível)
-  // Fallback: busca no banco por affiliate_url parecida
-  async function lookupMlbFromShortLink(shortUrl: string): Promise<string | null> {
-    // Tenta o endpoint de expand do ML (não oficial mas funcional)
+  // ─────────────────────────────────────────────────────────────────
+  // FLUXO PYTHON → Cloudflare Worker:
+  //   meli.la/xxx  →  follow redirect  →  URL real com MLB  →  API ML
+  //   Retorna: { mlbId, title, price, image, longUrl }
+  // ─────────────────────────────────────────────────────────────────
+  async function resolveAndFetchML(shortUrl: string): Promise<{
+    mlbId: string | null
+    title: string | null
+    price: number | null
+    image: string | null
+    longUrl: string | null
+  }> {
+    let longUrl: string | null = null
+    let mlbId:   string | null = null
+
+    // Etapa 1 — segue redirect igual ao requests.get(allow_redirects=True)
     try {
-      const apiUrl = `https://api.mercadolibre.com/short-urls?url=${encodeURIComponent(shortUrl)}`
-      const r = await fetch(apiUrl, {
-        headers: { 'User-Agent': 'KainowRadar/1.0', Accept: 'application/json' },
+      const r = await fetch(shortUrl, {
         redirect: 'follow',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,*/*',
+        },
       })
-      if (r.ok) {
-        const j = await r.json() as any
-        const longUrl = j?.resource_id || j?.url || j?.redirect_url || ''
-        if (longUrl) return extractMlbId(String(longUrl))
+      longUrl = r.url || null
+    } catch { /* ignora */ }
+
+    // Etapa 2 — extrai MLB da URL resolvida
+    if (longUrl) mlbId = extractMlbId(longUrl)
+
+    if (!mlbId) return { mlbId: null, title: null, price: null, image: null, longUrl }
+
+    // Etapa 3+4 — API pública ML: api.mercadolibre.com/items/{MLB}
+    try {
+      const apiUrl = `https://api.mercadolibre.com/items/${mlbId}`
+      const apiRes = await fetch(apiUrl, {
+        headers: { 'Accept': 'application/json', 'User-Agent': 'KainowRadar/1.0' },
+      })
+      if (apiRes.ok) {
+        const d = await apiRes.json() as any
+        return {
+          mlbId,
+          title: d.title        || null,
+          price: d.price        ? Number(d.price) : null,
+          image: d.pictures?.[0]?.secure_url
+              || d.thumbnail?.replace('-I.jpg', '-O.jpg')
+              || null,
+          longUrl,
+        }
       }
     } catch { /* ignora */ }
-    return null
+
+    return { mlbId, title: null, price: null, image: null, longUrl }
   }
 
   // ── Processamento ───────────────────────────────────────────
@@ -1896,11 +1931,10 @@ admin.post('/api/stores/ml/import-affiliate-links', async (c) => {
 
   for (const originalUrl of urls) {
     try {
-      // ── DEDUPLICAÇÃO: checa se este link já foi importado antes ──
+      // ── DEDUPLICAÇÃO ─────────────────────────────────────────
       const alreadyImported = await DB.prepare(
         `SELECT id, affiliate_url, product_name FROM ml_affiliate_imports
-         WHERE original_url = ? OR affiliate_url = ?
-         LIMIT 1`
+         WHERE original_url = ? OR affiliate_url = ? LIMIT 1`
       ).bind(originalUrl, originalUrl).first<any>()
 
       if (alreadyImported) {
@@ -1908,9 +1942,8 @@ admin.post('/api/stores/ml/import-affiliate-links', async (c) => {
         results.push({
           url:          originalUrl,
           status:       'duplicado',
-          duplicate_of: alreadyImported.affiliate_url,
           product_name: alreadyImported.product_name ?? null,
-          message:      'Link já foi importado anteriormente — ignorado',
+          message:      'Link já importado anteriormente — ignorado',
         })
         continue
       }
@@ -1918,45 +1951,53 @@ admin.post('/api/stores/ml/import-affiliate-links', async (c) => {
       const isShort = isShortAffiliateLink(originalUrl)
       const isLong  = isLongMlLink(originalUrl)
 
-      let affiliateUrl: string
-      let mlbId: string | null = null
+      // ── RESOLVE LINK + BUSCA DADOS NA API ML ─────────────────
+      // Para meli.la: segue redirect → MLB → api.mercadolibre.com/items/{MLB}
+      // Para links longos: extrai MLB direto → api.mercadolibre.com/items/{MLB}
+      let affiliateUrl: string = originalUrl
+      let mlbId:  string | null = null
+      let title:  string | null = null
+      let price:  number | null = null
+      let image:  string | null = null
+      let longUrl: string | null = null
 
       if (isShort) {
-        // Link meli.la já É o link de afiliado — usa direto
-        affiliateUrl = originalUrl
-        // Tenta descobrir MLB para vincular ao produto
-        mlbId = await lookupMlbFromShortLink(originalUrl)
+        // meli.la — segue redirect e busca tudo na API ML
+        affiliateUrl = originalUrl   // link curto JÁ É o link de afiliado
+        const resolved = await resolveAndFetchML(originalUrl)
+        mlbId   = resolved.mlbId
+        title   = resolved.title
+        price   = resolved.price
+        image   = resolved.image
+        longUrl = resolved.longUrl
       } else if (isLong) {
-        // Link longo → extrai MLB e injeta tracking
-        mlbId = extractMlbId(originalUrl)
+        // Link longo → extrai MLB, injeta tracking, busca API ML
+        mlbId        = extractMlbId(originalUrl)
         affiliateUrl = buildTrackedUrl(originalUrl)
-      } else {
-        // Link desconhecido — tenta extrair MLB de qualquer forma e usa como está
-        mlbId = extractMlbId(originalUrl)
-        affiliateUrl = originalUrl
-      }
-
-      // Checa também se o affiliateUrl resolvido já existe no banco
-      if (affiliateUrl !== originalUrl) {
-        const alreadyResolved = await DB.prepare(
-          `SELECT id, product_name FROM ml_affiliate_imports WHERE affiliate_url = ? LIMIT 1`
-        ).bind(affiliateUrl).first<any>()
-        if (alreadyResolved) {
-          duplicates++
-          results.push({
-            url:          originalUrl,
-            affiliate_url: affiliateUrl,
-            status:       'duplicado',
-            product_name: alreadyResolved.product_name ?? null,
-            message:      'Link resolvido já foi importado anteriormente — ignorado',
-          })
-          continue
+        longUrl      = originalUrl
+        if (mlbId) {
+          // Busca dados na API ML
+          try {
+            const apiRes = await fetch(`https://api.mercadolibre.com/items/${mlbId}`, {
+              headers: { 'Accept': 'application/json', 'User-Agent': 'KainowRadar/1.0' },
+            })
+            if (apiRes.ok) {
+              const d = await apiRes.json() as any
+              title = d.title     || null
+              price = d.price     ? Number(d.price) : null
+              image = d.pictures?.[0]?.secure_url
+                   || d.thumbnail?.replace('-I.jpg', '-O.jpg')
+                   || null
+            }
+          } catch { /* ignora */ }
         }
+      } else {
+        mlbId = extractMlbId(originalUrl)
       }
 
       imported++
 
-      // Busca produto vinculado pelo ml_item_id (se encontrado)
+      // ── VINCULA A PRODUTO EXISTENTE (pelo MLB ID) ─────────────
       let product: any = null
       if (mlbId) {
         product = await DB.prepare(
@@ -1966,38 +2007,41 @@ admin.post('/api/stores/ml/import-affiliate-links', async (c) => {
 
       if (product) {
         matched++
+        // Atualiza link de afiliado no produto existente
         await DB.prepare(`
-          UPDATE products
-          SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
+          UPDATE products SET affiliate_url = ?, affiliate_updated_at = CURRENT_TIMESTAMP WHERE id = ?
         `).bind(affiliateUrl, product.id).run()
         saved++
       }
 
-      // Log da importação
+      // ── SALVA NA TABELA DE IMPORTS (com todos os dados) ───────
       await DB.prepare(`
         INSERT INTO ml_affiliate_imports
           (original_url, resolved_url, ml_item_id, affiliate_url,
-           product_id, product_name, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+           product_id, product_name, product_price, product_image, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
         originalUrl,
-        isShort ? originalUrl : originalUrl,
+        longUrl ?? originalUrl,
         mlbId ?? null,
         affiliateUrl,
-        product?.id ?? null,
-        product?.name ?? null,
-        product ? 'matched' : 'resolved'
+        product?.id   ?? null,
+        title ?? product?.name ?? null,
+        price ?? null,
+        image ?? null,
+        product ? 'matched' : (mlbId ? 'resolved' : 'saved')
       ).run()
 
       results.push({
         url:          originalUrl,
         affiliate_url: affiliateUrl,
-        ml_item_id:   mlbId ?? null,
-        status:       product ? 'matched' : 'resolved',
+        ml_item_id:   mlbId  ?? null,
+        title:        title  ?? product?.name ?? null,
+        price:        price  ?? null,
+        image:        image  ?? null,
+        status:       product ? 'matched' : (mlbId ? 'resolved' : 'saved'),
         product_id:   product?.id ?? null,
-        product_name: product?.name ?? null,
-        type:         isShort ? 'short' : isLong ? 'long' : 'unknown',
+        type:         isShort ? 'meli.la' : isLong ? 'long' : 'unknown',
       })
 
     } catch (e: any) {
@@ -2019,9 +2063,9 @@ admin.post('/api/stores/ml/import-affiliate-links', async (c) => {
     errors,
     results,
     tip: imported > 0
-      ? `${imported} link(s) processado(s), ${matched} vinculado(s) a produtos.`
+      ? `${imported} link(s) processado(s) — nome, preço e imagem salvos automaticamente!`
       : duplicates > 0
-        ? `Todos os ${duplicates} link(s) já foram importados anteriormente — nenhum duplicado.`
+        ? `Todos os ${duplicates} link(s) já foram importados — nenhum duplicado.`
         : 'Nenhum link novo processado.',
   })
 })
