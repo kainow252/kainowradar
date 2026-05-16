@@ -2610,8 +2610,8 @@ admin.get('/api/stores/shopee/status', async (c) => {
 
   // Conta links/produtos da loja Shopee
   const store = storeId
-    ? await DB.prepare(`SELECT id FROM stores WHERE affiliate_network = 'shopee-api' AND id = ?`).bind(storeId).first<any>()
-    : await DB.prepare(`SELECT id FROM stores WHERE affiliate_network = 'shopee-api' LIMIT 1`).first<any>()
+    ? await DB.prepare(`SELECT id FROM stores WHERE (affiliate_network IN ('shopee-api','lomadee','socialsoul')) AND name LIKE '%hopee%' AND id = ?`).bind(storeId).first<any>()
+    : await DB.prepare(`SELECT id FROM stores WHERE (affiliate_network IN ('shopee-api','lomadee','socialsoul')) AND name LIKE '%hopee%' LIMIT 1`).first<any>()
 
   let totalLinks = 0
   let totalProducts = 0
@@ -8714,7 +8714,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260516b"><\/script>
+<script src="/static/admin-spa.js?v=20260516c"><\/script>
 </body>
 </html>`
 }

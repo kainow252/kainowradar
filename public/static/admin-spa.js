@@ -810,8 +810,10 @@ function _buildStoreCard(s) {
   // Botao Importar Links aparece em TODOS os cards de loja
   const importBtn = '<button onclick="event.stopPropagation();openStoreImport(' + s.id + ',\'' + (s.name||'').replace(/'/g,'&#39;') + '\')" class="w-full text-xs font-semibold py-2 px-3 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-all mt-2">&#128229; Importar Links</button>'
 
-  // Botão especial Shopee Afiliados — aparece só no card da Shopee (network shopee-api)
-  const shopeeConnectBtn = (s.affiliate_network === 'shopee-api')
+  // Botão especial Shopee Afiliados — aparece no card da Shopee (qualquer network + nome Shopee)
+  const isShopee = (s.affiliate_network === 'shopee-api' || s.affiliate_network === 'lomadee' || s.affiliate_network === 'socialsoul')
+    && (s.name || '').toLowerCase().includes('shopee')
+  const shopeeConnectBtn = isShopee
     ? '<button onclick="event.stopPropagation();openShopeeAfiliados(' + s.id + ')" class="w-full text-xs font-semibold py-2 px-3 rounded-xl border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100 transition-all mt-2">🛍️ Conectar Shopee Afiliados</button>'
     : ''
 
