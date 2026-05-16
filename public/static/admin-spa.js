@@ -10357,6 +10357,22 @@ async function renderFeedIngestion(area) {
         </div>
       </div>
 
+      <!-- Card: Varredura Completa -->
+      <div class="bg-purple-50 border border-purple-200 rounded-2xl p-5" id="sweep-card">
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <h4 class="font-bold text-purple-900">🧹 Varredura Completa do Banco</h4>
+            <p class="text-xs text-purple-700 mt-0.5">Corrige em sequência: <b>duplicatas</b> (merge por MLB-ID) · <b>nomes inválidos</b> (recupera via API ML) · <b>preço/imagem faltando</b> (busca na API). Rode sempre que importar em massa.</p>
+          </div>
+          <button onclick="runSweep()" id="sweep-btn"
+            class="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-bold px-4 py-2.5 rounded-xl transition-all shadow-sm whitespace-nowrap ml-4">
+            🧹 Varrer Agora
+          </button>
+        </div>
+        <div id="sweep-status" class="text-xs text-purple-700">Clique para iniciar a varredura.</div>
+        <div id="sweep-log" class="hidden mt-3 rounded-lg bg-purple-100 p-2 space-y-1"></div>
+      </div>
+
       <!-- Card: Corrigir Nomes Inválidos -->
       <div class="bg-rose-50 border border-rose-200 rounded-2xl p-5" id="fixnames-card">
         <div class="flex items-center justify-between mb-3">
@@ -11228,6 +11244,72 @@ async function loadEnrichCount() {
   } else {
     statusEl.textContent = 'Clique em "Enriquecer Agora" para buscar preço e imagem dos produtos'
   }
+}
+
+async function runSweep() {
+  const btn    = document.getElementById('sweep-btn')
+  const status = document.getElementById('sweep-status')
+  const log    = document.getElementById('sweep-log')
+  if (!btn || !status) return
+
+  // Roda em loop até não restar mais problemas (máx 10 passadas)
+  btn.disabled = true
+  log.classList.remove('hidden')
+  log.innerHTML = ''
+
+  let pass = 0
+  let totalFixed = 0
+
+  while (pass < 10) {
+    pass++
+    btn.textContent = `⏳ Passada ${pass}…`
+    status.textContent = `Passada ${pass} — consultando API Mercado Livre…`
+
+    try {
+      const res = await api('POST', '/admin/api/sweep', { batch: 20 })
+      if (!res?.ok && res?.error) throw new Error(res.error)
+
+      const f = res.total_fixed ?? 0
+      totalFixed += f
+
+      // Linha de resultado desta passada
+      const line = document.createElement('div')
+      line.className = 'text-xs font-mono text-purple-900'
+      const parts = []
+      if (res.corrupted_fixed  > 0) parts.push(`🔧 ${res.corrupted_fixed} ml_id corrompido`)
+      if (res.duplicates_merged > 0) parts.push(`🔀 ${res.duplicates_merged} duplicatas mergeadas`)
+      if (res.names_fixed      > 0) parts.push(`✅ ${res.names_fixed} nomes recuperados`)
+      if (res.names_deleted    > 0) parts.push(`🗑 ${res.names_deleted} removidos (sem MLB-ID)`)
+      if (res.prices_fixed     > 0) parts.push(`💰 ${res.prices_fixed} preços`)
+      if (res.images_fixed     > 0) parts.push(`🖼 ${res.images_fixed} imagens`)
+      line.textContent = `Passada ${pass}: ` + (parts.length ? parts.join(' · ') : 'nada a corrigir')
+      log.appendChild(line)
+
+      // Para quando não há mais nada a corrigir
+      if (f === 0) break
+
+    } catch (e) {
+      const line = document.createElement('div')
+      line.className = 'text-xs text-red-600'
+      line.textContent = `❌ Erro na passada ${pass}: ` + (e?.message || String(e))
+      log.appendChild(line)
+      break
+    }
+  }
+
+  // Resumo final
+  const summary = document.createElement('div')
+  summary.className = 'text-xs font-bold text-purple-900 border-t border-purple-200 pt-1 mt-1'
+  summary.textContent = totalFixed > 0
+    ? `✅ Varredura concluída — ${totalFixed} correções em ${pass} passada(s)`
+    : '✅ Banco já estava limpo — nenhum problema encontrado'
+  log.appendChild(summary)
+
+  status.textContent = summary.textContent
+  if (totalFixed > 0) toast(`🧹 ${totalFixed} problemas corrigidos!`, 'success')
+
+  btn.disabled = false
+  btn.textContent = '🧹 Varrer Agora'
 }
 
 async function runFixNames() {

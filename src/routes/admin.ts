@@ -3439,6 +3439,186 @@ admin.post('/api/fix-names', async (c) => {
   })
 })
 
+// ── POST /admin/api/sweep — Varredura completa do banco ─────────────────────
+// Corrige em sequência:
+//   1. ml_item_id corrompido (não numérico) → limpa para NULL
+//   2. Produtos duplicados (mesmo ml_item_id) → merge: mantém o mais antigo, remove os extras
+//   3. Nomes ruins (Produto MLB…, cfegdhabc…) → tenta API ML, fallback: deleta
+//   4. Preço/imagem faltando → busca via API ML /items/{id}
+admin.post('/api/sweep', async (c) => {
+  const { DB } = c.env
+  const body: any = await c.req.json().catch(() => ({}))
+  const BATCH = Math.min(parseInt(body.batch) || 20, 40)
+
+  const report: Record<string, any> = {
+    corrupted_fixed: 0,
+    duplicates_merged: 0,
+    names_fixed: 0,
+    names_deleted: 0,
+    prices_fixed: 0,
+    images_fixed: 0,
+    errors: [] as string[],
+  }
+
+  // ── PASSO 1: limpa ml_item_id corrompido (não é só dígitos) ─────────────
+  const { meta: m1 } = await DB.prepare(`
+    UPDATE products SET ml_item_id = NULL
+    WHERE ml_item_id IS NOT NULL
+      AND ml_item_id != ''
+      AND ml_item_id NOT GLOB '[0-9]*'
+  `).run()
+  report.corrupted_fixed = m1.changes ?? 0
+
+  // ── PASSO 2: merge de duplicatas por ml_item_id ──────────────────────────
+  // Busca grupos com mesmo ml_item_id (mais de 1 produto)
+  const { results: dupGroups } = await DB.prepare(`
+    SELECT ml_item_id,
+           MIN(id) as keep_id,
+           GROUP_CONCAT(id) as all_ids,
+           COUNT(*) as qtd
+    FROM products
+    WHERE ml_item_id IS NOT NULL AND ml_item_id != ''
+    GROUP BY ml_item_id
+    HAVING COUNT(*) > 1
+    LIMIT 50
+  `).all<{ ml_item_id: string; keep_id: number; all_ids: string; qtd: number }>()
+
+  for (const grp of dupGroups) {
+    const allIds = grp.all_ids.split(',').map(Number)
+    const keepId = grp.keep_id
+    const removeIds = allIds.filter(id => id !== keepId)
+
+    // Garante que o produto mantido tem nome e imagem do melhor dos duplicados
+    const { results: candidates } = await DB.prepare(`
+      SELECT id, name, image_url, best_price FROM products
+      WHERE id IN (${allIds.join(',')})
+      ORDER BY
+        CASE WHEN name NOT LIKE 'Produto%' AND name NOT LIKE 'cfeg%' THEN 0 ELSE 1 END,
+        CASE WHEN image_url IS NOT NULL THEN 0 ELSE 1 END,
+        best_price ASC NULLS LAST
+    `).all<{ id: number; name: string; image_url: string | null; best_price: number | null }>()
+
+    const best = candidates[0]
+    if (best && best.id !== keepId) {
+      await DB.prepare(`
+        UPDATE products SET
+          name      = CASE WHEN name LIKE 'Produto%' OR name LIKE 'cfeg%' THEN ? ELSE name END,
+          image_url = CASE WHEN image_url IS NULL THEN ? ELSE image_url END,
+          best_price = CASE WHEN best_price IS NULL AND ? IS NOT NULL THEN ? ELSE best_price END
+        WHERE id = ?
+      `).bind(best.name, best.image_url, best.best_price, best.best_price, keepId).run()
+    }
+
+    // Reaponta offers dos duplicados para o produto mantido
+    for (const rmId of removeIds) {
+      await DB.prepare(`UPDATE offers SET product_id = ? WHERE product_id = ?`).bind(keepId, rmId).run()
+      await DB.prepare(`DELETE FROM products WHERE id = ?`).bind(rmId).run()
+      report.duplicates_merged++
+    }
+  }
+
+  // ── PASSO 3: corrige nomes ruins via API ML ──────────────────────────────
+  const { results: badNames } = await DB.prepare(`
+    SELECT p.id, p.name, p.ml_item_id
+    FROM products p
+    WHERE p.name LIKE 'Produto MLB%'
+       OR p.name LIKE 'Produto Import%'
+       OR p.name LIKE 'cfegdhabc%'
+       OR p.name LIKE 'Cfegdhabc%'
+    LIMIT ?
+  `).bind(BATCH).all<{ id: number; name: string; ml_item_id: string | null }>()
+
+  const token = await getMlBearerToken(c.env).catch(() => null)
+
+  for (const p of badNames) {
+    const mlbId = p.ml_item_id ? `MLB${p.ml_item_id}` : null
+    if (!mlbId || !token) {
+      await DB.prepare(`DELETE FROM offers WHERE product_id = ?`).bind(p.id).run()
+      await DB.prepare(`DELETE FROM products WHERE id = ?`).bind(p.id).run()
+      report.names_deleted++
+      continue
+    }
+    try {
+      const r = await fetch(
+        `https://api.mercadolibre.com/items/${mlbId}?attributes=id,title,price,thumbnail,pictures`,
+        { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(6000) }
+      )
+      if (r.ok) {
+        const d = await r.json() as any
+        if (d.title && d.title.length > 4) {
+          const pics: any[] = d.pictures || []
+          const img = pics.find((x: any) => x.url?.includes('mlstatic'))?.url || d.thumbnail || null
+          await DB.prepare(`
+            UPDATE products SET name = ?, image_url = COALESCE(image_url, ?),
+              best_price = CASE WHEN best_price IS NULL AND ? > 0 THEN ? ELSE best_price END,
+              updated_at = CURRENT_TIMESTAMP WHERE id = ?
+          `).bind(d.title.trim().substring(0, 250), img, d.price ?? 0, d.price ?? 0, p.id).run()
+          await DB.prepare(`UPDATE offers SET title = ?, price = CASE WHEN price = 0 AND ? > 0 THEN ? ELSE price END,
+            image_url = CASE WHEN image_url IS NULL THEN ? ELSE image_url END WHERE product_id = ?
+          `).bind(d.title.trim().substring(0, 250), d.price ?? 0, d.price ?? 0, img, p.id).run()
+          report.names_fixed++
+        } else { throw new Error('sem título') }
+      } else { throw new Error(`HTTP ${r.status}`) }
+    } catch (e: any) {
+      await DB.prepare(`DELETE FROM offers WHERE product_id = ?`).bind(p.id).run()
+      await DB.prepare(`DELETE FROM products WHERE id = ?`).bind(p.id).run()
+      report.names_deleted++
+    }
+  }
+
+  // ── PASSO 4: completa preço e imagem faltando via API ML ────────────────
+  const { results: noPrice } = await DB.prepare(`
+    SELECT p.id as product_id, p.ml_item_id, p.name,
+           o.id as offer_id, o.price, o.image_url
+    FROM products p
+    JOIN offers o ON o.product_id = p.id
+    WHERE (o.price IS NULL OR o.price = 0 OR o.image_url IS NULL OR o.image_url = '')
+      AND p.ml_item_id IS NOT NULL AND p.ml_item_id != ''
+      AND p.ml_item_id GLOB '[0-9]*'
+    LIMIT ?
+  `).bind(BATCH).all<{ product_id: number; ml_item_id: string; name: string; offer_id: number; price: number; image_url: string | null }>()
+
+  for (const row of noPrice) {
+    if (!token) break
+    try {
+      const mlbId = `MLB${row.ml_item_id}`
+      const r = await fetch(
+        `https://api.mercadolibre.com/items/${mlbId}?attributes=id,title,price,thumbnail,pictures`,
+        { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(6000) }
+      )
+      if (!r.ok) continue
+      const d = await r.json() as any
+      const pics: any[] = d.pictures || []
+      const img = pics.find((x: any) => x.url?.includes('mlstatic'))?.url || d.thumbnail || null
+      const price = d.price && d.price > 0 ? d.price : null
+
+      let fixed = false
+      if (price && (!row.price || row.price === 0)) {
+        await DB.prepare(`UPDATE offers SET price = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?`).bind(price, row.offer_id).run()
+        await DB.prepare(`UPDATE products SET best_price = CASE WHEN best_price IS NULL OR ? < best_price THEN ? ELSE best_price END WHERE id = ?`).bind(price, price, row.product_id).run()
+        report.prices_fixed++
+        fixed = true
+      }
+      if (img && (!row.image_url || row.image_url === '')) {
+        await DB.prepare(`UPDATE offers SET image_url = ? WHERE id = ?`).bind(img, row.offer_id).run()
+        await DB.prepare(`UPDATE products SET image_url = COALESCE(image_url, ?) WHERE id = ?`).bind(img, row.product_id).run()
+        report.images_fixed++
+        fixed = true
+      }
+    } catch { /* ignora timeout */ }
+  }
+
+  const total_fixed = report.corrupted_fixed + report.duplicates_merged + report.names_fixed + report.prices_fixed + report.images_fixed
+  return c.json({
+    ok: true,
+    ...report,
+    total_fixed,
+    message: total_fixed === 0
+      ? 'Banco já está limpo — nenhum problema encontrado.'
+      : `✅ ${total_fixed} correções: ${report.corrupted_fixed} ml_item_id · ${report.duplicates_merged} duplicatas · ${report.names_fixed} nomes · ${report.prices_fixed} preços · ${report.images_fixed} imagens`,
+  })
+})
+
 // ── POST /admin/api/enrich-offers — Enriquece offers sem preço/imagem ──
 // Busca preço e imagem via resolve-url para offers importadas manualmente
 // sem preço (price=0) ou sem imagem (image_url=null)
