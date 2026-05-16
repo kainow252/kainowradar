@@ -2567,7 +2567,222 @@ admin.get('/api/resolve-url', async (c) => {
 
 // ── SHOPEE AFILIADOS — Token, Fetch Links, Status ────────────────
 
-// POST /admin/api/stores/shopee/token — Salva credenciais da Shopee Afiliados
+// GET /admin/shopee-script/:storeId — Página com script de console para a Shopee
+admin.get('/shopee-script/:storeId', async (c) => {
+  const storeId = parseInt(c.req.param('storeId')) || 0
+  const { DB } = c.env
+  const store = storeId ? await DB.prepare(`SELECT id, name FROM stores WHERE id = ?`).bind(storeId).first<any>().catch(() => null) : null
+  const storeName = store?.name || `Loja #${storeId}`
+
+  // Lê o script e injeta o storeId
+  const scriptRaw = `
+// ╔══════════════════════════════════════════════════════════════════╗
+// ║  KainowRadar — Shopee Afiliados Console Script                  ║
+// ║  Cole este script no Console do Chrome na página:               ║
+// ║  https://affiliate.shopee.com.br/offer/product_offer            ║
+// ╚══════════════════════════════════════════════════════════════════╝
+;(async function KainowShopeeSync() {
+  const CONFIG = {
+    storeId:   ${storeId},
+    kainowUrl: 'https://kainowradar.com.br',
+    maxPages:  0,
+    pageSize:  100,
+    delayMs:   600,
+    chunkSize: 50,
+  }
+  // [o resto do script é carregado dinamicamente]
+  const s = document.createElement('script')
+  s.src = 'https://kainowradar.com.br/static/shopee-console-script.js?store=${storeId}&t=' + Date.now()
+  document.head.appendChild(s)
+})()`.trim()
+
+  return c.html(`<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KainowRadar — Script Shopee: ${storeName}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css">
+  <style>
+    body { background:#0f172a; color:#f1f5f9; font-family:system-ui,sans-serif; }
+    .code-block { background:#020617; border:1px solid #1e293b; border-radius:12px; padding:16px; font-family:'Fira Code',Consolas,monospace; font-size:12px; color:#e2e8f0; white-space:pre-wrap; word-break:break-all; max-height:340px; overflow-y:auto; position:relative; }
+    .step { display:flex; gap:12px; align-items:flex-start; padding:12px 0; border-bottom:1px solid #1e293b; }
+    .step:last-child { border-bottom:none; }
+    .step-num { width:28px; height:28px; border-radius:50%; background:#EE4D2D; color:#fff; font-weight:700; font-size:13px; display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-top:2px; }
+    .badge { display:inline-block; background:#EE4D2D22; color:#EE4D2D; border:1px solid #EE4D2D44; border-radius:6px; padding:2px 8px; font-size:11px; font-weight:600; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-2xl mx-auto px-4 py-8">
+
+    <!-- Header -->
+    <div class="flex items-center gap-3 mb-8">
+      <div class="w-10 h-10 rounded-xl flex items-center justify-center" style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
+        <i class="fab fa-shopify text-white text-lg"></i>
+      </div>
+      <div>
+        <h1 class="text-lg font-bold text-white">Script de Coleta — Shopee Afiliados</h1>
+        <p class="text-sm text-slate-400">${storeName} · Store ID: ${storeId}</p>
+      </div>
+      <a href="/admin" class="ml-auto text-xs text-slate-500 hover:text-slate-300">← Voltar ao Admin</a>
+    </div>
+
+    <!-- Aviso importante -->
+    <div class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 mb-6 flex gap-3">
+      <i class="fas fa-bolt text-amber-400 mt-0.5 flex-shrink-0"></i>
+      <div class="text-sm text-amber-200">
+        <strong>Sem extensão, sem login extra.</strong> Este script roda diretamente no console do Chrome
+        enquanto você já está logado na Shopee Afiliados. Ele usa sua sessão ativa.
+      </div>
+    </div>
+
+    <!-- Passos -->
+    <div class="bg-slate-800/50 border border-slate-700 rounded-2xl p-5 mb-6">
+      <h2 class="text-sm font-bold text-white mb-3 flex items-center gap-2">
+        <i class="fas fa-list-ol text-orange-400"></i> Como usar
+      </h2>
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>
+          <div class="text-sm font-semibold text-white mb-0.5">Abra a Shopee Afiliados e faça login</div>
+          <a href="https://affiliate.shopee.com.br/offer/product_offer" target="_blank"
+             class="text-xs text-orange-400 hover:underline">
+            affiliate.shopee.com.br/offer/product_offer <i class="fas fa-external-link-alt text-[10px]"></i>
+          </a>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <div class="text-sm font-semibold text-white mb-0.5">Abra o Console do Chrome</div>
+          <div class="text-xs text-slate-400">Pressione <kbd class="bg-slate-700 px-1.5 py-0.5 rounded text-[11px] font-mono">F12</kbd> → aba <strong class="text-slate-300">Console</strong></div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <div class="text-sm font-semibold text-white mb-0.5">Copie o script abaixo e cole no console</div>
+          <div class="text-xs text-slate-400">Clique no botão <span class="badge">Copiar Script</span> e cole com <kbd class="bg-slate-700 px-1.5 py-0.5 rounded text-[11px] font-mono">Ctrl+V</kbd> → Enter</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div>
+          <div class="text-sm font-semibold text-white mb-0.5">Aguarde — ele coleta tudo sozinho!</div>
+          <div class="text-xs text-slate-400">Um overlay aparece na página com progresso em tempo real. Pode minimizar a janela.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Script -->
+    <div class="mb-4">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-sm font-bold text-white flex items-center gap-2">
+          <i class="fas fa-code text-orange-400"></i> Script — cole no Console
+        </span>
+        <button id="btn-copy" onclick="copyScript()"
+          class="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white transition-all hover:opacity-90"
+          style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
+          <i class="fas fa-copy"></i> Copiar Script
+        </button>
+      </div>
+      <div class="code-block" id="script-code">${buildScript(storeId)}</div>
+    </div>
+
+    <!-- Para parar -->
+    <div class="bg-slate-800/40 border border-slate-700 rounded-xl p-4 mb-6">
+      <div class="text-xs font-semibold text-slate-400 mb-2">⏹ Para parar a coleta antes de terminar:</div>
+      <div class="code-block" style="max-height:none;padding:10px 14px;font-size:12px">window.__krStop = true</div>
+    </div>
+
+    <!-- Info -->
+    <div class="grid grid-cols-3 gap-3 text-center">
+      <div class="bg-slate-800/40 border border-slate-700 rounded-xl p-3">
+        <div class="text-lg font-black text-orange-400">100</div>
+        <div class="text-[11px] text-slate-500">produtos/página</div>
+      </div>
+      <div class="bg-slate-800/40 border border-slate-700 rounded-xl p-3">
+        <div class="text-lg font-black text-green-400">1M+</div>
+        <div class="text-[11px] text-slate-500">links suportados</div>
+      </div>
+      <div class="bg-slate-800/40 border border-slate-700 rounded-xl p-3">
+        <div class="text-lg font-black text-blue-400">~2h</div>
+        <div class="text-[11px] text-slate-500">para 1 milhão</div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    function buildScript() {
+      return document.getElementById('script-code').textContent
+    }
+    function copyScript() {
+      const text = document.getElementById('script-code').textContent
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById('btn-copy')
+        btn.innerHTML = '<i class="fas fa-check"></i> Copiado!'
+        btn.style.background = '#16a34a'
+        setTimeout(() => {
+          btn.innerHTML = '<i class="fas fa-copy"></i> Copiar Script'
+          btn.style.background = ''
+        }, 2500)
+      }).catch(() => {
+        // Fallback para navegadores mais antigos
+        const ta = document.createElement('textarea')
+        ta.value = text
+        document.body.appendChild(ta)
+        ta.select()
+        document.execCommand('copy')
+        ta.remove()
+        alert('Script copiado!')
+      })
+    }
+  </script>
+</body>
+</html>`)
+})
+
+function buildScript(storeId: number): string {
+  return `;(async function KainowShopeeSync() {
+  const CONFIG = { storeId: ${storeId}, kainowUrl: 'https://kainowradar.com.br', maxPages: 0, pageSize: 100, delayMs: 600, chunkSize: 50 }
+  window.__krStop = false
+  console.log('[KR] Para parar: window.__krStop = true')
+  // Cria overlay
+  document.getElementById('__kr_overlay')?.remove()
+  const ov = document.createElement('div')
+  ov.id = '__kr_overlay'
+  ov.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:2147483647;background:#0f172a;color:#f1f5f9;padding:18px 20px;border-radius:16px;font-family:system-ui,sans-serif;font-size:13px;min-width:320px;box-shadow:0 8px 40px rgba(0,0,0,.6);border:1px solid #1e293b'
+  ov.innerHTML = '<div style=\\"display:flex;align-items:center;justify-content:space-between;margin-bottom:12px\\"><div style=\\"display:flex;align-items:center;gap:9px\\"><div style=\\"width:10px;height:10px;border-radius:50%;background:#EE4D2D;animation:__kr_p 1s infinite\\"></div><strong style=\\"color:#EE4D2D\\">KainowRadar</strong><span style=\\"color:#475569;font-size:11px\\">Shopee Sync</span></div><button onclick=\\"this.closest(\'#__kr_overlay\').style.opacity=\'.2\'\\" style=\\"background:none;border:none;color:#475569;cursor:pointer\\">−</button></div><div id=\\"__kr_s\\" style=\\"color:#94a3b8;font-size:12px;margin-bottom:8px\\">Iniciando...</div><div style=\\"background:#1e293b;border-radius:6px;height:5px;overflow:hidden;margin-bottom:10px\\"><div id=\\"__kr_b\\" style=\\"height:100%;background:linear-gradient(90deg,#EE4D2D,#FF7337);width:0%;transition:width .4s\\"></div></div><div style=\\"display:flex;gap:0;margin-bottom:8px\\"><div style=\\"flex:1;background:#1e293b;border-radius:8px 0 0 8px;padding:8px;text-align:center;border:1px solid #334155;border-right:none\\"><div id=\\"__kr_f\\" style=\\"font-size:16px;font-weight:800;color:#fb923c\\">0</div><div style=\\"font-size:10px;color:#475569\\">Encontrados</div></div><div style=\\"flex:1;background:#1e293b;padding:8px;text-align:center;border:1px solid #334155;border-right:none\\"><div id=\\"__kr_i\\" style=\\"font-size:16px;font-weight:800;color:#22c55e\\">0</div><div style=\\"font-size:10px;color:#475569\\">Importados</div></div><div style=\\"flex:1;background:#1e293b;border-radius:0 8px 8px 0;padding:8px;text-align:center;border:1px solid #334155\\"><div id=\\"__kr_p2\\" style=\\"font-size:16px;font-weight:800;color:#60a5fa\\">1</div><div style=\\"font-size:10px;color:#475569\\">Página</div></div></div><div id=\\"__kr_l\\" style=\\"background:#020617;border:1px solid #1e293b;border-radius:8px;padding:8px;font-size:11px;font-family:monospace;max-height:72px;overflow-y:auto;color:#475569\\"></div><style>@keyframes __kr_p{0%,100%{opacity:1}50%{opacity:.3}}</style>'
+  document.body.appendChild(ov)
+  const S=(m)=>{const e=document.getElementById('__kr_s');if(e)e.textContent=m;console.log('[KR]',m)}
+  const B=(p)=>{const e=document.getElementById('__kr_b');if(e)e.style.width=Math.min(100,p)+'%'}
+  const ST=(f,i,p)=>{const ef=document.getElementById('__kr_f'),ei=document.getElementById('__kr_i'),ep=document.getElementById('__kr_p2');if(ef)ef.textContent=f.toLocaleString('pt-BR');if(ei)ei.textContent=i.toLocaleString('pt-BR');if(ep)ep.textContent=p}
+  const L=(m,c='#475569')=>{const el=document.getElementById('__kr_l');if(!el)return;const d=document.createElement('div');d.style.color=c;d.textContent=new Date().toLocaleTimeString('pt-BR')+' '+m;el.appendChild(d);el.scrollTop=el.scrollHeight;while(el.children.length>80)el.removeChild(el.firstChild)}
+  const GET=async(pg,ps)=>{const r=await fetch(\`https://affiliate.shopee.com.br/api/v1/offer/product_offer?page_number=\${pg}&page_size=\${ps}&need_products_info=1&sort_type=2\`,{credentials:'include',headers:{'Accept':'application/json','x-requested-with':'XMLHttpRequest'}});if(r.status===401||r.status===403)throw new Error('Sessão expirada');if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}
+  const LINK=async(o)=>{const direct=o.short_link||o.affiliate_link||o.offer_link||o.sub_link;if(direct&&direct.startsWith('http'))return direct;const id=o.item_id||o.product_id||o.itemid,sh=o.shop_id||o.shopid||0;if(!id)return null;try{const r=await fetch('https://affiliate.shopee.com.br/api/v1/link/generate',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json','x-requested-with':'XMLHttpRequest'},body:JSON.stringify({item_list:[{item_id:id,shop_id:sh}]})});if(r.ok){const d=await r.json();const l=d?.data?.link_list?.[0]?.short_link||d?.data?.[0]?.short_link;if(l)return l}}catch(_){}try{const r=await fetch('https://affiliate.shopee.com.br/api/v1/offer/generate_affiliate_link',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({item_id:id,shop_id:sh})});if(r.ok){const d=await r.json();return d?.data?.short_link||null}}catch(_){}return null}
+  const BULK=async(offers)=>{const items=offers.filter(o=>o.item_id||o.product_id).map(o=>({item_id:o.item_id||o.product_id,shop_id:o.shop_id||0}));if(!items.length)return{links:[],items:[]};try{const r=await fetch('https://affiliate.shopee.com.br/api/v1/link/generate',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json','x-requested-with':'XMLHttpRequest'},body:JSON.stringify({item_list:items})});if(r.ok){const d=await r.json();const list=d?.data?.link_list||d?.data||[];if(Array.isArray(list)&&list.length){const links=list.map(l=>l?.short_link||l?.affiliate_link).filter(Boolean);if(links.length)return{links,items}}}}catch(_){}return{links:[],items:[]}}
+  const SEND=async(lines)=>{if(!lines.length)return{imported:0,updated:0};try{const r=await fetch(\`\${CONFIG.kainowUrl}/admin/api/stores/\${CONFIG.storeId}/import-links\`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({links:lines.join('\\\\n')})});if(!r.ok)return{imported:0,updated:0};const d=await r.json();return{imported:d.imported||0,updated:d.updated||0}}catch(_){return{imported:0,updated:0}}}
+  let tf=0,ts=0,pg=1,more=true
+  try{
+    const t=await GET(1,1);const tot=t?.data?.total_count||0;S('Total: '+(tot||'?')+' produtos. Iniciando...');L('Total: '+tot,'#60a5fa');await new Promise(r=>setTimeout(r,500))
+    while(more&&!window.__krStop){if(CONFIG.maxPages>0&&pg>CONFIG.maxPages)break;S('Buscando página '+pg+'...');B(tot>0?Math.min(90,(tf/tot)*90):pg*2);let data;try{data=await GET(pg,CONFIG.pageSize)}catch(e){S('❌ '+e.message);L('❌ '+e.message,'#f87171');break}
+    const offers=data?.data?.offers||data?.data?.list||data?.data?.items||(Array.isArray(data?.data)?data.data:[]);if(!offers||!offers.length){L('Fim dos produtos','#22c55e');more=false;break}
+    L('Pág '+pg+': '+offers.length+' produtos','#60a5fa');S('Pág '+pg+': gerando links...')
+    const{links:bl,items:bi}=await BULK(offers);const lines=[]
+    if(bl.length>0){L('Bulk: '+bl.length+' links','#22c55e');bl.forEach((l,i)=>{if(!l)return;const o=offers.find(x=>(x.item_id||x.product_id)===bi[i]?.item_id)||offers[i]||{};lines.push([l,o.name||o.product_name||'',o.price||o.sale_price||'',o.image||o.item_image||'',o.item_id||o.product_id||''].join('|'))})}
+    else{L('Gerando individualmente...','#f59e0b');for(let i=0;i<offers.length;i++){if(window.__krStop)break;const o=offers[i];const l=await LINK(o);if(l)lines.push([l,o.name||o.product_name||'',o.price||o.sale_price||'',o.image||o.item_image||'',o.item_id||o.product_id||''].join('|'));if(i%20===19){S('Pág '+pg+': '+(i+1)+'/'+offers.length);await new Promise(r=>setTimeout(r,100))}}}
+    tf+=lines.length;ST(tf,ts,pg)
+    if(lines.length>0){S('Enviando '+lines.length+' links...');for(let i=0;i<lines.length;i+=CONFIG.chunkSize){if(window.__krStop)break;const res=await SEND(lines.slice(i,i+CONFIG.chunkSize));ts+=res.imported+res.updated;ST(tf,ts,pg);B(tot>0?Math.min(95,(ts/tot)*95):50)}L('✅ Pág '+pg+': '+lines.length+' enviados','#22c55e')}
+    if(offers.length<CONFIG.pageSize||(tot>0&&tf>=tot))more=false;pg++;if(more&&!window.__krStop)await new Promise(r=>setTimeout(r,CONFIG.delayMs))}
+    B(100);const msg=(window.__krStop?'⏹ Parado! ':'🎉 Concluído! ')+ts.toLocaleString('pt-BR')+' importados de '+tf.toLocaleString('pt-BR');S(msg);L(msg,'#22c55e');console.log('[KR] COMPLETO',{tf,ts,pg:pg-1})
+  }catch(e){S('❌ Erro: '+e.message);L('❌ '+e.message,'#f87171');console.error('[KR]',e)}
+  return{ok:true,totalFound:tf,totalSaved:ts,pages:pg-1}
+})()`
+}
+
+
 admin.post('/api/stores/shopee/token', async (c) => {
   const { DB } = c.env
   const body = await c.req.json().catch(() => ({}))
@@ -8869,7 +9084,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260516f"><\/script>
+<script src="/static/admin-spa.js?v=20260516g"><\/script>
 </body>
 </html>`
 }

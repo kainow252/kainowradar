@@ -814,7 +814,10 @@ function _buildStoreCard(s) {
   const isShopee = (s.affiliate_network === 'shopee-api' || s.affiliate_network === 'lomadee' || s.affiliate_network === 'socialsoul')
     && (s.name || '').toLowerCase().includes('shopee')
   const shopeeConnectBtn = isShopee
-    ? '<button onclick="event.stopPropagation();openShopeeAfiliados(' + s.id + ')" class="w-full text-xs font-semibold py-2 px-3 rounded-xl border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100 transition-all mt-2">🛍️ Conectar Shopee Afiliados</button>'
+    ? '<div class="mt-2 flex gap-1.5">'
+      + '<button onclick="event.stopPropagation();openShopeeAfiliados(' + s.id + ')" class="flex-1 text-xs font-semibold py-2 px-2 rounded-xl border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100 transition-all">🛍️ Importar Links</button>'
+      + '<a href="/admin/shopee-script/' + s.id + '" target="_blank" onclick="event.stopPropagation()" class="flex-1 text-center text-xs font-semibold py-2 px-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 transition-all" title="Script de Console — roda direto na página da Shopee, sem extensão">💻 Script Console</a>'
+      + '</div>'
     : ''
 
   return (
