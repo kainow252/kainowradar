@@ -763,7 +763,7 @@ const NETWORK_COLORS = {
   'shopee-api':         { bg: '#fff3f0', border: '#EE4D2D', label: 'Shopee API'    },
   'shein-api':          { bg: '#f5f5f5', border: '#444444', label: 'Shein'         },
   'aliexpress-portals': { bg: '#fff0f0', border: '#FF4747', label: 'AliExpress'    },
-  'lomadee':            { bg: '#f0f0ff', border: '#6366F1', label: 'SocialSoul'    },
+  'lomadee':            { bg: '#f8fafc', border: '#94a3b8', label: 'Lomadee'      },
   'rakuten':            { bg: '#fff0f0', border: '#BF0000', label: 'Rakuten'       },
   'hotmart-api':        { bg: '#fff3f0', border: '#FF5722', label: 'Hotmart'       },
   'eduzz-api':          { bg: '#f5f3ff', border: '#7C3AED', label: 'Eduzz'         },
@@ -807,18 +807,9 @@ function _buildStoreCard(s) {
   const urlHint = s.checkout_pattern || s.deeplink_base || '—'
   const topBorderColor = prodCount > 0 ? '#8b5cf6' : (s.is_active ? '#f59e0b' : '#cbd5e1')
 
-  // Botao Importar Links aparece em TODOS os cards de loja
-  const importBtn = '<button onclick="event.stopPropagation();openStoreImport(' + s.id + ',\'' + (s.name||'').replace(/'/g,'&#39;') + '\')" class="w-full text-xs font-semibold py-2 px-3 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-all mt-2">&#128229; Importar Links</button>'
-
-  // Botão especial Shopee Afiliados — aparece no card da Shopee (qualquer network + nome Shopee)
-  const isShopee = (s.affiliate_network === 'shopee-api' || s.affiliate_network === 'lomadee' || s.affiliate_network === 'socialsoul')
-    && (s.name || '').toLowerCase().includes('shopee')
-  const shopeeConnectBtn = isShopee
-    ? '<div class="mt-2 flex gap-1.5">'
-      + '<button onclick="event.stopPropagation();openShopeeAfiliados(' + s.id + ')" class="flex-1 text-xs font-semibold py-2 px-2 rounded-xl border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100 transition-all">🛍️ Importar Links</button>'
-      + '<a href="/admin/shopee-script/' + s.id + '" target="_blank" onclick="event.stopPropagation()" class="flex-1 text-center text-xs font-semibold py-2 px-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 transition-all" title="Script de Console — roda direto na página da Shopee, sem extensão">💻 Script Console</a>'
-      + '</div>'
-    : ''
+  // Botões de importação — ocultos (upload manual via modal de edição)
+  const importBtn = ''
+  const shopeeConnectBtn = ''
 
   return (
     '<div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden hover:shadow-md transition-shadow" id="store-card-' + s.id + '" style="border-top:3px solid ' + topBorderColor + '">'
