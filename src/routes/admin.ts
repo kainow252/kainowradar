@@ -3799,7 +3799,50 @@ admin.post('/api/enrich-offers', async (c) => {
       }
 
       // ══════════════════════════════════════════════════════════════════
-      // PASSO 2b: se URL já é produto.mercadolivre.com.br, tenta buscar direto
+      // PASSO 2b: se URL é www.mercadolivre.com.br/slug/p/MLB... sem /social/
+      //   Tenta buscar direto com Mobile UA (serve SSR em algumas páginas)
+      // ══════════════════════════════════════════════════════════════════
+      if (!price && !image && url.includes('mercadolivre.com.br') && !url.includes('/social/')) {
+        try {
+          const directRes = await fetch(url, {
+            redirect: 'follow',
+            headers: {
+              'User-Agent':      mobileUA,
+              'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'pt-BR,pt;q=0.9',
+              'Cache-Control':   'no-cache',
+            },
+            signal: AbortSignal.timeout(12000),
+          })
+          if (directRes.ok) {
+            const html = await directRes.text()
+            if (!mlbId) {
+              const itemIdM = html.match(/"item_id"\s*:\s*"(MLB\d{6,12})"/i)
+              if (itemIdM) mlbId = itemIdM[1].toUpperCase()
+            }
+            if (!price) price = extractPrice(html)
+            if (!image) {
+              const imgM = html.match(/"type"\s*:\s*"og:image"\s*,\s*"content"\s*:\s*"([^"]+)"/)
+                        || html.match(/"content"\s*:\s*"([^"]+)"\s*,\s*"type"\s*:\s*"og:image"/)
+              if (imgM) image = fixImgUrl(imgM[1])
+              if (!image) image = extractImage(html)
+            }
+            if (!price) {
+              const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+                           || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+              if (ogTitle) {
+                if (!price) price = extractPriceFromTitle(ogTitle[1])
+                if (hasInvalidName && ogTitle[1] && ogTitle[1].length > 5) {
+                  newName = ogTitle[1].replace(/\s*-\s*R\$\s*[\d.,]+\s*$/i, '').trim()
+                }
+              }
+            }
+          }
+        } catch { /* ignora timeout */ }
+      }
+
+      // ══════════════════════════════════════════════════════════════════
+      // PASSO 2c: se URL já é produto.mercadolivre.com.br, tenta buscar direto
       //   (affiliate_url não continha /social/, mas tem MLB ID na própria URL)
       // ══════════════════════════════════════════════════════════════════
       if (!price && !image && url.includes('produto.mercadolivre.com.br') && mlbId) {
