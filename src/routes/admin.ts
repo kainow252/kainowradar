@@ -7446,13 +7446,31 @@ admin.post('/api/feed/process', async (c) => {
       }
 
       // ── 6. Upsert da oferta ───────────────────────────
-      const existingOffer = await db.prepare(`
-        SELECT id FROM offers WHERE product_id = ? AND store_id = ? AND external_id IS NOT DISTINCT FROM ?
-        LIMIT 1
-      `).bind(productId, link.store_id, link.external_id || null).first<{ id: number }>()
+      // Gera external_id automático se não veio do feed:
+      // Prioridade: external_id explícito > MLB do affiliate_url > hash(affiliate_url) > hash(product_url+store)
+      let extId: string = link.external_id || ''
+      if (!extId) {
+        const urlForId = link.affiliate_url || link.product_url || ''
+        // Tenta extrair MLB-ID diretamente da URL do produto (MLBU123, /p/MLB123, etc)
+        const mlbMatch = urlForId.match(/\b(MLB[U]?)[-]?(\d{6,12})\b/i)
+        if (mlbMatch) {
+          extId = `MLB-${mlbMatch[2]}`
+        } else {
+          // Fallback: hash simples da URL para garantir unicidade
+          let h = 0
+          for (let i = 0; i < urlForId.length; i++) { h = (Math.imul(31, h) + urlForId.charCodeAt(i)) | 0 }
+          extId = `feed-${link.store_id}-${Math.abs(h).toString(36)}`
+        }
+      }
 
-      const discount = link.original_price && link.original_price > link.price
-        ? Math.round(((link.original_price - link.price) / link.original_price) * 1000) / 10
+      // SQLite usa IS em vez de IS NOT DISTINCT FROM
+      const existingOffer = await db.prepare(`
+        SELECT id FROM offers WHERE product_id = ? AND store_id = ? AND external_id = ?
+        LIMIT 1
+      `).bind(productId, link.store_id, extId).first<{ id: number }>()
+
+      const discount = link.original_price && link.original_price > (link.price || 0)
+        ? Math.round(((link.original_price - (link.price || 0)) / link.original_price) * 1000) / 10
         : 0
 
       let offerId: number
@@ -7464,7 +7482,7 @@ admin.post('/api/feed/process', async (c) => {
             image_url = ?, last_updated = CURRENT_TIMESTAMP,
             cache_expires_at = datetime('now', '+2 hours')
           WHERE id = ?
-        `).bind(link.price, link.original_price || null, discount, link.image_url || null, existingOffer.id).run()
+        `).bind(link.price || 0, link.original_price || null, discount, link.image_url || null, existingOffer.id).run()
         offerId = existingOffer.id
         if (status === 'matched') {
           getStats(link.batch_id).matched--
@@ -7475,13 +7493,14 @@ admin.post('/api/feed/process', async (c) => {
         const offerRes = await db.prepare(`
           INSERT INTO offers
             (product_id, store_id, external_id, title, price, original_price,
-             discount_percent, free_shipping, in_stock, product_url, image_url,
-             cache_expires_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, datetime('now', '+2 hours'))
+             discount_percent, free_shipping, in_stock, product_url, affiliate_url,
+             image_url, source, cache_expires_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?, ?, datetime('now', '+2 hours'))
         `).bind(
-          productId, link.store_id, link.external_id || null, link.name,
-          link.price, link.original_price || null, discount,
-          link.product_url || null, link.image_url || null
+          productId, link.store_id, extId, link.name || 'Produto Importado',
+          link.price || 0, link.original_price || null, discount,
+          link.product_url || null, link.affiliate_url || null,
+          link.image_url || null, link.network || 'manual'
         ).run()
         offerId = offerRes.meta.last_row_id as number
       }
@@ -7560,6 +7579,43 @@ admin.post('/api/feed/process', async (c) => {
         })()
       : null,
     batches: batchStats
+  })
+})
+
+// ── POST /api/feed/retry-errors ──────────────────────────────
+// Reprocessa raw_links com status='error' — reseta para 'pending' e processa
+// Útil para retentar links que falharam por bug (ex: external_id NOT NULL)
+admin.post('/api/feed/retry-errors', async (c) => {
+  const db = c.env.DB
+  const body: any = await c.req.json().catch(() => ({}))
+  const batchId: string | null = body.batch_id || null
+  const limit = Math.min(parseInt(body.limit) || 200, 500)
+
+  // Conta erros antes de resetar
+  const countQ = batchId
+    ? `SELECT COUNT(*) as n FROM raw_links WHERE batch_id = ? AND status = 'error'`
+    : `SELECT COUNT(*) as n FROM raw_links WHERE status = 'error'`
+  const countR = batchId
+    ? await db.prepare(countQ).bind(batchId).first<{ n: number }>()
+    : await db.prepare(countQ).first<{ n: number }>()
+  const total_errors = countR?.n ?? 0
+
+  if (total_errors === 0) return c.json({ ok: true, reset: 0, message: 'Nenhum erro para reprocessar' })
+
+  // Reseta para 'pending' (limpa error_msg)
+  const resetQ = batchId
+    ? `UPDATE raw_links SET status = 'pending', error_msg = NULL, processed_at = NULL WHERE batch_id = ? AND status = 'error' LIMIT ?`
+    : `UPDATE raw_links SET status = 'pending', error_msg = NULL, processed_at = NULL WHERE status = 'error' LIMIT ?`
+  const resetR = batchId
+    ? await db.prepare(resetQ).bind(batchId, limit).run()
+    : await db.prepare(resetQ).bind(limit).run()
+  const reset = resetR.meta.changes ?? 0
+
+  return c.json({
+    ok: true,
+    reset,
+    total_errors,
+    message: `${reset} links resetados para 'pending'. Acione POST /api/feed/process para processar.`,
   })
 })
 
