@@ -1661,22 +1661,22 @@ export default {
 
   async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
     const { DB, CACHE } = env
-    const appId  = (env as any).ML_APP_ID || ''
-    const secret = (env as any).ML_SECRET  || ''
+    const mlAppId  = (env as any).ML_APP_ID || ''
+    const mlSecret = (env as any).ML_SECRET  || ''
 
-    console.log(`[CRON] Iniciando scraper ML — ${new Date().toISOString()} — cron: ${event.cron}`)
+    console.log(`[CRON] Disparado — ${new Date().toISOString()} — cron: ${event.cron}`)
 
+    // ── 1. Scraper MercadoLivre ──────────────────────────────
     try {
       const { runMLPriceScraper } = await import('./lib/mlScraper')
-      const stats = await runMLPriceScraper(DB, CACHE, appId, secret)
+      const stats = await runMLPriceScraper(DB, CACHE, mlAppId, mlSecret)
 
       console.log(
-        `[CRON] Scraper concluído — total: ${stats.total} | ` +
+        `[CRON/ML] Concluído — total: ${stats.total} | ` +
         `atualizados: ${stats.updated} | pulados: ${stats.skipped} | ` +
         `erros: ${stats.errors} | ${stats.duration_ms}ms`
       )
 
-      // Salva log do último cron no KV
       await CACHE.put('cron_last_run', JSON.stringify({
         ran_at: new Date().toISOString(),
         cron:   event.cron,
@@ -1684,11 +1684,302 @@ export default {
       }), { expirationTtl: 86400 * 7 }).catch(() => {})
 
     } catch (e: any) {
-      console.error('[CRON] Erro no scraper ML:', e?.message || e)
+      console.error('[CRON/ML] Erro:', e?.message || e)
       await CACHE.put('cron_last_error', JSON.stringify({
         error_at: new Date().toISOString(),
         message:  e?.message || String(e),
       }), { expirationTtl: 86400 }).catch(() => {})
     }
+
+    // ── 2. Refresh Shopee — API GraphQL + fallback HTML ───────
+    // A Shopee Afiliados tem uma API GraphQL pública:
+    //   URL: https://open-api.affiliate.shopee.com.br/graphql
+    //   Auth: SHA256(AppId + Timestamp + Payload + Secret)
+    //   Endpoint productOfferV2(itemId: X) → priceMin, imageUrl, offerLink
+    // Credenciais ficam em api_configs WHERE id = 'shopee-afiliados'
+    // Se não houver credenciais, faz fallback para facebookexternalhit + JSON-LD
+    try {
+      await runShopeeRefreshCron(DB, CACHE)
+    } catch (e: any) {
+      console.error('[CRON/SHOPEE] Erro:', e?.message || e)
+      await CACHE.put('cron_shopee_error', JSON.stringify({
+        error_at: new Date().toISOString(),
+        message:  e?.message || String(e),
+      }), { expirationTtl: 86400 }).catch(() => {})
+    }
   },
+}
+
+// ─────────────────────────────────────────────────────────────
+// runShopeeRefreshCron — atualiza preço/imagem/link de todas as
+// offers Shopee com shopee_product_url preenchida.
+//
+// Estratégia (em ordem de prioridade):
+//   1. API GraphQL Shopee Afiliados (productOfferV2 por itemId)
+//      → retorna priceMin/Max real, imageUrl CDN, offerLink curto
+//   2. Fallback: facebookexternalhit UA + JSON-LD no HTML
+//      → retorna price via <script ld+json>, og:image, og:title
+// ─────────────────────────────────────────────────────────────
+async function runShopeeRefreshCron(DB: D1Database, CACHE: KVNamespace): Promise<void> {
+  const t0 = Date.now()
+
+  // Busca até 50 offers Shopee ativas com shopee_product_url (as mais antigas primeiro)
+  const { results: offers } = await DB.prepare(`
+    SELECT o.id, o.external_id, o.shopee_product_url, o.price, o.product_id, o.affiliate_url
+    FROM   offers o
+    WHERE  o.store_id = 4
+      AND  o.is_active = 1
+      AND  o.shopee_product_url IS NOT NULL
+    ORDER  BY o.last_updated ASC
+    LIMIT  50
+  `).all<any>()
+
+  if (!offers || offers.length === 0) {
+    console.log('[CRON/SHOPEE] Nenhuma offer Shopee com shopee_product_url para atualizar.')
+    return
+  }
+
+  // Tenta carregar credenciais da API GraphQL Shopee Afiliados
+  const cfg = await DB.prepare(
+    `SELECT api_key, extra_json FROM api_configs WHERE id = 'shopee-afiliados'`
+  ).first<any>().catch(() => null)
+
+  const shopeeAppId  = cfg?.api_key || ''
+  const shopeeSecret = cfg ? (JSON.parse(cfg.extra_json || '{}').secret || '') : ''
+  const useGraphQL   = !!(shopeeAppId && shopeeSecret)
+
+  console.log(`[CRON/SHOPEE] ${offers.length} offers | GraphQL: ${useGraphQL ? 'SIM (API)' : 'NÃO (fallback HTML)'}`)
+
+  let updated = 0, failed = 0, nodata = 0
+
+  // Processa em batches de 5 para não sobrecarregar
+  const BATCH = 5
+  for (let i = 0; i < offers.length; i += BATCH) {
+    const batch = offers.slice(i, i + BATCH)
+
+    await Promise.all(batch.map(async (offer: any) => {
+      try {
+        let price: number | null = null
+        let image: string | null = null
+        let title: string | null = null
+        let newAffiliateUrl: string | null = null
+
+        // ── Tentativa 1: API GraphQL Shopee Afiliados ──────────
+        if (useGraphQL && offer.external_id) {
+          const gqlResult = await fetchShopeeProductViaGraphQL(
+            shopeeAppId, shopeeSecret, offer.external_id
+          )
+          price          = gqlResult.price
+          image          = gqlResult.image
+          title          = gqlResult.title
+          newAffiliateUrl = gqlResult.offerLink  // link curto afiliado gerado pela API
+        }
+
+        // ── Tentativa 2: Fallback HTML (facebookexternalhit + JSON-LD) ──
+        if ((price === null || image === null) && offer.shopee_product_url) {
+          const htmlResult = await fetchShopeeProductViaHTML(offer.shopee_product_url)
+          if (price  === null) price  = htmlResult.price
+          if (image  === null) image  = htmlResult.image
+          if (title  === null) title  = htmlResult.title
+        }
+
+        if (price === null && image === null) {
+          nodata++
+          console.warn(`[CRON/SHOPEE] Sem dados — oid=${offer.id} url=${offer.shopee_product_url}`)
+          return
+        }
+
+        // Atualiza offer (preço + imagem + título + link afiliado se renovado)
+        await DB.prepare(`
+          UPDATE offers
+          SET price        = COALESCE(?, price),
+              image_url    = COALESCE(?, image_url),
+              title        = COALESCE(?, title),
+              affiliate_url = COALESCE(?, affiliate_url),
+              last_updated = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(price, image, title, newAffiliateUrl, offer.id).run()
+
+        // Atualiza produto (best_price e imagem se melhorou)
+        if (price !== null) {
+          await DB.prepare(`
+            UPDATE products
+            SET best_price = COALESCE(?, best_price),
+                image_url  = COALESCE(?, image_url),
+                name       = COALESCE(?, name)
+            WHERE id = ? AND (best_price IS NULL OR ? <= best_price)
+          `).bind(price, image, title, offer.product_id, price).run()
+        }
+
+        updated++
+        console.log(`[CRON/SHOPEE] OK oid=${offer.id} preço=R$${price} img=${!!image}`)
+
+      } catch (e: any) {
+        failed++
+        console.error(`[CRON/SHOPEE] Erro oid=${offer.id}: ${e?.message}`)
+      }
+    }))
+
+    // Pausa entre batches para não sobrecarregar
+    if (i + BATCH < offers.length) {
+      await new Promise(res => setTimeout(res, 600))
+    }
+  }
+
+  const duration = Date.now() - t0
+  const logData = {
+    ran_at:   new Date().toISOString(),
+    total:    offers.length,
+    updated,
+    failed,
+    nodata,
+    graphql:  useGraphQL,
+    duration_ms: duration,
+  }
+
+  console.log(`[CRON/SHOPEE] Finalizado — ${JSON.stringify(logData)}`)
+  await CACHE.put('cron_shopee_last_run', JSON.stringify(logData), { expirationTtl: 86400 * 7 }).catch(() => {})
+}
+
+// ─────────────────────────────────────────────────────────────
+// fetchShopeeProductViaGraphQL — busca dados reais de um produto
+// via API GraphQL Shopee Afiliados (open-api.affiliate.shopee.com.br)
+//
+// Documentação (não oficial): https://www.affiliateshopee.com.br/documentacao
+//   Query: productOfferV2(itemId: Int) → priceMin, priceMax, imageUrl, offerLink, productName
+//   Auth: Authorization: SHA256 Credential={AppId}, Timestamp={Timestamp}, Signature={Sig}
+//   Sig = SHA256(AppId + Timestamp + Payload + Secret)  — tudo concatenado sem separador
+// ─────────────────────────────────────────────────────────────
+async function fetchShopeeProductViaGraphQL(
+  appId: string,
+  secret: string,
+  itemId: string
+): Promise<{ price: number | null; image: string | null; title: string | null; offerLink: string | null }> {
+  try {
+    const timestamp = Math.floor(Date.now() / 1000)
+    const query = `{ productOfferV2(itemId: ${itemId}, page: 1, limit: 1) { nodes { itemId productName imageUrl priceMin priceMax offerLink ratingStar } } }`
+    const payload = JSON.stringify({ query })
+
+    // Calcula assinatura SHA256(appId + timestamp + payload + secret)
+    const sigInput = appId + String(timestamp) + payload + secret
+    const sigBuf   = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sigInput))
+    const signature = Array.from(new Uint8Array(sigBuf)).map(b => b.toString(16).padStart(2, '0')).join('')
+
+    const res = await fetch('https://open-api.affiliate.shopee.com.br/graphql', {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': `SHA256 Credential=${appId}, Timestamp=${timestamp}, Signature=${signature}`,
+      },
+      body: payload,
+    })
+
+    if (!res.ok) {
+      console.warn(`[SHOPEE/GraphQL] HTTP ${res.status} para itemId=${itemId}`)
+      return { price: null, image: null, title: null, offerLink: null }
+    }
+
+    const json: any = await res.json()
+    const nodes = json?.data?.productOfferV2?.nodes
+    if (!Array.isArray(nodes) || nodes.length === 0) {
+      console.warn(`[SHOPEE/GraphQL] Sem nodes para itemId=${itemId} — errors: ${JSON.stringify(json?.errors)}`)
+      return { price: null, image: null, title: null, offerLink: null }
+    }
+
+    const node = nodes[0]
+    // priceMin e priceMax vêm como strings "XX.XX" ou números
+    const rawPrice = node.priceMin ?? node.priceMax ?? null
+    let price: number | null = null
+    if (rawPrice !== null && rawPrice !== undefined) {
+      const v = parseFloat(String(rawPrice).replace(',', '.'))
+      if (!isNaN(v) && v > 0) price = v
+    }
+
+    return {
+      price,
+      image:     node.imageUrl    || null,
+      title:     node.productName || null,
+      offerLink: node.offerLink   || null,   // link curto afiliado ex: https://shope.ee/xxx
+    }
+  } catch (e: any) {
+    console.error(`[SHOPEE/GraphQL] Exceção itemId=${itemId}: ${e?.message}`)
+    return { price: null, image: null, title: null, offerLink: null }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// fetchShopeeProductViaHTML — fallback quando sem credenciais API.
+// Busca dados via facebookexternalhit UA → HTML com og: tags e JSON-LD.
+// JSON-LD é a fonte mais confiável de preço — o HTML com xTgkVC/KTJj8T
+// contém o valor do FRETE, não do produto.
+// ─────────────────────────────────────────────────────────────
+async function fetchShopeeProductViaHTML(
+  productUrl: string
+): Promise<{ price: number | null; image: string | null; title: string | null }> {
+  try {
+    const r = await fetch(productUrl, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent':      'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+        'Accept':          'text/html,application/xhtml+xml,*/*',
+        'Accept-Language': 'pt-BR,pt;q=0.9',
+      },
+    })
+    if (!r.ok) return { price: null, image: null, title: null }
+    const html = await r.text()
+
+    let price: number | null = null
+    let image: string | null = null
+    let title: string | null = null
+
+    // ── JSON-LD (fonte mais confiável de preço) ────────────────
+    const jldRe = /<script[^>]+type=["']application\/ld\+json["'][^>]*>(.*?)<\/script>/gis
+    for (const jm of [...html.matchAll(jldRe)]) {
+      try {
+        const jd = JSON.parse(jm[1])
+        const off = Array.isArray(jd.offers) ? jd.offers[0] : jd.offers
+        if (off?.price) {
+          const v = parseFloat(String(off.price).replace(',', '.'))
+          if (v > 0 && v < 1_000_000) price = v
+        }
+        if (!title && jd.name) title = jd.name
+        if (!image && jd.image) image = Array.isArray(jd.image) ? jd.image[0] : jd.image
+      } catch { /* continua */ }
+    }
+
+    // ── og:title ───────────────────────────────────────────────
+    if (!title) {
+      const m = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+             ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+      if (m) title = m[1].replace(/\s*\|\s*Shopee Brasil\s*$/i, '').trim()
+    }
+
+    // ── og:image ───────────────────────────────────────────────
+    if (!image) {
+      const m = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+             ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
+      if (m) image = m[1].trim()
+    }
+
+    // ── Fallback preço: R$ no HTML sem bloco de frete ──────────
+    // ATENÇÃO: xTgkVC / KTJj8T = bloco de FRETE — deve ser ignorado
+    if (!price) {
+      const htmlNoFrete = html
+        .replace(/Frete[^<]*<[^>]*>[^<]*R\$[^<]*</gi, '')
+        .replace(/KTJj8T[^<]*<[^<]*<[^<]*R\$[^<]*/g, '')
+      const m = htmlNoFrete.match(/R\$\s*([\d]+(?:[.,]\d{2})?)(?:\s|<|&|"|'|$)/i)
+      if (m) {
+        const raw  = m[1]
+        const norm = /^\d{1,3}\.\d{3},\d{2}$/.test(raw)
+          ? raw.replace('.', '').replace(',', '.')
+          : raw.replace(',', '.')
+        const v = parseFloat(norm)
+        if (v > 0 && v < 1_000_000) price = v
+      }
+    }
+
+    return { price, image, title }
+  } catch {
+    return { price: null, image: null, title: null }
+  }
 }

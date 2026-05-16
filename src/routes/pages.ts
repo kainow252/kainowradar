@@ -143,7 +143,9 @@ pages.get('/produto/:slug', async (c) => {
       const { results } = await DB
         .prepare(`SELECT o.*, s.name as store_name, s.slug as store_slug, s.logo_url as store_logo
                   FROM offers o JOIN stores s ON s.id = o.store_id
-                  WHERE o.product_id = ? AND o.is_active = 1 ORDER BY o.price ASC`)
+                  WHERE o.product_id = ? AND o.is_active = 1 ORDER BY
+                    CASE WHEN o.price > 0.01 THEN 0 ELSE 1 END ASC,
+                    o.price ASC`)
         .bind(product.id).all<Offer>()
       offers = results
       await cache.setProduct(slug, { product, offers })
@@ -284,7 +286,7 @@ pages.get('/produto/:slug', async (c) => {
   // ── DADOS CALCULADOS ────────────────────────────────────
   const specs    = product.specs ? (() => { try { return JSON.parse(product.specs!) } catch { return {} } })() : {}
   const specKeys = Object.keys(specs)
-  const minPrice = offers.length ? Math.min(...offers.map(o => o.price)) : product.best_price || 0
+  const minPrice = offers.length ? Math.min(...offers.filter(o => o.price > 0.01).map(o => o.price).concat([0])) : product.best_price || 0
   const maxPrice = offers.length ? Math.max(...offers.map(o => o.price)) : minPrice
   const savings  = maxPrice - minPrice
   const histMin  = priceHistory.length ? Math.min(...priceHistory.map((h:any) => h.price)) : 0
@@ -292,8 +294,12 @@ pages.get('/produto/:slug', async (c) => {
   const isAtHistMin = histMin > 0 && minPrice <= histMin * 1.02
 
   // ── SEO — meta tags ricas (Feature 4) ───────────────────
-  const seoTitle = `${product.name} — Menor Preço ${formatCurrency(minPrice)} | KainowRadar`
-  const seoDesc  = `Compare ${product.name} em ${offers.length} lojas. Menor preço: ${formatCurrency(minPrice)}${ offers[0]?.store_name ? ` na ${offers[0].store_name}` : '' }. ${ product.brand ? `Marca: ${product.brand}.` : '' } Economize até ${formatCurrency(savings)}.`
+  const seoTitle = minPrice > 0.01
+    ? `${product.name} — Menor Preço ${formatCurrency(minPrice)} | KainowRadar`
+    : `${product.name} | KainowRadar`
+  const seoDesc  = minPrice > 0.01
+    ? `Compare ${product.name} em ${offers.length} lojas. Menor preço: ${formatCurrency(minPrice)}${ offers[0]?.store_name ? ` na ${offers[0].store_name}` : '' }. ${ product.brand ? `Marca: ${product.brand}.` : '' } Economize até ${formatCurrency(savings)}.`
+    : `Compare preços de ${product.name} em ${offers.length} lojas. ${ product.brand ? `Marca: ${product.brand}.` : '' } Encontre a melhor oferta no KainowRadar.`
   const seoImg   = product.image_url || ''
   const seoUrl   = `https://shopping-compare.pages.dev/produto/${slug}`
 
@@ -306,7 +312,7 @@ pages.get('/produto/:slug', async (c) => {
     description: product.description || seoDesc,
     brand: product.brand ? { '@type': 'Brand', name: product.brand } : undefined,
     sku: product.ean,
-    offers: offers.map(o => ({
+    offers: offers.filter(o => o.price > 0.01).map(o => ({
       '@type': 'Offer',
       url: `${seoUrl}/go/${o.id}`,
       priceCurrency: 'BRL',
@@ -324,7 +330,7 @@ pages.get('/produto/:slug', async (c) => {
   // ── OFERTAS HTML ─────────────────────────────────────────
   const offersHTML = offers.map((o, i) => {
     const trackUrl = `/go/${slug}/${o.id}`
-    const isBest   = i === 0
+    const isBest   = i === 0 && o.price > 0.01
     const discount = o.discount_percent > 0 ? Math.round(o.discount_percent) : 0
 
     // Logo da loja — tamanho generoso para ser reconhecível
@@ -360,7 +366,9 @@ pages.get('/produto/:slug', async (c) => {
           ${ o.original_price && o.original_price > o.price
             ? `<div class="text-xs text-gray-400 line-through leading-none mb-0.5">${formatCurrency(o.original_price)}</div>`
             : '' }
-          <div class="text-3xl font-black text-gray-900 leading-none">${formatCurrency(o.price)}</div>
+          ${ (o.price <= 0.01)
+            ? `<div class="text-base font-semibold text-gray-400 leading-none">Ver preço na loja</div>`
+            : `<div class="text-3xl font-black text-gray-900 leading-none">${formatCurrency(o.price)}</div>` }
           <div class="flex flex-wrap items-center gap-2 mt-1.5">
             ${ o.free_shipping
               ? '<span class="inline-flex items-center gap-1 text-xs font-semibold text-green-600"><svg class=\'w-3 h-3\' fill=\'currentColor\' viewBox=\'0 0 20 20\'><path fill-rule=\'evenodd\' d=\'M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z\' clip-rule=\'evenodd\'/></svg>Frete grátis</span>'
@@ -1039,7 +1047,7 @@ async function hashIP(ip: string): Promise<string> {
 }
 
 function renderProductCard(p: Product): string {
-  const price = p.best_price ? formatCurrency(p.best_price) : 'Ver preço'
+  const price = (p.best_price && p.best_price > 0.01) ? formatCurrency(p.best_price) : 'Ver preço'
   const storeName = (p as any).best_store_name || ''
   return `
     <a href="/produto/${p.slug}" class="product-card group">

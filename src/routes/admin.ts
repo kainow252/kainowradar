@@ -2106,25 +2106,94 @@ admin.post('/api/stores/ml/import-affiliate-links', async (c) => {
               ?? html2.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:url["']/i)
       if (urlM) canonicalUrl = urlM[1].trim()
 
-      // Preço: padrão R$ X,XX ou R$ X.XXX,XX no HTML
-      const priceM = html2.match(/R\$\s*([\d]+(?:[.,]\d{2})?)(?:\s|<|&|"|'|$)/i)
-      if (priceM) {
-        // normaliza: "1.299,90" → 1299.90 | "29,90" → 29.90
-        const raw = priceM[1]
-        // distingue separador decimal vs milhar
-        let norm: string
-        if (/^\d{1,3}\.\d{3},\d{2}$/.test(raw)) {
-          // 1.299,90 → milhar com ponto, decimal com vírgula (BR)
-          norm = raw.replace('.', '').replace(',', '.')
-        } else {
-          norm = raw.replace(',', '.')
+      // ── Preço: JSON-LD primeiro (mais confiável), fallback R$ no HTML ──
+      // JSON-LD <script type="application/ld+json"> contém o preço real do produto
+      // O padrão xTgkVC/KTJj8T no HTML é o valor do FRETE GRÁTIS, não o preço!
+      const jsonldMatches = [...html2.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>(.*?)<\/script>/gis)]
+      for (const jm of jsonldMatches) {
+        try {
+          const jd = JSON.parse(jm[1])
+          const off = Array.isArray(jd.offers) ? jd.offers[0] : jd.offers
+          if (off?.price) {
+            const v = parseFloat(String(off.price).replace(',','.'))
+            if (v > 0 && v < 1_000_000) { price = v; break }
+          }
+        } catch { /* continua */ }
+      }
+      // Fallback: R$ XX,XX no HTML — mas ignora contexto de frete
+      if (!price) {
+        // Remove blocos de frete antes de buscar preço
+        const html2noFrete = html2.replace(/Frete[^<]*<[^>]*>[^<]*R\$[^<]*</gi, '')
+                                   .replace(/KTJj8T[^<]*<[^<]*<[^<]*R\$[^<]*/g, '')
+        const priceM = html2noFrete.match(/R\$\s*([\d]+(?:[.,]\d{2})?)(?:\s|<|&|"|'|$)/i)
+        if (priceM) {
+          const raw = priceM[1]
+          const norm = /^\d{1,3}\.\d{3},\d{2}$/.test(raw)
+            ? raw.replace('.', '').replace(',', '.')
+            : raw.replace(',', '.')
+          const v = parseFloat(norm)
+          if (v > 0 && v < 1_000_000) price = v
         }
-        const v = parseFloat(norm)
-        if (v > 0 && v < 1_000_000) price = v
       }
     } catch { /* ignora */ }
 
     return { itemId, shopId, title, price, image, canonicalUrl }
+  }
+
+  // ── refreshShopeePrice: atualiza preço/imagem de uma offer Shopee via URL canônica ──
+  async function refreshShopeePrice(offer: {
+    id: number; external_id: string; shopee_product_url: string | null
+  }): Promise<{ price: number | null; image: string | null; title: string | null }> {
+    const shopid = offer.external_id ? null : null  // não usado diretamente
+    const productUrl = offer.shopee_product_url
+    if (!productUrl) return { price: null, image: null, title: null }
+
+    let price: number | null = null
+    let image: string | null = null
+    let title: string | null = null
+
+    try {
+      const r = await fetch(productUrl, {
+        redirect: 'follow',
+        headers: {
+          'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+          'Accept': 'text/html,application/xhtml+xml,*/*',
+          'Accept-Language': 'pt-BR,pt;q=0.9',
+        },
+      })
+      const html = await r.text()
+
+      // JSON-LD — fonte mais confiável de preço
+      const jsonldMatches = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>(.*?)<\/script>/gis)]
+      for (const jm of jsonldMatches) {
+        try {
+          const jd = JSON.parse(jm[1])
+          const off = Array.isArray(jd.offers) ? jd.offers[0] : jd.offers
+          if (off?.price) {
+            const v = parseFloat(String(off.price).replace(',','.'))
+            if (v > 0 && v < 1_000_000) { price = v }
+          }
+          if (!title && jd.name) title = jd.name
+          if (!image && jd.image) image = Array.isArray(jd.image) ? jd.image[0] : jd.image
+        } catch { /* continua */ }
+      }
+
+      // og:title
+      if (!title) {
+        const tm = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+               ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+        if (tm) title = tm[1].replace(/\s*\|\s*Shopee Brasil\s*$/i, '').trim()
+      }
+
+      // og:image
+      if (!image) {
+        const im = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+               ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
+        if (im) image = im[1].trim()
+      }
+    } catch { /* ignora */ }
+
+    return { price, image, title }
   }
 
   // ── Processamento ───────────────────────────────────────────
@@ -3755,16 +3824,22 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
         // extId: usa itemId da Shopee resolvido como chave canônica de dedup
         const extId = resolvedShopeeId || item.external_id || ('imp-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6))
 
+        // URL canônica Shopee para refresh interno de preço/imagem
+        const canonicalShopeeUrl = (isShopeeStore && resolvedShopeeShopId && resolvedShopeeId)
+          ? `https://shopee.com.br/product/${resolvedShopeeShopId}/${resolvedShopeeId}`
+          : null
+
         if (existing) {
           // Atualiza oferta existente com novos dados se disponíveis
           await DB.prepare(
             `UPDATE offers
-             SET price        = COALESCE(?, price),
-                 image_url    = COALESCE(?, image_url),
-                 affiliate_url = COALESCE(NULLIF(?, ''), affiliate_url),
-                 last_updated = CURRENT_TIMESTAMP
+             SET price             = COALESCE(?, price),
+                 image_url         = COALESCE(?, image_url),
+                 affiliate_url     = COALESCE(NULLIF(?, ''), affiliate_url),
+                 shopee_product_url = COALESCE(?, shopee_product_url),
+                 last_updated      = CURRENT_TIMESTAMP
              WHERE id = ?`
-          ).bind(price, item.image_url, item.url, existing.id).run()
+          ).bind(price, item.image_url, item.url, canonicalShopeeUrl, existing.id).run()
 
           if (price) {
             await DB.prepare(
@@ -3790,11 +3865,11 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
             `INSERT INTO offers
                (product_id, store_id, title, price, original_price,
                 affiliate_url, checkout_url, image_url, in_stock, is_active,
-                source, external_id, last_updated)
-             VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 1, 1, ?, ?, CURRENT_TIMESTAMP)`
+                source, external_id, shopee_product_url, last_updated)
+             VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 1, 1, ?, ?, ?, CURRENT_TIMESTAMP)`
           ).bind(productId, storeId, name, price ?? 0,
             item.url, item.url, item.image_url,
-            sourceLabel, extId).run()
+            sourceLabel, extId, canonicalShopeeUrl).run()
 
           // Atualiza best_store_id no produto
           await DB.prepare(
@@ -9694,5 +9769,168 @@ function renderAdminSPA(): string {
 </body>
 </html>`
 }
+
+// ── POST /api/cron/shopee-refresh ─────────────────────────────────────────
+// Endpoint chamado a cada 1h por serviço externo (cron.org, Cloudflare Cron Worker, etc.)
+// Atualiza preço, imagem e título de todas as offers Shopee que têm shopee_product_url
+// Protegido por CRON_SECRET no header Authorization: Bearer <secret>
+admin.post('/api/cron/shopee-refresh', async (c) => {
+  const DB = (c.env as any).DB as D1Database
+
+  // Verificação de secret — opcional mas recomendada
+  const cronSecret = (c.env as any).CRON_SECRET as string | undefined
+  if (cronSecret) {
+    const auth = c.req.header('Authorization') || ''
+    const token = auth.replace(/^Bearer\s+/i, '').trim()
+    if (token !== cronSecret) {
+      return c.json({ ok: false, error: 'Unauthorized' }, 401)
+    }
+  }
+
+  // Busca todas as offers Shopee ativas com shopee_product_url preenchida
+  const { results: offers } = await DB.prepare(`
+    SELECT o.id, o.external_id, o.shopee_product_url, o.price, o.product_id
+    FROM offers o
+    WHERE o.store_id = 4
+      AND o.is_active = 1
+      AND o.shopee_product_url IS NOT NULL
+    ORDER BY o.last_updated ASC
+    LIMIT 50
+  `).all<any>()
+
+  if (!offers || offers.length === 0) {
+    return c.json({ ok: true, message: 'Nenhuma offer Shopee com shopee_product_url encontrada', updated: 0 })
+  }
+
+  // Função interna de refresh (duplicada aqui para escopo autônomo do cron)
+  async function doRefresh(productUrl: string): Promise<{ price: number | null; image: string | null; title: string | null }> {
+    let price: number | null = null
+    let image: string | null = null
+    let title: string | null = null
+    try {
+      const r = await fetch(productUrl, {
+        redirect: 'follow',
+        headers: {
+          'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+          'Accept': 'text/html,application/xhtml+xml,*/*',
+          'Accept-Language': 'pt-BR,pt;q=0.9',
+        },
+      })
+      const html = await r.text()
+
+      // JSON-LD — fonte mais confiável de preço
+      const jsonldMatches = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>(.*?)<\/script>/gis)]
+      for (const jm of jsonldMatches) {
+        try {
+          const jd = JSON.parse(jm[1])
+          // Só extrai preço de JSON-LD de tipo Product
+          if (jd['@type'] === 'Product') {
+            const off = Array.isArray(jd.offers) ? jd.offers[0] : jd.offers
+            if (off?.price) {
+              const v = parseFloat(String(off.price).replace(',', '.'))
+              if (v > 0 && v < 1_000_000) price = v
+            }
+            if (!title && jd.name) title = jd.name
+            if (!image && jd.image) image = Array.isArray(jd.image) ? jd.image[0] : jd.image
+            break // achou Product, para
+          }
+        } catch { /* continua */ }
+      }
+
+      // Fallback og:title
+      if (!title) {
+        const tm = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+                ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+        if (tm) title = tm[1].replace(/\s*\|\s*Shopee Brasil\s*$/i, '').trim()
+      }
+
+      // Fallback og:image
+      if (!image) {
+        const im = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+               ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
+        if (im) image = im[1].trim()
+      }
+
+      // Fallback preço no HTML sem contexto de frete
+      if (!price) {
+        const htmlNoFrete = html.replace(/Frete[^<]*<[^>]*>[^<]*R\$[^<]*</gi, '')
+                                .replace(/KTJj8T[^<]*<[^<]*<[^<]*R\$[^<]*/g, '')
+        const priceM = htmlNoFrete.match(/R\$\s*([\d]+(?:[.,]\d{2})?)(?:\s|<|&|"|'|$)/i)
+        if (priceM) {
+          const raw = priceM[1]
+          const norm = /^\d{1,3}\.\d{3},\d{2}$/.test(raw)
+            ? raw.replace('.', '').replace(',', '.')
+            : raw.replace(',', '.')
+          const v = parseFloat(norm)
+          if (v > 0 && v < 1_000_000) price = v
+        }
+      }
+    } catch { /* ignora erros de rede */ }
+    return { price, image, title }
+  }
+
+  const log: any[] = []
+  let updated = 0, failed = 0
+
+  // Processa em batches de 5 para não sobrecarregar a Shopee
+  const BATCH = 5
+  for (let i = 0; i < offers.length; i += BATCH) {
+    const batch = offers.slice(i, i + BATCH)
+    await Promise.all(batch.map(async (offer: any) => {
+      try {
+        const { price, image, title } = await doRefresh(offer.shopee_product_url)
+
+        if (price === null && image === null) {
+          failed++
+          log.push({ id: offer.id, status: 'no-data', url: offer.shopee_product_url })
+          return
+        }
+
+        // Não atualiza preço se for valor suspeito de frete (< R$1)
+        const priceToSave = (price && price > 1) ? price : null
+
+        // Atualiza offer
+        await DB.prepare(`
+          UPDATE offers
+          SET price        = COALESCE(?, price),
+              image_url    = COALESCE(?, image_url),
+              title        = COALESCE(?, title),
+              last_updated = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(priceToSave, image, title, offer.id).run()
+
+        // Atualiza produto (best_price e imagem se melhorou)
+        if (priceToSave) {
+          await DB.prepare(`
+            UPDATE products
+            SET best_price = COALESCE(?, best_price),
+                image_url  = COALESCE(?, image_url),
+                name       = COALESCE(?, name)
+            WHERE id = ? AND (best_price IS NULL OR best_price < 1 OR ? <= best_price)
+          `).bind(priceToSave, image, title, offer.product_id, priceToSave).run()
+        }
+
+        updated++
+        log.push({ id: offer.id, status: 'updated', price: priceToSave, url: offer.shopee_product_url })
+      } catch (e: any) {
+        failed++
+        log.push({ id: offer.id, status: 'error', error: e?.message })
+      }
+    }))
+    // Pequena pausa entre batches
+    if (i + BATCH < offers.length) {
+      await new Promise(res => setTimeout(res, 500))
+    }
+  }
+
+  return c.json({
+    ok: true,
+    total: offers.length,
+    updated,
+    failed,
+    timestamp: new Date().toISOString(),
+    log,
+  })
+})
 
 export default admin

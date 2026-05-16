@@ -25,4 +25,11 @@
     }
   ],
 
+  // Cron Triggers — executam a função scheduled() automaticamente
+  // "0 * * * *" = início de cada hora (ex: 12:00, 13:00, 14:00...)
+  // Atualiza preços: MercadoLivre (ML_APP_ID/ML_SECRET) + Shopee (shopee-afiliados no D1)
+  "triggers": {
+    "crons": ["0 * * * *"]
+  }
+
 }
