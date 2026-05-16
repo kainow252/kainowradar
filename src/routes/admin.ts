@@ -3894,13 +3894,22 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
     const rawLines = raw.split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean)
     const parsed: { url: string; name: string; price: number | null; image_url: string | null; external_id: string | null }[] = []
 
+    // ── Helpers para classificar URLs por tipo ────────────────────────
+    // URLs de imagem/CDN (nunca serão URL do produto)
+    const isImageUrl = (u: string) =>
+      /susercontent\.com|img\.susercontent|cloudfront\.net|imgix\.net|\.webp(\?|$)|\.jpg(\?|$)|\.jpeg(\?|$)|\.png(\?|$)|\.gif(\?|$)|cdn\.|img\.|images\./i.test(u)
+    // URLs de produto/afiliado (sempre serão URL do produto quando encontradas)
+    const isProductUrl = (u: string) =>
+      /s\.shopee\.com\.br|shopee\.com\.br|meli\.la|mercadolivre\.com\.br|mercadolibre\.com|amazon\.com\.br|amzn\.to|magazineluiza|magalu|via\.com\.br|americanas\.com|submarino\.com\.br/i.test(u)
+
     for (const line of rawLines) {
       if (line.includes('|')) {
         const parts = line.split('|').map((p: string) => p.trim())
 
-        // ── Formato A (padrão): URL | Nome | Preço | Imagem ─────────────
+        // ── Formato A (padrão): URL-produto | Nome | Preço | Imagem ──────
         // Ex: https://s.shopee.com.br/xxx | Tênis Nike | 299.90 | https://img...
-        if (parts[0].startsWith('http')) {
+        // Condição: primeiro campo é URL de produto (não é imagem CDN)
+        if (parts[0].startsWith('http') && !isImageUrl(parts[0])) {
           parsed.push({
             url:         parts[0],
             name:        parts[1] || '',
@@ -3911,15 +3920,21 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
           continue
         }
 
-        // ── Formato B (Shopee simplificado): Nome | R$Valor | Imagem | URL ─
-        // Ex: Tênis Nike | R$299,90 | https://img... | https://s.shopee.com.br/xxx
-        // Detecta: último campo é URL OU campo com http é a URL
-        const urlIdx = parts.findIndex((p: string) => p.startsWith('http') && (p.includes('shopee') || p.includes('s.shopee') || p.includes('meli') || p.includes('amazon') || p.includes('mercadolivre')))
-        if (urlIdx > 0) {
-          const url      = parts[urlIdx]
-          const imgIdx   = parts.findIndex((p: string, i: number) => i !== urlIdx && p.startsWith('http'))
-          const priceStr = parts.find((p: string, i: number) => i !== urlIdx && i !== imgIdx && /\d/.test(p))
-          const nameParts = parts.filter((_: string, i: number) => i !== urlIdx && i !== imgIdx && !(priceStr && parts[i] === priceStr))
+        // ── Formato B (rico): Nome | R$Valor | Imagem-CDN | URL-produto ──
+        // Ex: Tênis Nike | R$299,90 | https://susercontent.com/img.webp | https://s.shopee.com.br/xxx
+        // Detecta: campo que é URL de produto reconhecido (shopee, meli, amazon, etc.)
+        const productUrlIdx = parts.findIndex((p: string) => p.startsWith('http') && isProductUrl(p))
+        if (productUrlIdx >= 0) {
+          const url     = parts[productUrlIdx]
+          // Imagem: qualquer outro campo http (preferencialmente CDN de imagem)
+          const imgIdx  = parts.findIndex((p: string, i: number) =>
+            i !== productUrlIdx && p.startsWith('http'))
+          // Preço: campo com padrão R$xxx,xx ou número com vírgula/ponto
+          const priceStr = parts.find((p: string, i: number) =>
+            i !== productUrlIdx && i !== imgIdx && /R?\$?\s*\d[\d.,]*/.test(p))
+          // Nome: tudo que sobrou
+          const nameParts = parts.filter((_: string, i: number) =>
+            i !== productUrlIdx && i !== imgIdx && !(priceStr && parts[i] === priceStr))
           parsed.push({
             url,
             name:        nameParts.join(' ').trim(),
@@ -3930,13 +3945,17 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
           continue
         }
 
-        // ── Formato C: qualquer campo http é a URL (fallback) ────────────
-        const anyUrlIdx = parts.findIndex((p: string) => p.startsWith('http'))
+        // ── Formato C: fallback — primeiro campo http não-imagem é a URL ─
+        // Útil para outros domínios não listados acima
+        const anyProductIdx = parts.findIndex((p: string) => p.startsWith('http') && !isImageUrl(p))
+        const anyUrlIdx     = anyProductIdx >= 0 ? anyProductIdx : parts.findIndex((p: string) => p.startsWith('http'))
         if (anyUrlIdx >= 0) {
           const url    = parts[anyUrlIdx]
           const imgIdx = parts.findIndex((p: string, i: number) => i !== anyUrlIdx && p.startsWith('http'))
-          const priceStr = parts.find((p: string, i: number) => i !== anyUrlIdx && i !== imgIdx && /R?\$?\d/.test(p))
-          const nameParts = parts.filter((_: string, i: number) => i !== anyUrlIdx && i !== imgIdx && !(priceStr && parts[i] === priceStr))
+          const priceStr = parts.find((p: string, i: number) =>
+            i !== anyUrlIdx && i !== imgIdx && /R?\$?\s*\d[\d.,]*/.test(p))
+          const nameParts = parts.filter((_: string, i: number) =>
+            i !== anyUrlIdx && i !== imgIdx && !(priceStr && parts[i] === priceStr))
           parsed.push({
             url,
             name:        nameParts.join(' ').trim(),
