@@ -1725,7 +1725,7 @@ async function runShopeeRefreshCron(DB: D1Database, CACHE: KVNamespace): Promise
 
   // Busca até 50 offers Shopee ativas com shopee_product_url (as mais antigas primeiro)
   const { results: offers } = await DB.prepare(`
-    SELECT o.id, o.external_id, o.shopee_product_url, o.price, o.product_id, o.affiliate_url
+    SELECT o.id, o.external_id, o.external_sku, o.shopee_product_url, o.price, o.product_id, o.affiliate_url
     FROM   offers o
     WHERE  o.store_id = 4
       AND  o.is_active = 1
@@ -1775,15 +1775,22 @@ async function runShopeeRefreshCron(DB: D1Database, CACHE: KVNamespace): Promise
           newAffiliateUrl = gqlResult.offerLink  // link curto afiliado gerado pela API
         }
 
-        // ── Tentativa 2: Fallback HTML (facebookexternalhit + JSON-LD) ──
-        if ((price === null || image === null) && offer.shopee_product_url) {
-          const htmlResult = await fetchShopeeProductViaHTML(offer.shopee_product_url)
-          if (price  === null) price  = htmlResult.price
-          if (image  === null) image  = htmlResult.image
-          if (title  === null) title  = htmlResult.title
+        // ── Tentativa 2: API interna Shopee (shop_id + item_id) — sem auth ──
+        if (price === null && offer.external_id && offer.external_sku) {
+          const apiResult = await fetchShopeeProductViaAPI(offer.external_sku, offer.external_id)
+          if (apiResult.price !== null) price = apiResult.price
+          if (image === null) image = apiResult.image
+          if (title === null) title = apiResult.title
         }
 
-        if (price === null && image === null) {
+        // ── Tentativa 3: HTML (apenas imagem/título, sem preço) ──
+        if ((image === null || title === null) && offer.shopee_product_url) {
+          const htmlResult = await fetchShopeeProductViaHTML(offer.shopee_product_url)
+          if (image === null) image = htmlResult.image
+          if (title === null) title = htmlResult.title
+        }
+
+        if (price === null) {
           nodata++
           console.warn(`[CRON/SHOPEE] Sem dados — oid=${offer.id} url=${offer.shopee_product_url}`)
           return
@@ -1908,10 +1915,58 @@ async function fetchShopeeProductViaGraphQL(
 }
 
 // ─────────────────────────────────────────────────────────────
-// fetchShopeeProductViaHTML — fallback quando sem credenciais API.
-// Busca dados via facebookexternalhit UA → HTML com og: tags e JSON-LD.
-// JSON-LD é a fonte mais confiável de preço — o HTML com xTgkVC/KTJj8T
-// contém o valor do FRETE, não do produto.
+// fetchShopeeProductViaAPI — busca preço real via API interna da Shopee
+// Endpoint: /api/v4/pdp/get_pc?shop_id=X&item_id=Y
+// Funciona do Cloudflare edge (IP brasileiro) sem autenticação.
+// Preço retornado em centavos × 100000 (ex: 2990000 = R$29,90)
+// ─────────────────────────────────────────────────────────────
+async function fetchShopeeProductViaAPI(
+  shopId: string,
+  itemId: string
+): Promise<{ price: number | null; image: string | null; title: string | null }> {
+  try {
+    const r = await fetch(
+      `https://shopee.com.br/api/v4/pdp/get_pc?shop_id=${shopId}&item_id=${itemId}`,
+      {
+        headers: {
+          'User-Agent':   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept':       'application/json',
+          'Referer':      `https://shopee.com.br/product/${shopId}/${itemId}`,
+          'X-API-SOURCE': 'pc',
+        },
+      }
+    )
+    if (!r.ok) return { price: null, image: null, title: null }
+    const d: any = await r.json()
+    if (d.error && d.error !== 0) return { price: null, image: null, title: null }
+
+    const item = d?.data?.item ?? d?.item ?? {}
+    // Preço em centavos × 100000
+    const rawPrice = item.price_min ?? item.price ?? null
+    let price: number | null = null
+    if (rawPrice !== null) {
+      const v = Number(rawPrice) / 100000
+      if (v > 0 && v < 1_000_000) price = Math.round(v * 100) / 100
+    }
+
+    let image: string | null = null
+    const imgField = item.image ?? (item.images ?? [])[0] ?? null
+    if (imgField) {
+      image = String(imgField).startsWith('http')
+        ? String(imgField)
+        : `https://down-br.img.susercontent.com/file/${imgField}`
+    }
+
+    return { price, image, title: item.name ?? null }
+  } catch {
+    return { price: null, image: null, title: null }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// fetchShopeeProductViaHTML — fallback apenas para imagem e título.
+// A Shopee NÃO inclui preço real no HTML server-side (SSR).
+// O que aparece como "R$X" no HTML é o valor do FRETE, não do produto.
 // ─────────────────────────────────────────────────────────────
 async function fetchShopeeProductViaHTML(
   productUrl: string
@@ -1928,57 +1983,21 @@ async function fetchShopeeProductViaHTML(
     if (!r.ok) return { price: null, image: null, title: null }
     const html = await r.text()
 
-    let price: number | null = null
     let image: string | null = null
     let title: string | null = null
 
-    // ── JSON-LD (fonte mais confiável de preço) ────────────────
-    const jldRe = /<script[^>]+type=["']application\/ld\+json["'][^>]*>(.*?)<\/script>/gis
-    for (const jm of [...html.matchAll(jldRe)]) {
-      try {
-        const jd = JSON.parse(jm[1])
-        const off = Array.isArray(jd.offers) ? jd.offers[0] : jd.offers
-        if (off?.price) {
-          const v = parseFloat(String(off.price).replace(',', '.'))
-          if (v > 0 && v < 1_000_000) price = v
-        }
-        if (!title && jd.name) title = jd.name
-        if (!image && jd.image) image = Array.isArray(jd.image) ? jd.image[0] : jd.image
-      } catch { /* continua */ }
-    }
+    // og:title
+    const tm = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+            ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+    if (tm) title = tm[1].replace(/\s*\|\s*Shopee.*$/i, '').trim()
 
-    // ── og:title ───────────────────────────────────────────────
-    if (!title) {
-      const m = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
-             ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
-      if (m) title = m[1].replace(/\s*\|\s*Shopee Brasil\s*$/i, '').trim()
-    }
+    // og:image
+    const im = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+            ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
+    if (im) image = im[1].trim()
 
-    // ── og:image ───────────────────────────────────────────────
-    if (!image) {
-      const m = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
-             ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
-      if (m) image = m[1].trim()
-    }
-
-    // ── Fallback preço: R$ no HTML sem bloco de frete ──────────
-    // ATENÇÃO: xTgkVC / KTJj8T = bloco de FRETE — deve ser ignorado
-    if (!price) {
-      const htmlNoFrete = html
-        .replace(/Frete[^<]*<[^>]*>[^<]*R\$[^<]*</gi, '')
-        .replace(/KTJj8T[^<]*<[^<]*<[^<]*R\$[^<]*/g, '')
-      const m = htmlNoFrete.match(/R\$\s*([\d]+(?:[.,]\d{2})?)(?:\s|<|&|"|'|$)/i)
-      if (m) {
-        const raw  = m[1]
-        const norm = /^\d{1,3}\.\d{3},\d{2}$/.test(raw)
-          ? raw.replace('.', '').replace(',', '.')
-          : raw.replace(',', '.')
-        const v = parseFloat(norm)
-        if (v > 0 && v < 1_000_000) price = v
-      }
-    }
-
-    return { price, image, title }
+    // NUNCA tentar pegar preço do HTML — é sempre o frete (R$7-10)
+    return { price: null, image, title }
   } catch {
     return { price: null, image: null, title: null }
   }

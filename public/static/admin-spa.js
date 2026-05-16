@@ -703,13 +703,25 @@ async function renderOffers(area, page = 1) {
   const data = await api('GET', `/admin/api/offers?page=${page}`)
   if (!data) return
   const rows = data.offers.map(o => `
-    <tr class="hover:bg-slate-50">
+    <tr class="hover:bg-slate-50" id="offer-row-${o.id}">
       <td class="table-td max-w-xs">
         <div class="font-medium text-slate-800 text-sm truncate">${o.product_name}</div>
         <div class="text-xs text-slate-400">ID: ${o.external_id}</div>
       </td>
       <td class="table-td">${badge(o.store_name, 'blue')}</td>
-      <td class="table-td font-bold text-green-700 text-base">${fBRL(o.price)}</td>
+      <td class="table-td">
+        <div id="price-display-${o.id}" class="cursor-pointer group flex items-center gap-1" onclick="startEditPrice(${o.id}, ${o.price})" title="Clique para editar">
+          <span class="font-bold text-green-700 text-base group-hover:text-green-500">${fBRL(o.price)}</span>
+          <span class="text-slate-300 text-xs opacity-0 group-hover:opacity-100">✏️</span>
+        </div>
+        <div id="price-edit-${o.id}" class="hidden flex items-center gap-1">
+          <span class="text-slate-400 text-xs">R$</span>
+          <input type="number" step="0.01" min="0" id="price-input-${o.id}"
+            class="border border-blue-400 rounded px-1 py-0.5 text-sm w-24 font-bold text-green-700"
+            onkeydown="if(event.key==='Enter')savePrice(${o.id});if(event.key==='Escape')cancelEditPrice(${o.id})"
+            onblur="savePrice(${o.id})">
+        </div>
+      </td>
       <td class="table-td">
         ${o.original_price && o.original_price > o.price ? `<span class="text-slate-400 line-through text-xs">${fBRL(o.original_price)}</span>` : '—'}
       </td>
@@ -730,11 +742,24 @@ async function renderOffers(area, page = 1) {
     </tr>
   `).join('')
 
+  // Separar Shopee (com preço suspeito ≤ 0.01) para destaque
+  const shopeeProblemas = data.offers.filter(o => o.store_name === 'Shopee' && o.price <= 0.01).length
+
   area.innerHTML = `
     <div class="section">
+      ${shopeeProblemas > 0 ? `
+      <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4 flex items-start gap-3">
+        <span class="text-2xl">⚠️</span>
+        <div class="flex-1">
+          <div class="font-bold text-amber-800">${shopeeProblemas} oferta(s) Shopee com preço R$0,01</div>
+          <div class="text-sm text-amber-700 mt-1">A API da Shopee bloqueia acessos fora do Brasil. Corrija os preços clicando no valor <span class="font-mono bg-amber-100 px-1 rounded">R$ 0,01</span> para editar inline.</div>
+          <button onclick="openBulkPriceEdit()" class="mt-2 btn-primary text-xs">✏️ Editar ${shopeeProblemas} preços em massa</button>
+        </div>
+      </div>` : ''}
       <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
         <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
           <h3 class="font-bold text-slate-800">Todas as Ofertas <span class="text-slate-400 font-normal text-sm ml-1">${data.total} total</span></h3>
+          <span class="text-xs text-slate-400">💡 Clique no preço para editar</span>
         </div>
         <div class="overflow-x-auto">
           <table class="w-full">
@@ -760,6 +785,99 @@ async function renderOffers(area, page = 1) {
 }
 
 // ── STORES ────────────────────────────────────────────────
+// Edição inline de preço
+function startEditPrice(id, currentPrice) {
+  document.getElementById(`price-display-${id}`).classList.add('hidden')
+  const edit = document.getElementById(`price-edit-${id}`)
+  edit.classList.remove('hidden')
+  const input = document.getElementById(`price-input-${id}`)
+  input.value = currentPrice || ''
+  input.focus()
+  input.select()
+}
+
+function cancelEditPrice(id) {
+  document.getElementById(`price-display-${id}`)?.classList.remove('hidden')
+  document.getElementById(`price-edit-${id}`)?.classList.add('hidden')
+}
+
+async function savePrice(id) {
+  const input = document.getElementById(`price-input-${id}`)
+  if (!input) return
+  const newPrice = parseFloat(input.value)
+  if (isNaN(newPrice) || newPrice <= 0) { cancelEditPrice(id); return }
+
+  const res = await api('PATCH', `/admin/api/offers/${id}`, { price: newPrice })
+  if (res?.ok) {
+    // Atualiza display sem reload
+    const display = document.getElementById(`price-display-${id}`)
+    if (display) display.querySelector('span').textContent = fBRL(newPrice)
+    cancelEditPrice(id)
+    toast(`✅ Preço atualizado: R$ ${newPrice.toFixed(2).replace('.', ',')}`, 'success')
+  } else {
+    toast('❌ Erro ao salvar preço', 'error')
+    cancelEditPrice(id)
+  }
+}
+
+// Modal de edição em massa de preços Shopee
+async function openBulkPriceEdit() {
+  // Busca todas as ofertas Shopee com preço <= 0.01
+  const data = await api('GET', '/admin/api/offers?page=1')
+  if (!data) return
+  const problema = data.offers.filter(o => o.store_name === 'Shopee' && o.price <= 0.01)
+
+  const fields = problema.map(o => `
+    <div class="flex items-center gap-3 py-2 border-b border-slate-100">
+      <div class="flex-1 min-w-0">
+        <div class="text-sm font-medium text-slate-800 truncate">${o.product_name}</div>
+        <div class="text-xs text-slate-400">ID: ${o.external_id} · <a href="https://shopee.com.br/product/${o.external_sku || ''}/${o.external_id}" target="_blank" class="text-blue-500 hover:underline">Ver na Shopee ↗</a></div>
+      </div>
+      <div class="flex items-center gap-1 shrink-0">
+        <span class="text-slate-400 text-sm">R$</span>
+        <input type="number" step="0.01" min="0.01" placeholder="0,00"
+          id="bulk-price-${o.id}"
+          class="border border-slate-200 rounded-lg px-2 py-1 text-sm w-24 text-green-700 font-bold focus:border-blue-400 focus:outline-none">
+      </div>
+    </div>
+  `).join('')
+
+  const modal = document.createElement('div')
+  modal.id = 'bulk-price-modal'
+  modal.className = 'fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4'
+  modal.innerHTML = `
+    <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[80vh] flex flex-col">
+      <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+        <h3 class="font-bold text-slate-800 text-lg">✏️ Corrigir Preços Shopee</h3>
+        <button onclick="document.getElementById('bulk-price-modal').remove()" class="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
+      </div>
+      <div class="text-xs text-slate-500 px-6 pt-3">Abra cada link, copie o preço e cole aqui. Deixe em branco para não alterar.</div>
+      <div class="overflow-y-auto flex-1 px-6 py-2">${fields}</div>
+      <div class="px-6 py-4 border-t border-slate-100 flex gap-3">
+        <button onclick="saveBulkPrices(${JSON.stringify(problema.map(o=>o.id))})" class="btn-primary flex-1">💾 Salvar Todos</button>
+        <button onclick="document.getElementById('bulk-price-modal').remove()" class="btn-secondary">Cancelar</button>
+      </div>
+    </div>
+  `
+  document.body.appendChild(modal)
+}
+
+async function saveBulkPrices(ids) {
+  let saved = 0, skipped = 0
+  for (const id of ids) {
+    const input = document.getElementById(`bulk-price-${id}`)
+    if (!input) continue
+    const val = parseFloat(input.value)
+    if (isNaN(val) || val <= 0) { skipped++; continue }
+    const res = await api('PATCH', `/admin/api/offers/${id}`, { price: val })
+    if (res?.ok) saved++
+  }
+  document.getElementById('bulk-price-modal')?.remove()
+  toast(`✅ ${saved} preço(s) salvo(s)${skipped > 0 ? ` · ${skipped} ignorado(s)` : ''}`, 'success')
+  await api('POST', '/admin/api/recalc-counts')
+  renderOffers(document.getElementById('content-area'))
+}
+
 async function deleteOffer(id, productName) {
   if (!confirm(`Excluir oferta de "${productName}"?\n\nA oferta será removida permanentemente. Ação irreversível.`)) return
   const res = await api('DELETE', `/admin/api/offers/${id}`)

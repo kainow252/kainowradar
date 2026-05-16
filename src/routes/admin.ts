@@ -303,6 +303,120 @@ admin.delete('/api/offers/:id', async (c) => {
   return c.json({ ok: true })
 })
 
+// ── PATCH /admin/api/offers/:id — Editar preço/dados de uma oferta ──
+admin.patch('/api/offers/:id', async (c) => {
+  const { DB } = c.env
+  const id = parseInt(c.req.param('id'))
+  if (!id) return c.json({ ok: false, error: 'ID inválido' }, 400)
+
+  const body = await c.req.json().catch(() => ({})) as any
+  const fields: string[] = []
+  const values: any[] = []
+
+  if (body.price !== undefined) {
+    const p = parseFloat(body.price)
+    if (!isNaN(p) && p > 0) { fields.push('price = ?'); values.push(p) }
+  }
+  if (body.original_price !== undefined) {
+    const p = parseFloat(body.original_price)
+    if (!isNaN(p) && p > 0) { fields.push('original_price = ?'); values.push(p) }
+  }
+  if (body.title !== undefined)       { fields.push('title = ?');       values.push(body.title) }
+  if (body.image_url !== undefined)   { fields.push('image_url = ?');   values.push(body.image_url) }
+  if (body.affiliate_url !== undefined){ fields.push('affiliate_url = ?'); values.push(body.affiliate_url) }
+  if (body.in_stock !== undefined)    { fields.push('in_stock = ?');    values.push(body.in_stock ? 1 : 0) }
+
+  if (fields.length === 0) return c.json({ ok: false, error: 'Nenhum campo para atualizar' }, 400)
+
+  fields.push('last_updated = CURRENT_TIMESTAMP')
+  values.push(id)
+
+  await DB.prepare(`UPDATE offers SET ${fields.join(', ')} WHERE id = ?`).bind(...values).run()
+
+  // Se preço foi atualizado, recalcular best_price do produto
+  if (body.price !== undefined) {
+    const offer = await DB.prepare('SELECT product_id FROM offers WHERE id = ?').bind(id).first<any>()
+    if (offer?.product_id) {
+      await DB.prepare(`
+        UPDATE products SET
+          best_price = (SELECT MIN(price) FROM offers WHERE product_id = ? AND is_active = 1 AND price > 0),
+          best_store_id = (SELECT store_id FROM offers WHERE product_id = ? AND is_active = 1 AND price > 0 ORDER BY price ASC LIMIT 1),
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(offer.product_id, offer.product_id, offer.product_id).run()
+    }
+  }
+
+  return c.json({ ok: true })
+})
+
+// ── GET /admin/api/shopee-test/:shopId/:itemId — Diagnóstico API Shopee ──
+admin.get('/api/shopee-test/:shopId/:itemId', async (c) => {
+  const shopId = c.req.param('shopId')
+  const itemId = c.req.param('itemId')
+  const results: any = {}
+
+  // Teste 1: API interna /api/v4/pdp/get_pc
+  try {
+    const r1 = await fetch(
+      `https://shopee.com.br/api/v4/pdp/get_pc?shop_id=${shopId}&item_id=${itemId}`,
+      {
+        headers: {
+          'User-Agent':   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept':       'application/json',
+          'Referer':      `https://shopee.com.br/product/${shopId}/${itemId}`,
+          'X-API-SOURCE': 'pc',
+        },
+      }
+    )
+    const raw: any = await r1.json()
+    const item = raw?.data?.item ?? raw?.item ?? {}
+    const rawPrice = item.price_min ?? item.price ?? null
+    results.api_v4 = {
+      status: r1.status,
+      error: raw.error ?? null,
+      price_raw: rawPrice,
+      price_brl: rawPrice ? Math.round(Number(rawPrice) / 100000 * 100) / 100 : null,
+      name: item.name ?? null,
+    }
+  } catch (e: any) {
+    results.api_v4 = { error: e.message }
+  }
+
+  // Teste 2: API v2 legada
+  try {
+    const r2 = await fetch(
+      `https://shopee.com.br/api/v2/item/get?itemid=${itemId}&shopid=${shopId}`,
+      { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://shopee.com.br/' } }
+    )
+    const raw2: any = await r2.json()
+    const item2 = raw2?.item ?? {}
+    results.api_v2 = {
+      status: r2.status,
+      error: raw2.error ?? null,
+      price_raw: item2.price ?? item2.price_min ?? null,
+    }
+  } catch (e: any) {
+    results.api_v2 = { error: e.message }
+  }
+
+  // Teste 3: HTML og:title + og:image (sem preço)
+  try {
+    const r3 = await fetch(`https://shopee.com.br/product/${shopId}/${itemId}`, {
+      headers: { 'User-Agent': 'facebookexternalhit/1.1', 'Accept': 'text/html' },
+    })
+    const html = await r3.text()
+    const title = html.match(/og:title[^>]+content=["']([^"']+)["']/i)?.[1] ?? null
+    const img   = html.match(/og:image[^>]+content=["']([^"']+)["']/i)?.[1] ?? null
+    const frete = html.match(/R\$\s*([\d,\.]+)/)?.[1] ?? null
+    results.html = { status: r3.status, title, img_url: img, primeiro_valor_rs: frete }
+  } catch (e: any) {
+    results.html = { error: e.message }
+  }
+
+  return c.json({ shopId, itemId, results })
+})
+
 // ── POST /admin/api/recalc-counts — Recalcula offer_count, best_price, best_store_id ──
 admin.post('/api/recalc-counts', async (c) => {
   const { DB } = c.env
@@ -9854,7 +9968,7 @@ admin.post('/api/cron/shopee-refresh', async (c) => {
 
   // Busca todas as offers Shopee ativas com shopee_product_url preenchida
   const { results: offers } = await DB.prepare(`
-    SELECT o.id, o.external_id, o.shopee_product_url, o.price, o.product_id, o.affiliate_url
+    SELECT o.id, o.external_id, o.external_sku, o.shopee_product_url, o.price, o.product_id, o.affiliate_url
     FROM   offers o
     WHERE  o.store_id = 4
       AND  o.is_active = 1
@@ -9922,9 +10036,52 @@ admin.post('/api/cron/shopee-refresh', async (c) => {
     } catch { return { price: null, image: null, title: null, offerLink: null } }
   }
 
+  // ── Helper: API interna Shopee (shop_id + item_id) ──────────
+  // Funciona do Cloudflare edge (IP brasileiro). Retorna preço real em centavos/100000.
+  // Endpoint: /api/v4/pdp/get_pc?shop_id=X&item_id=Y
+  async function fetchViaShopeeAPI(shopId: string, itemId: string): Promise<{
+    price: number | null; image: string | null; title: string | null
+  }> {
+    try {
+      const url = `https://shopee.com.br/api/v4/pdp/get_pc?shop_id=${shopId}&item_id=${itemId}`
+      const r = await fetch(url, {
+        headers: {
+          'User-Agent':    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept':        'application/json',
+          'Referer':       `https://shopee.com.br/product/${shopId}/${itemId}`,
+          'X-API-SOURCE':  'pc',
+        },
+      })
+      if (!r.ok) return { price: null, image: null, title: null }
+      const d: any = await r.json()
+      if (d.error && d.error !== 0) return { price: null, image: null, title: null }
+
+      const item = d?.data?.item ?? d?.item ?? {}
+      // Preço vem em centavos × 100000 (ex: 2990000 = R$29,90)
+      const rawPrice = item.price_min ?? item.price ?? null
+      let price: number | null = null
+      if (rawPrice !== null) {
+        const v = Number(rawPrice) / 100000
+        if (v > 0 && v < 1_000_000) price = Math.round(v * 100) / 100
+      }
+
+      // Imagem: monta URL CDN Shopee
+      let image: string | null = null
+      const imgField = item.image ?? (item.images ?? [])[0] ?? null
+      if (imgField) {
+        image = imgField.startsWith('http')
+          ? imgField
+          : `https://down-br.img.susercontent.com/file/${imgField}`
+      }
+
+      const title: string | null = item.name ?? null
+      return { price, image, title }
+    } catch { return { price: null, image: null, title: null } }
+  }
+
   // ── Helper: Fallback HTML (facebookexternalhit + JSON-LD) ───
-  // NOTA: xTgkVC/KTJj8T = bloco de FRETE ("Frete grátis R$X,XX") — IGNORAR
-  // JSON-LD type=Product → off.price = preço real do produto
+  // ATENÇÃO: A Shopee não coloca preço no JSON-LD server-side.
+  // Usado apenas para buscar imagem e título quando API falha.
   async function fetchViaHTML(productUrl: string): Promise<{
     price: number | null; image: string | null; title: string | null
   }> {
@@ -9940,50 +10097,22 @@ admin.post('/api/cron/shopee-refresh', async (c) => {
       if (!r.ok) return { price: null, image: null, title: null }
       const html = await r.text()
 
-      let price: number | null = null
       let image: string | null = null
       let title: string | null = null
 
-      // JSON-LD Product → fonte mais confiável de preço
-      const jldRe = /<script[^>]+type=["']application\/ld\+json["'][^>]*>(.*?)<\/script>/gis
-      for (const jm of [...html.matchAll(jldRe)]) {
-        try {
-          const jd = JSON.parse(jm[1])
-          const off = Array.isArray(jd.offers) ? jd.offers[0] : jd.offers
-          if (off?.price) {
-            const v = parseFloat(String(off.price).replace(',', '.'))
-            if (v > 0 && v < 1_000_000) price = v
-          }
-          if (!title && jd.name) title = jd.name
-          if (!image && jd.image) image = Array.isArray(jd.image) ? jd.image[0] : jd.image
-        } catch { /* continua */ }
-      }
+      // og:title
+      const titleMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+                      ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+      if (titleMatch) title = titleMatch[1].replace(/\s*\|\s*Shopee.*$/i, '').trim()
 
-      if (!title) {
-        const m = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
-               ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
-        if (m) title = m[1].replace(/\s*\|\s*Shopee Brasil\s*$/i, '').trim()
-      }
-      if (!image) {
-        const m = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
-               ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
-        if (m) image = m[1].trim()
-      }
+      // og:image
+      const imgMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+                    ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
+      if (imgMatch) image = imgMatch[1].trim()
 
-      // Fallback preço: remove blocos de frete antes de buscar R$
-      if (!price) {
-        const noFrete = html.replace(/Frete[^<]*<[^>]*>[^<]*R\$[^<]*</gi, '')
-                            .replace(/KTJj8T[^<]*<[^<]*<[^<]*R\$[^<]*/g, '')
-        const m = noFrete.match(/R\$\s*([\d]+(?:[.,]\d{2})?)(?:\s|<|&|"|'|$)/i)
-        if (m) {
-          const raw  = m[1]
-          const norm = /^\d{1,3}\.\d{3},\d{2}$/.test(raw) ? raw.replace('.','').replace(',','.') : raw.replace(',','.')
-          const v    = parseFloat(norm)
-          if (v > 0 && v < 1_000_000) price = v
-        }
-      }
-
-      return { price, image, title }
+      // Preço: NÃO buscar no HTML — a Shopee só mostra frete no SSR
+      // O preço real só vem via API interna ou GraphQL de afiliados
+      return { price: null, image, title }
     } catch { return { price: null, image: null, title: null } }
   }
 
@@ -10007,18 +10136,25 @@ admin.post('/api/cron/shopee-refresh', async (c) => {
           price           = gql.price
           image           = gql.image
           title           = gql.title
-          newAffiliateUrl = gql.offerLink  // link curto afiliado atualizado pela API
+          newAffiliateUrl = gql.offerLink
         }
 
-        // 2. Fallback HTML se ainda sem dados
-        if ((price === null || image === null) && offer.shopee_product_url) {
+        // 2. API interna Shopee (shop_id + item_id) — funciona do edge sem auth
+        if (price === null && offer.external_id && offer.external_sku) {
+          const api = await fetchViaShopeeAPI(offer.external_sku, offer.external_id)
+          if (api.price !== null) price = api.price
+          if (image === null) image = api.image
+          if (title === null) title = api.title
+        }
+
+        // 3. Fallback HTML (apenas para imagem/título, nunca preço)
+        if ((image === null || title === null) && offer.shopee_product_url) {
           const html = await fetchViaHTML(offer.shopee_product_url)
-          if (price === null) price = html.price
           if (image === null) image = html.image
           if (title === null) title = html.title
         }
 
-        if (price === null && image === null) {
+        if (price === null) {
           nodata++
           log.push({ id: offer.id, status: 'no-data', url: offer.shopee_product_url })
           return
@@ -10051,7 +10187,9 @@ admin.post('/api/cron/shopee-refresh', async (c) => {
           id:     offer.id,
           status: 'updated',
           price,
-          via:    (useGraphQL && offer.external_id) ? 'graphql' : 'html',
+          via:    useGraphQL && offer.external_id ? 'graphql'
+                : offer.external_sku ? 'shopee-api'
+                : 'html',
           url:    offer.shopee_product_url,
         })
       } catch (e: any) {
