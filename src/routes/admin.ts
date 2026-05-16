@@ -1881,47 +1881,139 @@ admin.post('/api/stores/ml/import-affiliate-links', async (c) => {
     image: string | null
     longUrl: string | null
   }> {
-    let longUrl: string | null = null
-    let mlbId:   string | null = null
+    const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36'
+    let longUrl:  string | null = null
+    let mlbId:    string | null = null
+    let htmlBody: string | null = null
 
-    // Etapa 1 — segue redirect igual ao requests.get(allow_redirects=True)
+    // ── Helper: extrai meta tag de HTML ──────────────────────────────
+    const getMeta = (html: string, prop: string): string => {
+      const m = html.match(
+        new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)["']`, 'i')
+      ) || html.match(
+        new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${prop}["']`, 'i')
+      )
+      return m ? m[1].trim() : ''
+    }
+
+    // ── Helper: extrai preço de texto (R$ 1.234,56 ou 1234.56) ───────
+    const parsePrice = (s: string): number | null => {
+      const m = s.match(/R\$\s*([\d]+(?:[.,][\d]{1,2})?)\s*$/)
+      if (!m) return null
+      const v = parseFloat(m[1].replace('.', '').replace(',', '.'))
+      return isNaN(v) || v <= 0 ? null : v
+    }
+
+    // ── Etapa 1: segue redirect ───────────────────────────────────────
+    // meli.la/xxx → mercadolivre.com.br/social/cfeg...?ref=<token_opaco>
+    // O redirect HTTP FINAL é a página /social/ — não contém MLB na URL!
     try {
       const r = await fetch(shortUrl, {
         redirect: 'follow',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,*/*',
-        },
+        headers: { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,*/*' },
       })
-      longUrl = r.url || null
+      longUrl  = r.url || null
+      htmlBody = await r.text()
     } catch { /* ignora */ }
 
-    // Etapa 2 — extrai MLB da URL resolvida
+    // ── Etapa 2: tenta extrair MLB diretamente da URL resolvida ──────
     if (longUrl) mlbId = extractMlbId(longUrl)
 
-    if (!mlbId) return { mlbId: null, title: null, price: null, image: null, longUrl }
+    // ── Etapa 3: tenta query params (fo, matt_topic) da URL /social/ ─
+    // Alguns links ainda usam fo=<URL_PRODUTO_ENCODED> nos params
+    if (!mlbId && longUrl) {
+      try {
+        const socialUrl = new URL(longUrl)
+        for (const key of ['fo', 'matt_topic', 'redirectTo', 'next', 'url']) {
+          const raw = socialUrl.searchParams.get(key)
+          if (!raw) continue
+          let decoded = raw
+          try { decoded = decodeURIComponent(raw)     } catch { /* ignora */ }
+          try { decoded = decodeURIComponent(decoded) } catch { /* ignora */ }
+          mlbId = extractMlbId(decoded)
+          if (mlbId) { longUrl = decoded; break }
+        }
+      } catch { /* ignora */ }
+    }
 
-    // Etapa 3+4 — API pública ML: api.mercadolibre.com/items/{MLB}
-    try {
-      const apiUrl = `https://api.mercadolibre.com/items/${mlbId}`
-      const apiRes = await fetch(apiUrl, {
-        headers: { 'Accept': 'application/json', 'User-Agent': 'KainowRadar/1.0' },
-      })
-      if (apiRes.ok) {
-        const d = await apiRes.json() as any
-        return {
-          mlbId,
-          title: d.title        || null,
-          price: d.price        ? Number(d.price) : null,
-          image: d.pictures?.[0]?.secure_url
-              || d.thumbnail?.replace('-I.jpg', '-O.jpg')
-              || null,
-          longUrl,
+    // ── Etapa 4: extrai MLB, título, preço e imagem do HTML da página /social/ ───
+    // A página /social/ é uma SPA React que já embute dados do produto nos polycards.
+    // Estrutura observada no JSON inline:
+    //   "id":"MLB6761523270","product_id":"MLB69487076",
+    //   "current_price":{"value":20.99,...},
+    //   "pictures":[{"url":"https://http2.mlstatic.com/..."}]
+    // og:title e og:image também estão disponíveis nas meta tags.
+    let ogTitle:  string | null = null
+    let ogImage:  string | null = null
+    let ogPrice:  number | null = null
+
+    if (htmlBody) {
+      // og: meta tags — título e imagem canônicos do produto
+      ogTitle = getMeta(htmlBody, 'og:title') || null
+      ogImage = getMeta(htmlBody, 'og:image') || null
+      if (ogTitle) ogPrice = parsePrice(ogTitle)
+
+      // ── Extrai preço do JSON de polycards (current_price.value) ──
+      // Padrão: "current_price":{"value":20.99,...}
+      if (!ogPrice) {
+        const priceM = htmlBody.match(/"current_price"\s*:\s*\{"value"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/)
+        if (priceM) {
+          const v = Number(priceM[1])
+          if (v > 0 && v < 1_000_000) ogPrice = v
         }
       }
-    } catch { /* ignora */ }
 
-    return { mlbId, title: null, price: null, image: null, longUrl }
+      // ── MLB: procura "id":"MLB..." no JSON de polycards ──────────
+      if (!mlbId) {
+        const polyM = htmlBody.match(/"id"\s*:\s*"(MLB\d{7,12})"/)
+        if (polyM) {
+          mlbId = polyM[1]
+          // Tenta reconstruir URL canônica a partir do campo "url" no polycard
+          const urlM = htmlBody.match(/"url"\s*:\s*"(www\.mercadolivre\.com\.br[^"]+)"/)
+          longUrl = urlM
+            ? `https://${urlM[1].replace(/\\u002F/g, '/')}`
+            : `https://www.mercadolivre.com.br/p/${mlbId}`
+        }
+      }
+
+      // Fallback: qualquer MLB com 9+ dígitos no HTML
+      if (!mlbId) {
+        const anyM = htmlBody.match(/\b(MLB\d{9,12})\b/)
+        if (anyM) {
+          mlbId   = anyM[1]
+          longUrl = `https://www.mercadolivre.com.br/p/${mlbId}`
+        }
+      }
+    }
+
+    // ── Etapa 5: API pública ML → title, price, image (canônico) ─────
+    if (mlbId) {
+      try {
+        const apiRes = await fetch(`https://api.mercadolibre.com/items/${mlbId}`, {
+          headers: { 'Accept': 'application/json', 'User-Agent': 'KainowRadar/1.0' },
+        })
+        if (apiRes.ok) {
+          const d = await apiRes.json() as any
+          return {
+            mlbId,
+            title:   d.title  || ogTitle || null,
+            price:   d.price  ? Number(d.price) : ogPrice,
+            image:   d.pictures?.[0]?.secure_url
+                  || d.thumbnail?.replace('-I.jpg', '-O.jpg')
+                  || ogImage
+                  || null,
+            longUrl: longUrl || `https://www.mercadolivre.com.br/p/${mlbId}`,
+          }
+        }
+      } catch { /* ignora — usa dados do og: como fallback */ }
+
+      // API falhou mas temos MLB e talvez og: dados
+      if (ogTitle || ogImage) {
+        return { mlbId, title: ogTitle, price: ogPrice, image: ogImage, longUrl }
+      }
+    }
+
+    return { mlbId, title: ogTitle, price: ogPrice, image: ogImage, longUrl }
   }
 
   // ── Processamento ───────────────────────────────────────────
@@ -2074,14 +2166,16 @@ admin.post('/api/stores/ml/import-affiliate-links', async (c) => {
 // Retorna histórico dos últimos 100 links importados
 admin.get('/api/stores/ml/import-history', async (c) => {
   const { DB } = c.env
+  const limit = Math.min(parseInt(c.req.query('limit') || '100'), 200)
   const { results } = await DB.prepare(`
     SELECT id, original_url, resolved_url, ml_item_id, affiliate_url,
-           product_id, product_name, status, error_msg, imported_at
+           product_id, product_name, product_price, product_image,
+           status, error_msg, imported_at
     FROM ml_affiliate_imports
     ORDER BY imported_at DESC
-    LIMIT 100
-  `).all<any>()
-  return c.json({ results })
+    LIMIT ?
+  `).bind(limit).all<any>()
+  return c.json({ imports: results, results })
 })
 
 // ── GET /admin/api/stores/:id/import-history ─────────────────────

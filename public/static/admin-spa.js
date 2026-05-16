@@ -3782,8 +3782,8 @@ async function loadMlImportHistory() {
   const container = document.getElementById('ml-history-content')
   if (!container) return
 
-  const data = await api('GET', '/admin/api/stores/ml/import-history')
-  const rows = data?.results || []
+  const data = await api('GET', '/admin/api/stores/ml/import-history?limit=100')
+  const rows = data?.imports || data?.results || []
 
   if (rows.length === 0) {
     container.innerHTML = '<div class="text-center py-10 text-slate-400 text-sm">Nenhuma importação ainda</div>'
@@ -3811,15 +3811,27 @@ async function loadMlImportHistory() {
           const badge = r.status === 'duplicado'
             ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-700">duplicado</span>`
             : ''
+          const imgThumb = r.product_image
+            ? `<img src="${r.product_image}" class="w-9 h-9 object-cover rounded flex-shrink-0" onerror="this.style.display='none'">`
+            : `<div class="w-9 h-9 bg-slate-100 rounded flex-shrink-0 flex items-center justify-center text-slate-300 text-xs">📷</div>`
+          const priceTag = r.product_price
+            ? `<span class="text-green-600 font-semibold">R$ ${Number(r.product_price).toFixed(2)}</span>`
+            : ''
+          const nameText = r.product_name ? `<span class="truncate max-w-[180px] inline-block align-bottom">${r.product_name}</span>` : (r.error_msg || r.ml_item_id || '—')
           return `<div class="flex items-center gap-2.5 px-3 py-2 ${bg}">
-            <span class="text-sm flex-shrink-0">${icon}</span>
+            ${imgThumb}
             <div class="min-w-0 flex-1">
-              <div class="text-xs font-mono text-slate-500 truncate">${shortUrl}</div>
-              <div class="text-xs text-slate-400 flex items-center gap-1">
-                ${r.ml_item_id || r.error_msg || '—'} ${r.product_name ? '· ' + r.product_name : ''} ${badge}
+              <div class="text-xs font-medium text-slate-700 truncate">${nameText} ${badge}</div>
+              <div class="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
+                <span class="font-mono">${r.ml_item_id || '—'}</span>
+                ${priceTag}
+                <span class="font-mono text-slate-300">${shortUrl}</span>
               </div>
             </div>
-            <div class="text-xs text-slate-300 flex-shrink-0">${date}</div>
+            <div class="text-right flex-shrink-0">
+              <div class="text-xs">${icon}</div>
+              <div class="text-xs text-slate-300">${date}</div>
+            </div>
           </div>`
         }).join('')}
       </div>
