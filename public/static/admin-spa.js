@@ -1154,83 +1154,123 @@ async function shStartScrape(storeId) {
   document.getElementById('sh-step-1').classList.add('hidden')
   document.getElementById('sh-step-2').classList.remove('hidden')
 
-  shLog('🚀 Iniciando scraping do painel Shopee Afiliados...')
+  shLog('🚀 Iniciando busca de links no painel Shopee Afiliados...')
   shLog('📋 Tipo: <span class="text-orange-400">' + offerType + '</span> | Limite: ' + (limit || 'Todos'))
-  shProgress(5, 'Acessando painel...')
+  shProgress(5, 'Conectando à API da Shopee...')
 
   let totalFound    = 0
   let totalImported = 0
-  let page          = 0
+  let page          = 1
   let hasMore       = true
+  const PAGE_SIZE   = 100
   const CHUNK       = 50
+  const maxLinks    = limit > 0 ? limit : 999999
 
-  while (hasMore) {
-    shLog('🔄 Buscando página ' + (page + 1) + '...')
-    shProgress(5 + Math.min(page * 3, 40), 'Página ' + (page+1) + '...')
+  // ── ESTRATÉGIA: browser faz chamadas diretamente à API da Shopee
+  // O browser já tem os cookies de login → não há problema de CORS para same-origin
+  // A API da Shopee Afiliados retorna os links → enviamos para o nosso backend salvar
 
-    let res
+  while (hasMore && totalFound < maxLinks) {
+    shLog('🔄 Buscando página ' + page + '...')
+    shProgress(5 + Math.min(page * 2, 45), 'Página ' + page + '...')
+
+    let links = []
+    let pageTotal = 0
+
     try {
-      res = await api('POST', '/admin/api/stores/shopee/scrape', {
-        store_id:   storeId,
-        page:       page,
-        page_size:  100,
-        offer_type: offerType,
-        limit:      limit
-      }, 30000)
-    } catch(e) {
-      shLog('❌ Erro na página ' + (page+1) + ': ' + e.message)
-      break
+      // ── Chamada direta à API interna do painel Shopee Afiliados ──
+      // URL descoberta via DevTools do painel affiliate.shopee.com.br
+      const shopeeRes = await fetch(
+        'https://affiliate.shopee.com.br/api/v1/offer/product_offer?' +
+        'page_number=' + page +
+        '&page_size=' + PAGE_SIZE +
+        '&need_products_info=1' +
+        '&sort_type=2',
+        {
+          credentials: 'include',   // envia cookies automaticamente!
+          headers: {
+            'Accept':      'application/json',
+            'Referer':     'https://affiliate.shopee.com.br/offer/product_offer',
+            'x-requested-with': 'XMLHttpRequest'
+          }
+        }
+      )
+
+      if (!shopeeRes.ok) {
+        // Tenta endpoint alternativo
+        const r2 = await fetch(
+          'https://affiliate.shopee.com.br/api/v1/offer/get_offers?' +
+          'page=' + page + '&size=' + PAGE_SIZE,
+          { credentials: 'include', headers: { 'Accept': 'application/json' } }
+        ).catch(() => null)
+
+        if (r2 && r2.ok) {
+          const j2 = await r2.json().catch(() => ({}))
+          const items2 = j2?.data?.offers || j2?.data?.list || j2?.data || []
+          pageTotal = j2?.data?.total_count || j2?.data?.total || 0
+          for (const it of (Array.isArray(items2) ? items2 : [])) {
+            const lk = it.short_link || it.affiliate_link || it.offer_link || it.link
+            if (lk) links.push(lk)
+          }
+        } else {
+          shLog('⚠️ API retornou ' + shopeeRes.status + ' — você está logado na Shopee Afiliados?')
+          hasMore = false; break
+        }
+      } else {
+        const json = await shopeeRes.json().catch(() => ({}))
+        const items = json?.data?.offers || json?.data?.items || json?.data?.list || json?.data || []
+        pageTotal = json?.data?.total_count || json?.data?.total || json?.total || 0
+        for (const it of (Array.isArray(items) ? items : [])) {
+          const lk = it.short_link || it.affiliate_link || it.offer_link || it.link || it.url
+          if (lk) links.push(lk)
+        }
+        if (links.length < PAGE_SIZE) hasMore = false
+      }
+    } catch (fetchErr) {
+      shLog('⚠️ Erro ao acessar Shopee: ' + fetchErr.message)
+      shLog('💡 Certifique-se de estar logado em <a href="https://affiliate.shopee.com.br" target="_blank" class="text-orange-400 underline">affiliate.shopee.com.br</a>')
+      hasMore = false; break
     }
 
-    if (!res || !res.ok || !res.links || res.links.length === 0) {
-      shLog('ℹ️ ' + (res?.message || 'Sem mais links nesta página.'))
-      break
-    }
+    if (!links.length) { hasMore = false; break }
 
-    const links = res.links
     totalFound += links.length
-    shLog('📦 Página ' + (page+1) + ': <span class="text-green-400">' + links.length + ' links</span> (total: ' + totalFound + ')')
-    shStat(totalFound, totalImported, page + 1)
+    shLog('📦 Página ' + page + ': <span class="text-green-400">' + links.length + ' links</span> (total: ' + totalFound + (pageTotal ? ' / ' + pageTotal : '') + ')')
+    shStat(totalFound, totalImported, page)
 
-    // Importa em chunks de 50
+    // Envia chunk para o backend salvar
     for (let i = 0; i < links.length; i += CHUNK) {
       const chunk = links.slice(i, i + CHUNK)
-      const pct   = 45 + Math.round((totalImported / Math.max(totalFound, 1)) * 50)
-      shProgress(pct, 'Importando ' + totalImported + '/' + totalFound + '...')
+      const pct   = 50 + Math.round((totalImported / Math.max(totalFound, 1)) * 45)
+      shProgress(Math.min(pct, 94), 'Importando ' + totalImported + '/' + totalFound + '...')
       try {
         const imp = await api('POST', '/admin/api/stores/' + storeId + '/import-links',
           { links: chunk.join('\n') }, 60000)
         const saved = imp.imported || imp.saved || 0
         totalImported += saved
-        shStat(totalFound, totalImported, page + 1)
+        shStat(totalFound, totalImported, page)
       } catch(ce) {
         shLog('⚠️ Chunk: ' + ce.message)
       }
     }
 
-    hasMore = res.has_more === true
+    if (limit > 0 && totalFound >= maxLinks) break
     page++
-
-    // Para se atingiu o limite
-    if (limit > 0 && totalFound >= limit) break
-    if (!hasMore) break
-
-    // Pequena pausa entre páginas para não sobrecarregar
-    await new Promise(r => setTimeout(r, 800))
+    await new Promise(r => setTimeout(r, 600))
   }
 
   shProgress(100, 'Concluído!')
-  shLog('🎉 <span class="text-green-400 font-bold">CONCLUÍDO!</span> ' + totalImported + ' produtos importados de ' + totalFound + ' links!')
+  shLog('🎉 <span class="text-green-400 font-bold">CONCLUÍDO!</span> ' + totalImported + ' produtos importados de ' + totalFound + ' links encontrados!')
   await _refreshStoreCard(storeId)
 
-  const done    = document.getElementById('sh-done')
+  const done = document.getElementById('sh-done')
   const doneMsg = document.getElementById('sh-done-msg')
   if (done && doneMsg) {
     doneMsg.textContent = totalImported > 0
       ? `🎉 ${totalImported.toLocaleString('pt-BR')} produto(s) importado(s)! Já aparecem para comparação.`
       : totalFound > 0
-        ? `${totalFound} links encontrados, mas sem produtos novos (já importados).`
-        : 'Nenhum link encontrado. Verifique se está logado no painel.'
+        ? `${totalFound} links encontrados, sem produtos novos (já importados antes).`
+        : 'Nenhum link encontrado. Verifique: você está logado no painel da Shopee Afiliados?'
     done.classList.remove('hidden')
   }
 }

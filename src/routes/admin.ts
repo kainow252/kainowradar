@@ -8831,7 +8831,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260516d"><\/script>
+<script src="/static/admin-spa.js?v=20260516e"><\/script>
 </body>
 </html>`
 }
