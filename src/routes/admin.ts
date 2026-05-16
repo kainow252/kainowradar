@@ -303,6 +303,62 @@ admin.delete('/api/offers/:id', async (c) => {
   return c.json({ ok: true })
 })
 
+// ── POST /admin/api/recalc-counts — Recalcula offer_count, best_price, best_store_id ──
+admin.post('/api/recalc-counts', async (c) => {
+  const { DB } = c.env
+  try {
+    // 1. Recalcula offer_count
+    await DB.prepare(`
+      UPDATE products
+      SET offer_count = (
+        SELECT COUNT(*) FROM offers
+        WHERE product_id = products.id AND is_active = 1
+      )
+    `).run()
+
+    // 2. Recalcula best_store_id (loja da oferta mais barata)
+    await DB.prepare(`
+      UPDATE products
+      SET best_store_id = (
+        SELECT store_id FROM offers
+        WHERE product_id = products.id AND is_active = 1 AND price > 0
+        ORDER BY price ASC LIMIT 1
+      )
+      WHERE EXISTS (
+        SELECT 1 FROM offers WHERE product_id = products.id AND is_active = 1 AND price > 0
+      )
+    `).run()
+
+    // 3. Recalcula best_price (menor preço ativo > 0)
+    await DB.prepare(`
+      UPDATE products
+      SET best_price = (
+        SELECT MIN(price) FROM offers
+        WHERE product_id = products.id AND is_active = 1 AND price > 0
+      )
+      WHERE EXISTS (
+        SELECT 1 FROM offers WHERE product_id = products.id AND is_active = 1 AND price > 0
+      )
+    `).run()
+
+    // 4. Zera best_store_id de produtos sem ofertas
+    await DB.prepare(`
+      UPDATE products
+      SET best_store_id = NULL, best_price = NULL
+      WHERE offer_count = 0
+    `).run()
+
+    // 5. Conta produtos corrigidos
+    const result = await DB.prepare(`
+      SELECT COUNT(*) as total FROM products WHERE offer_count > 0
+    `).first<{ total: number }>()
+
+    return c.json({ ok: true, products_with_offers: result?.total ?? 0 })
+  } catch (e: any) {
+    return c.json({ ok: false, error: e.message }, 500)
+  }
+})
+
 // ── GET /admin/api/offers — Lista ofertas ─────────────────
 admin.get('/api/offers', async (c) => {
   const { DB } = c.env

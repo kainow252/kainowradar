@@ -641,6 +641,9 @@ async function renderProducts(area, page = 1) {
         <input type="text" id="product-search" value="${q}" placeholder="Buscar por nome, marca, EAN..."
           class="input max-w-sm" oninput="App.productSearch=this.value" onkeydown="if(event.key==='Enter'){renderProducts(document.getElementById('content-area'))}">
         <button onclick="renderProducts(document.getElementById('content-area'))" class="btn-primary">Buscar</button>
+        <button onclick="recalcCounts()" class="btn-secondary text-xs flex items-center gap-1" title="Recalcula offer_count, best_price e best_store_id">
+          🔄 Recalcular Contagens
+        </button>
         <span class="text-sm text-slate-500 ml-auto">${data.total} produtos</span>
       </div>
       <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -669,6 +672,17 @@ async function toggleProduct(id, currentActive) {
   await api('PATCH', `/admin/api/products/${id}`, { is_active: currentActive ? 0 : 1 })
   toast(currentActive ? 'Produto desativado' : 'Produto ativado', 'success')
   renderProducts(document.getElementById('content-area'))
+}
+
+async function recalcCounts() {
+  toast('⏳ Recalculando contagens...', 'info')
+  const res = await api('POST', '/admin/api/recalc-counts')
+  if (res?.ok) {
+    toast(`✅ Contagens atualizadas! ${res.products_with_offers} produtos com ofertas.`, 'success')
+    renderProducts(document.getElementById('content-area'))
+  } else {
+    toast('❌ Erro ao recalcular: ' + (res?.error || 'desconhecido'), 'error')
+  }
 }
 
 async function deleteProduct(id, name) {
