@@ -1712,30 +1712,35 @@ export default {
 
 // ─────────────────────────────────────────────────────────────
 // runShopeeRefreshCron — atualiza preço/imagem/link de todas as
-// offers Shopee com shopee_product_url preenchida.
+// offers Shopee com affiliate_url preenchida (link curto s.shopee.com.br).
 //
 // Estratégia (em ordem de prioridade):
 //   1. API GraphQL Shopee Afiliados (productOfferV2 por itemId)
-//      → retorna priceMin/Max real, imageUrl CDN, offerLink curto
-//   2. Fallback: facebookexternalhit UA + JSON-LD no HTML
-//      → retorna price via <script ld+json>, og:image, og:title
+//      → retorna priceMin/Max real, imageUrl CDN, offerLink curto renovado
+//   2. facebookexternalhit no affiliate_url (link curto) →
+//      og:title, og:image, al:web:url (shop_id/item_id)
+//      Depois API interna /api/v4/pdp/get_pc com shop_id+item_id → preço real
+//
+// O affiliate_url gravado é sempre o link curto (s.shopee.com.br/xxx)
+// para o cliente clicar e ir direto para o produto.
 // ─────────────────────────────────────────────────────────────
 async function runShopeeRefreshCron(DB: D1Database, CACHE: KVNamespace): Promise<void> {
   const t0 = Date.now()
 
-  // Busca até 50 offers Shopee ativas com shopee_product_url (as mais antigas primeiro)
+  // Busca até 50 offers Shopee ativas com affiliate_url (as mais antigas primeiro)
   const { results: offers } = await DB.prepare(`
-    SELECT o.id, o.external_id, o.external_sku, o.shopee_product_url, o.price, o.product_id, o.affiliate_url
+    SELECT o.id, o.external_id, o.external_sku, o.affiliate_url,
+           o.shopee_product_url, o.price, o.product_id
     FROM   offers o
     WHERE  o.store_id = 4
       AND  o.is_active = 1
-      AND  o.shopee_product_url IS NOT NULL
+      AND  o.affiliate_url IS NOT NULL
     ORDER  BY o.last_updated ASC
     LIMIT  50
   `).all<any>()
 
   if (!offers || offers.length === 0) {
-    console.log('[CRON/SHOPEE] Nenhuma offer Shopee com shopee_product_url para atualizar.')
+    console.log('[CRON/SHOPEE] Nenhuma offer Shopee com affiliate_url para atualizar.')
     return
   }
 
@@ -1748,7 +1753,7 @@ async function runShopeeRefreshCron(DB: D1Database, CACHE: KVNamespace): Promise
   const shopeeSecret = cfg ? (JSON.parse(cfg.extra_json || '{}').secret || '') : ''
   const useGraphQL   = !!(shopeeAppId && shopeeSecret)
 
-  console.log(`[CRON/SHOPEE] ${offers.length} offers | GraphQL: ${useGraphQL ? 'SIM (API)' : 'NÃO (fallback HTML)'}`)
+  console.log(`[CRON/SHOPEE] ${offers.length} offers | GraphQL: ${useGraphQL ? 'SIM (API)' : 'NÃO (facebookexternalhit)'}`)
 
   let updated = 0, failed = 0, nodata = 0
 
@@ -1759,64 +1764,77 @@ async function runShopeeRefreshCron(DB: D1Database, CACHE: KVNamespace): Promise
 
     await Promise.all(batch.map(async (offer: any) => {
       try {
-        let price: number | null = null
-        let image: string | null = null
-        let title: string | null = null
-        let newAffiliateUrl: string | null = null
+        let price:    number | null = null
+        let image:    string | null = null
+        let title:    string | null = null
+        let shortUrl: string | null = offer.affiliate_url || null  // link curto original
 
         // ── Tentativa 1: API GraphQL Shopee Afiliados ──────────
         if (useGraphQL && offer.external_id) {
           const gqlResult = await fetchShopeeProductViaGraphQL(
             shopeeAppId, shopeeSecret, offer.external_id
           )
-          price          = gqlResult.price
-          image          = gqlResult.image
-          title          = gqlResult.title
-          newAffiliateUrl = gqlResult.offerLink  // link curto afiliado gerado pela API
+          price    = gqlResult.price
+          image    = gqlResult.image
+          title    = gqlResult.title
+          if (gqlResult.offerLink) shortUrl = gqlResult.offerLink  // link curto renovado pela API
         }
 
-        // ── Tentativa 2: API interna Shopee (shop_id + item_id) — sem auth ──
-        if (price === null && offer.external_id && offer.external_sku) {
-          const apiResult = await fetchShopeeProductViaAPI(offer.external_sku, offer.external_id)
-          if (apiResult.price !== null) price = apiResult.price
-          if (image === null) image = apiResult.image
-          if (title === null) title = apiResult.title
-        }
+        // ── Tentativa 2: facebookexternalhit no link curto ─────
+        // → og:title + og:image + al:web:url (shop_id/item_id)
+        if ((price === null || image === null || title === null) && offer.affiliate_url) {
+          const meta = await fetchViaShortLinkCron(offer.affiliate_url)
+          if (title === null && meta.title) title = meta.title
+          if (image === null && meta.image) image = meta.image
 
-        // ── Tentativa 3: HTML (apenas imagem/título, sem preço) ──
-        if ((image === null || title === null) && offer.shopee_product_url) {
-          const htmlResult = await fetchShopeeProductViaHTML(offer.shopee_product_url)
-          if (image === null) image = htmlResult.image
-          if (title === null) title = htmlResult.title
+          // ── Tentativa 3: API interna com shop_id+item_id extraídos ──
+          if (price === null && meta.shopId && meta.itemId) {
+            price = await fetchPriceViaAPICron(meta.shopId, meta.itemId)
+
+            // Salva external_sku (shop_id) e shopee_product_url se extraídos agora
+            if (meta.shopId && !offer.external_sku) {
+              await DB.prepare(
+                `UPDATE offers SET external_sku = ?, shopee_product_url = ? WHERE id = ?`
+              ).bind(meta.shopId, `https://shopee.com.br/product/${meta.shopId}/${meta.itemId}`, offer.id).run()
+            }
+          }
         }
 
         if (price === null) {
           nodata++
-          console.warn(`[CRON/SHOPEE] Sem dados — oid=${offer.id} url=${offer.shopee_product_url}`)
+          console.warn(`[CRON/SHOPEE] Sem preço — oid=${offer.id} url=${offer.affiliate_url}`)
+          // Mesmo sem preço, salva título e imagem se vieram
+          if (title || image) {
+            await DB.prepare(`
+              UPDATE offers SET
+                title     = COALESCE(?, title),
+                image_url = COALESCE(?, image_url),
+                last_updated = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).bind(title, image, offer.id).run()
+          }
           return
         }
 
-        // Atualiza offer (preço + imagem + título + link afiliado se renovado)
+        // Atualiza offer (preço + imagem + título + shortUrl se renovado)
         await DB.prepare(`
           UPDATE offers
-          SET price        = COALESCE(?, price),
-              image_url    = COALESCE(?, image_url),
-              title        = COALESCE(?, title),
+          SET price         = COALESCE(?, price),
+              image_url     = COALESCE(?, image_url),
+              title         = COALESCE(?, title),
               affiliate_url = COALESCE(?, affiliate_url),
-              last_updated = CURRENT_TIMESTAMP
+              last_updated  = CURRENT_TIMESTAMP
           WHERE id = ?
-        `).bind(price, image, title, newAffiliateUrl, offer.id).run()
+        `).bind(price, image, title, shortUrl, offer.id).run()
 
         // Atualiza produto (best_price e imagem se melhorou)
-        if (price !== null) {
-          await DB.prepare(`
-            UPDATE products
-            SET best_price = COALESCE(?, best_price),
-                image_url  = COALESCE(?, image_url),
-                name       = COALESCE(?, name)
-            WHERE id = ? AND (best_price IS NULL OR ? <= best_price)
-          `).bind(price, image, title, offer.product_id, price).run()
-        }
+        await DB.prepare(`
+          UPDATE products
+          SET best_price = COALESCE(?, best_price),
+              image_url  = COALESCE(?, image_url),
+              name       = COALESCE(?, name)
+          WHERE id = ? AND (best_price IS NULL OR ? <= best_price)
+        `).bind(price, image, title, offer.product_id, price).run()
 
         updated++
         console.log(`[CRON/SHOPEE] OK oid=${offer.id} preço=R$${price} img=${!!image}`)
@@ -1964,10 +1982,75 @@ async function fetchShopeeProductViaAPI(
 }
 
 // ─────────────────────────────────────────────────────────────
-// fetchShopeeProductViaHTML — fallback apenas para imagem e título.
-// A Shopee NÃO inclui preço real no HTML server-side (SSR).
-// O que aparece como "R$X" no HTML é o valor do FRETE, não do produto.
+// fetchViaShortLinkCron — facebookexternalhit no link curto Shopee.
+// Extrai og:title, og:image e al:web:url com shop_id/item_id.
+// Usado pelo cron para obter IDs necessários ao fetchPriceViaAPICron.
 // ─────────────────────────────────────────────────────────────
+async function fetchViaShortLinkCron(shortUrl: string): Promise<{
+  title: string | null; image: string | null; shopId: string | null; itemId: string | null
+}> {
+  try {
+    const r = await fetch(shortUrl, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent':      'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+        'Accept':          'text/html,application/xhtml+xml,*/*',
+        'Accept-Language': 'pt-BR,pt;q=0.9',
+      },
+    })
+    if (!r.ok) return { title: null, image: null, shopId: null, itemId: null }
+    const html = await r.text()
+
+    // og:title
+    const titleM = html.match(/property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+                ?? html.match(/content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+    const title = titleM ? titleM[1].replace(/\s*\|\s*Shopee.*$/i, '').trim() : null
+
+    // og:image
+    const imgM = html.match(/property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+              ?? html.match(/content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
+    const image = imgM ? imgM[1].trim() : null
+
+    // al:web:url → shop_id e item_id (ex: /slug/1429781525/23394276680)
+    const alM = html.match(/property=["']al:web:url["'][^>]+content=["']([^"']+)["']/i)
+             ?? html.match(/content=["']([^"']+)["'][^>]+property=["']al:web:url["']/i)
+    let shopId: string | null = null, itemId: string | null = null
+    if (alM) {
+      const idsM = alM[1].match(/\/(\d{6,})\/(\d{6,})/)
+      if (idsM) { shopId = idsM[1]; itemId = idsM[2] }
+    }
+
+    return { title, image, shopId, itemId }
+  } catch { return { title: null, image: null, shopId: null, itemId: null } }
+}
+
+// ─────────────────────────────────────────────────────────────
+// fetchPriceViaAPICron — API interna Shopee com shop_id + item_id.
+// Preço em centavos × 100000 (ex: 2990000 = R$29,90).
+// IPs BR (incluindo Cloudflare edge BR) conseguem acessar.
+// IPs fora do Brasil retornam erro 90309999 (geolocation block).
+// ─────────────────────────────────────────────────────────────
+async function fetchPriceViaAPICron(shopId: string, itemId: string): Promise<number | null> {
+  try {
+    const r = await fetch(
+      `https://shopee.com.br/api/v4/pdp/get_pc?shop_id=${shopId}&item_id=${itemId}`,
+      { headers: {
+          'User-Agent':   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept':       'application/json',
+          'Referer':      `https://shopee.com.br/product/${shopId}/${itemId}`,
+          'X-API-SOURCE': 'pc',
+      }}
+    )
+    if (!r.ok) return null
+    const d: any = await r.json()
+    if (d.error && d.error !== 0) return null
+    const item = d?.data?.item ?? d?.item ?? {}
+    const raw  = item.price_min ?? item.price ?? null
+    if (raw === null) return null
+    const v = Math.round(Number(raw) / 100000 * 100) / 100
+    return (v > 0 && v < 1_000_000) ? v : null
+  } catch { return null }
+}
 async function fetchShopeeProductViaHTML(
   productUrl: string
 ): Promise<{ price: number | null; image: string | null; title: string | null }> {
