@@ -808,9 +808,9 @@ function _buildStoreCard(s) {
   const topBorderColor = prodCount > 0 ? '#8b5cf6' : (s.is_active ? '#f59e0b' : '#cbd5e1')
 
   // Botão de importação via links (CSV/TXT)
+  const _siName = (s.name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")
   const importBtn = s.is_active
-    ? `<button onclick="event.stopPropagation();openStoreImport(${s.id},'${(s.name||'').replace(/'/g,"\\'")}')"`
-    + ` class="w-full text-xs font-semibold py-2 px-3 rounded-xl border bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 transition-all mt-1.5">📥 Importar Links</button>`
+    ? '<button onclick="event.stopPropagation();openStoreImport(' + s.id + ',\'' + _siName + '\')" class="w-full text-xs font-semibold py-2 px-3 rounded-xl border bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 transition-all mt-1.5">&#128229; Importar Links</button>'
     : ''
   const shopeeConnectBtn = ''
 
