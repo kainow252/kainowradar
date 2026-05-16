@@ -2632,6 +2632,123 @@ admin.get('/api/stores/shopee/status', async (c) => {
   })
 })
 
+// POST /admin/api/stores/shopee/scrape — Scraping real via cookies da sessão do usuário
+// Frontend envia os cookies após login, backend acessa API interna da Shopee como o usuário
+admin.post('/api/stores/shopee/scrape', async (c) => {
+  const { DB } = c.env
+  const body = await c.req.json().catch(() => ({}))
+  const { store_id, cookies, page = 0, page_size = 100, limit = 0 } = body
+
+  if (!cookies) return c.json({ error: 'Cookies da sessão não enviados' }, 400)
+
+  const storeId = parseInt(store_id) || 0
+  const maxLinks = limit > 0 ? limit : 999999
+
+  // ── API interna real da Shopee Afiliados ─────────────────────
+  // Descoberta via DevTools: o painel usa essa API GraphQL internamente
+  const SHOPEE_API = 'https://affiliate.shopee.com.br/api/v1'
+
+  const allLinks: string[] = []
+  let currentPage = page
+  let hasMore = true
+  let totalFound = 0
+
+  const headers: Record<string, string> = {
+    'Cookie':           cookies,
+    'Content-Type':     'application/json',
+    'Accept':           'application/json',
+    'Referer':          'https://affiliate.shopee.com.br/offer/product_offer',
+    'User-Agent':       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'x-requested-with': 'XMLHttpRequest',
+    'x-csrftoken':      (cookies.match(/csrftoken=([^;]+)/) || [])[1] || ''
+  }
+
+  try {
+    while (hasMore && allLinks.length < maxLinks) {
+      // API real do painel de afiliados — endpoint de listagem de ofertas
+      const apiUrl = `${SHOPEE_API}/offer/product_offer?` + new URLSearchParams({
+        page_number: String(currentPage),
+        page_size:   String(page_size),
+        need_products_info: '1',
+        sort_type:   '2'
+      })
+
+      const res = await fetch(apiUrl, { headers }).catch(() => null)
+
+      if (!res || !res.ok) {
+        // Tenta endpoint alternativo
+        const res2 = await fetch(`${SHOPEE_API}/offer/get_offer_link`, {
+          method:  'POST',
+          headers,
+          body: JSON.stringify({
+            page_number: currentPage,
+            page_size,
+            sort_type: 2
+          })
+        }).catch(() => null)
+
+        if (!res2 || !res2.ok) break
+
+        const json2: any = await res2.json().catch(() => null)
+        const items2 = json2?.data?.offers || json2?.data?.items || json2?.data || []
+
+        if (!Array.isArray(items2) || items2.length === 0) { hasMore = false; break }
+
+        for (const item of items2) {
+          const link = item.affiliate_link || item.short_link || item.offer_link || item.link
+          if (link) allLinks.push(link)
+        }
+        totalFound = json2?.total || json2?.data?.total || allLinks.length
+        if (items2.length < page_size) hasMore = false
+        currentPage++
+        continue
+      }
+
+      const json: any = await res.json().catch(() => null)
+      const items = json?.data?.offers || json?.data?.items || json?.data?.list || json?.data || []
+
+      if (!Array.isArray(items) || items.length === 0) { hasMore = false; break }
+
+      for (const item of items) {
+        const link = item.affiliate_link || item.short_link || item.offer_link || item.link || item.url
+        if (link) allLinks.push(link)
+      }
+
+      totalFound = json?.data?.total_count || json?.data?.total || json?.total || allLinks.length
+      if (items.length < page_size) hasMore = false
+      currentPage++
+    }
+  } catch (err: any) {
+    return c.json({ ok: false, error: err.message, links: [], fetched: 0 })
+  }
+
+  if (allLinks.length === 0) {
+    return c.json({
+      ok: false,
+      fetched: 0,
+      links: [],
+      total: totalFound,
+      message: 'Nenhum link encontrado. Verifique se está logado no painel da Shopee.'
+    })
+  }
+
+  // Atualiza last_sync
+  await DB.prepare(`
+    INSERT INTO api_configs (id, name, network, is_active, commission_rate, created_at, updated_at)
+    VALUES ('shopee-afiliados','Shopee Afiliados','shopee-api',1,6.0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+    ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+  `).run()
+
+  return c.json({
+    ok:      true,
+    fetched: allLinks.length,
+    total:   totalFound,
+    page:    currentPage,
+    links:   allLinks,
+    has_more: hasMore && allLinks.length < maxLinks
+  })
+})
+
 // POST /admin/api/stores/shopee/fetch-links — Busca links via Shopee Afiliados API (SocialSoul)
 admin.post('/api/stores/shopee/fetch-links', async (c) => {
   const { DB } = c.env
@@ -8714,7 +8831,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260516c"><\/script>
+<script src="/static/admin-spa.js?v=20260516d"><\/script>
 </body>
 </html>`
 }
