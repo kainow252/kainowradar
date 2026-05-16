@@ -165,23 +165,121 @@ pages.get('/produto/:slug', async (c) => {
     `, { navCategories: navCatsNotFound, footerConfig: footerCfgNotFound, currentUser: await getCurrentUser(c) }), 404)
   }
 
-  // Busca histórico + relacionados em paralelo
-  const [histResult, relResult] = await Promise.all([
+  // ── Extrai palavras-chave do nome do produto para busca de variantes e relacionados ──
+  // Remove stopwords, cores e sufixos de variante para obter o "modelo base"
+  const STOPWORDS_PT = new Set(['de','do','da','com','para','por','em','no','na','e','a','o','os','as','um','uma'])
+  const COLOR_WORDS  = new Set(['preto','branco','prata','prateado','dourado','rosa','azul','verde','vermelho','cinza','laranja','roxo','amarelo','bege','chumbo','grafite','champagne','gold','silver','black','white','red','blue','green'])
+  const VARIANT_WORDS= new Set(['mini','max','pro','plus','lite','ultra','se','go','air','neo'])
+
+  // Normaliza nome: sem acentos, minúsculas
+  const normStr = (s: string) => s.toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^\w\s]/g,' ').replace(/\s+/g,' ').trim()
+
+  // Tokens significativos do produto atual (sem stopwords, cores, variantes)
+  const productTokens = normStr(product.name).split(' ')
+    .filter(t => t.length > 2 && !STOPWORDS_PT.has(t) && !COLOR_WORDS.has(t))
+
+  // "Modelo base" = primeiros 3-5 tokens mais específicos (ignora cor/variante)
+  const modelTokens = productTokens
+    .filter(t => !VARIANT_WORDS.has(t) && !/^\d+$/.test(t))
+    .slice(0, 5)
+
+  // Busca variantes: produtos com nome muito similar ao modelo base (mesma marca/modelo, cor diferente)
+  // Estratégia: busca por LIKE nos 2-3 tokens mais específicos do nome
+  const variantQuery = modelTokens.length >= 2
+    ? modelTokens.slice(0, 3).map(() => `normalizeName(p.name) LIKE ?`).join(' AND ')
+    : null
+
+  // Busca histórico + variantes + relacionados em paralelo
+  const variantLikes = modelTokens.slice(0, 3).map(t => `%${t}%`)
+
+  const [histResult, variantResult, relResult] = await Promise.all([
     DB.prepare(`
       SELECT ph.price, ph.in_stock, ph.recorded_at, s.name as store_name, s.slug as store_slug
       FROM price_history ph JOIN stores s ON s.id = ph.store_id
       WHERE ph.product_id = ? AND ph.recorded_at >= date('now','-90 days')
       ORDER BY ph.recorded_at ASC LIMIT 300
     `).bind(product.id).all(),
+    // Variantes: mesmo modelo, cor diferente — busca por nome similar na mesma categoria
+    variantQuery && variantLikes.length >= 2
+      ? DB.prepare(`
+          SELECT p.id, p.name, p.slug, p.image_url, p.best_price, p.category
+          FROM products p
+          WHERE p.id != ?
+            AND p.is_active = 1
+            AND p.category = ?
+            AND LOWER(p.name) LIKE ?
+            AND LOWER(p.name) LIKE ?
+            ${variantLikes[2] ? 'AND LOWER(p.name) LIKE ?' : ''}
+          ORDER BY p.best_price ASC
+          LIMIT 8
+        `).bind(
+          product.id,
+          product.category || '',
+          variantLikes[0], variantLikes[1],
+          ...(variantLikes[2] ? [variantLikes[2]] : [])
+        ).all<Product>()
+      : Promise.resolve({ results: [] as Product[] }),
+    // Relacionados: mesma categoria, mínimo de 1 offer, imagem disponível, excluindo variantes já encontradas
     DB.prepare(`
-      SELECT p.*, s.name as best_store_name FROM products p
+      SELECT p.id, p.name, p.slug, p.image_url, p.best_price, s.name as best_store_name
+      FROM products p
       LEFT JOIN stores s ON s.id = p.best_store_id
-      WHERE p.category = ? AND p.id != ? AND p.is_active = 1
-      ORDER BY p.offer_count DESC LIMIT 4
+      WHERE p.category = ?
+        AND p.id != ?
+        AND p.is_active = 1
+        AND p.image_url IS NOT NULL
+        AND p.image_url != ''
+        AND p.best_price > 0
+      ORDER BY p.offer_count DESC, p.updated_at DESC
+      LIMIT 8
     `).bind(product.category || '', product.id).all<Product>(),
   ])
   priceHistory = histResult.results as any[]
-  related      = relResult.results as Product[]
+  const variants = (variantResult.results || []) as Product[]
+  // Relacionados: exclui os que já são variantes e limita a 4
+  const variantIds = new Set(variants.map((v: Product) => v.id))
+  related = ((relResult.results || []) as Product[])
+    .filter((r: Product) => !variantIds.has(r.id))
+    .slice(0, 4)
+
+  // ── Detecta a cor/variante do produto atual ─────────────
+  // Usada para destacar qual chip de variante está ativo
+  const ALL_COLORS = ['preto','branco','prata','prateado','dourado','rosa','azul','verde',
+                      'vermelho','cinza','laranja','roxo','amarelo','bege','chumbo','grafite',
+                      'champagne','gold','silver','black','white','red','blue','green','titanio',
+                      'titanium','verde-oliva','coral','midnight','starlight','purple','pink']
+  const normName = normStr(product.name)
+  const currentColor = ALL_COLORS.find(c => normName.split(' ').includes(c)) || null
+
+  // Extrai cor/variante de cada produto variante para exibir nos chips
+  const variantsWithColor = variants.map(v => {
+    const vNorm = normStr(v.name)
+    const vTokens = vNorm.split(' ')
+    // Tenta detectar a cor da variante
+    const vColor = ALL_COLORS.find(c => vTokens.includes(c)) || null
+    // Label do chip: cor detectada, ou última palavra do nome, ou nome truncado
+    const chipLabel = vColor
+      ? (vColor.charAt(0).toUpperCase() + vColor.slice(1))
+      : (() => {
+          // Pega tokens que diferem do produto atual (provavelmente a variante)
+          const diffTokens = vTokens.filter(t =>
+            t.length > 2 &&
+            !modelTokens.includes(t) &&
+            !STOPWORDS_PT.has(t)
+          )
+          return diffTokens.length > 0
+            ? (diffTokens[0].charAt(0).toUpperCase() + diffTokens[0].slice(1))
+            : v.name.split(' ').slice(-1)[0]
+        })()
+    return { ...v, chipLabel, vColor }
+  })
+
+  // Label do chip do produto atual
+  const currentChipLabel = currentColor
+    ? (currentColor.charAt(0).toUpperCase() + currentColor.slice(1))
+    : product.name.split(' ').slice(-1)[0]
 
   // ── DADOS CALCULADOS ────────────────────────────────────
   const specs    = product.specs ? (() => { try { return JSON.parse(product.specs!) } catch { return {} } })() : {}
@@ -374,6 +472,71 @@ pages.get('/produto/:slug', async (c) => {
     </div>
   ` : ''
 
+  // ── VARIANTES HTML ─────────────────────────────────────────
+  // Chips de cor/variante para navegar entre versões do mesmo modelo
+  const variantsHTML = variantsWithColor.length > 0 ? (() => {
+    // Chip do produto atual (destacado como ativo)
+    const currentChip = `
+      <span title="${product!.name}" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border-2 border-blue-500 bg-blue-50 text-blue-700 cursor-default ring-2 ring-blue-200">
+        <span class="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block"></span>
+        ${currentChipLabel}
+        <span class="text-blue-400 font-normal text-[10px]">(atual)</span>
+      </span>`
+
+    // Chips das variantes — ordenados por preço
+    const variantChips = variantsWithColor
+      .sort((a, b) => (a.best_price || 0) - (b.best_price || 0))
+      .map(v => {
+        // Cor de fundo do chip baseada na cor detectada
+        const colorMap: Record<string, string> = {
+          preto: 'bg-gray-900 text-white border-gray-700',
+          black: 'bg-gray-900 text-white border-gray-700',
+          branco: 'bg-gray-50 text-gray-700 border-gray-300',
+          white: 'bg-gray-50 text-gray-700 border-gray-300',
+          silver: 'bg-slate-200 text-slate-700 border-slate-400',
+          prata: 'bg-slate-200 text-slate-700 border-slate-400',
+          prateado: 'bg-slate-200 text-slate-700 border-slate-400',
+          dourado: 'bg-yellow-200 text-yellow-800 border-yellow-400',
+          gold: 'bg-yellow-200 text-yellow-800 border-yellow-400',
+          rosa: 'bg-pink-100 text-pink-700 border-pink-300',
+          pink: 'bg-pink-100 text-pink-700 border-pink-300',
+          azul: 'bg-blue-100 text-blue-700 border-blue-300',
+          blue: 'bg-blue-100 text-blue-700 border-blue-300',
+          verde: 'bg-green-100 text-green-700 border-green-300',
+          green: 'bg-green-100 text-green-700 border-green-300',
+          vermelho: 'bg-red-100 text-red-700 border-red-300',
+          red: 'bg-red-100 text-red-700 border-red-300',
+          roxo: 'bg-purple-100 text-purple-700 border-purple-300',
+          purple: 'bg-purple-100 text-purple-700 border-purple-300',
+          cinza: 'bg-gray-200 text-gray-700 border-gray-400',
+          grafite: 'bg-gray-700 text-white border-gray-600',
+          titanio: 'bg-slate-300 text-slate-800 border-slate-500',
+          titanium: 'bg-slate-300 text-slate-800 border-slate-500',
+          coral: 'bg-orange-100 text-orange-700 border-orange-300',
+          laranja: 'bg-orange-100 text-orange-700 border-orange-300',
+        }
+        const chipClass = v.vColor && colorMap[v.vColor]
+          ? `border ${colorMap[v.vColor]}`
+          : 'border border-gray-200 bg-gray-50 text-gray-700'
+        const priceStr = v.best_price && v.best_price > 0 ? formatCurrency(v.best_price) : ''
+        return `
+          <a href="/produto/${v.slug}" title="${v.name}" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold ${chipClass} hover:opacity-80 hover:shadow-sm transition-all">
+            ${v.chipLabel}
+            ${priceStr ? `<span class="font-bold text-[10px] opacity-70">${priceStr}</span>` : ''}
+          </a>`
+      }).join('')
+
+    return `
+      <div class="bg-white rounded-2xl shadow-sm border p-4">
+        <div class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2.5">🎨 Outras versões deste modelo</div>
+        <div class="flex flex-wrap gap-2">
+          ${currentChip}
+          ${variantChips}
+        </div>
+        <p class="text-[11px] text-gray-400 mt-2">Clique em uma versão para comparar preços separadamente</p>
+      </div>`
+  })() : ''
+
   // ── RELACIONADOS HTML ─────────────────────────────────────
   const relatedHTML = related.length > 0 ? `
     <div class="bg-white rounded-2xl shadow-sm border p-6">
@@ -382,11 +545,17 @@ pages.get('/produto/:slug', async (c) => {
         ${related.map(r => `
           <a href="/produto/${r.slug}" class="group flex flex-col rounded-xl border border-gray-100 hover:border-blue-300 hover:shadow-md transition-all overflow-hidden bg-gray-50">
             <div class="h-28 flex items-center justify-center p-3 bg-white">
-              <img src="${r.image_url || ''}" alt="${r.name}" class="max-h-full object-contain group-hover:scale-105 transition-transform">
+              ${r.image_url
+                ? `<img src="${r.image_url}" alt="${r.name}" class="max-h-full object-contain group-hover:scale-105 transition-transform" loading="lazy">`
+                : `<div class="w-16 h-16 rounded-xl bg-gray-100 flex items-center justify-center text-2xl">📦</div>`
+              }
             </div>
             <div class="p-2.5">
               <div class="text-xs text-gray-700 font-medium leading-tight line-clamp-2">${r.name}</div>
-              <div class="text-sm font-black text-blue-700 mt-1">${r.best_price ? formatCurrency(r.best_price) : '—'}</div>
+              <div class="flex items-center justify-between mt-1.5">
+                <div class="text-sm font-black text-blue-700">${r.best_price && r.best_price > 0 ? formatCurrency(r.best_price) : '—'}</div>
+                ${ (r as any).best_store_name ? `<div class="text-[10px] text-gray-400 truncate max-w-[60px]">${(r as any).best_store_name}</div>` : '' }
+              </div>
             </div>
           </a>
         `).join('')}
@@ -457,6 +626,9 @@ pages.get('/produto/:slug', async (c) => {
             <h1 class="text-xl md:text-2xl font-black text-gray-900 mt-1 leading-tight">${product.name}</h1>
             ${ isAtHistMin ? `<div class="inline-flex items-center gap-1.5 mt-2 bg-green-50 border border-green-200 text-green-800 text-xs font-bold px-3 py-1 rounded-full">🎉 Menor preço dos últimos 90 dias!</div>` : '' }
           </div>
+
+          <!-- Seletor de variantes/cores (se existirem) -->
+          ${variantsHTML}
 
           <!-- Preço resumo -->
           ${ offers.length > 1 ? `
