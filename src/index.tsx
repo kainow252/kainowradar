@@ -303,7 +303,7 @@ app.get('/', async (c) => {
         AND p.image_url NOT LIKE '%unsplash%'
         AND p.name NOT LIKE 'cfegdhabc%'
         AND p.name NOT LIKE 'Produto Importado%'
-      ORDER BY RANDOM() LIMIT 8
+      ORDER BY RANDOM() LIMIT 16
     `).all(),
     DB.prepare(`
       SELECT p.*, s.name as best_store_name,
@@ -315,7 +315,7 @@ app.get('/', async (c) => {
         AND p.image_url IS NOT NULL AND p.image_url != ''
         AND p.name NOT LIKE 'cfegdhabc%'
         AND p.name NOT LIKE 'Produto Importado%'
-      ORDER BY RANDOM() LIMIT 8
+      ORDER BY RANDOM() LIMIT 16
     `).all(),
     DB.prepare(`SELECT * FROM categories WHERE is_active = 1 ORDER BY sort_order ASC`).all(),
     DB.prepare(`SELECT id, name, slug, logo_url FROM stores WHERE is_active = 1 ORDER BY name ASC LIMIT 100`).all(),
@@ -769,38 +769,38 @@ app.get('/', async (c) => {
   // Duplica o array para criar loop contínuo no marquee
   const storeCards = (arr: typeof stores) => arr.map(s => `
     <a href="/loja/${s.slug}"
-       class="store-pill-card flex-shrink-0 flex flex-col items-center gap-2 w-[76px] cursor-pointer group"
+       class="store-pill-card flex-shrink-0 flex flex-col items-center gap-3 w-[100px] cursor-pointer group"
        title="Comparar preços na ${s.name}">
-      <div class="store-logo-circle w-16 h-16 rounded-2xl flex items-center justify-center shadow-md transition-all duration-200 group-hover:scale-110 group-hover:shadow-xl overflow-hidden ring-2 ring-transparent group-hover:ring-blue-200"
-           style="${s.logoUrl ? '' : s.logoSvg ? 'background:#fff;' : `background:${s.bg};border:2px solid ${s.color};`}">
+      <div class="store-logo-circle w-20 h-20 rounded-2xl flex items-center justify-center shadow-lg transition-all duration-300 group-hover:scale-110 group-hover:shadow-2xl overflow-hidden ring-2 ring-transparent group-hover:ring-blue-300"
+           style="${s.logoUrl ? 'background:#f8fafc;' : s.logoSvg ? 'background:#fff;' : `background:${s.bg};`} border:1.5px solid rgba(0,0,0,0.07);">
         ${s.logoUrl
-          ? `<img src="${s.logoUrl}" alt="${s.name}" loading="lazy" class="w-full h-full object-cover" style="display:block" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-             <span class="hidden w-full h-full items-center justify-center font-black text-xl leading-none rounded-2xl" style="background:${s.bg};color:${s.color}">${s.initial}</span>`
+          ? `<img src="${s.logoUrl}" alt="${s.name}" loading="lazy" class="w-[72px] h-[72px] object-contain p-1" style="display:block" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+             <span class="hidden w-full h-full items-center justify-center font-black text-2xl leading-none rounded-2xl" style="background:${s.bg};color:${s.color}">${s.initial}</span>`
           : s.logoSvg
             ? s.logoSvg
-            : `<span class="font-black text-xl leading-none" style="color:${s.color}">${s.initial}</span>`
+            : `<span class="font-black text-2xl leading-none" style="color:${s.color}">${s.initial}</span>`
         }
       </div>
-      <span class="text-xs text-gray-700 font-bold text-center leading-tight w-full truncate group-hover:text-blue-700 transition-colors">${s.name}</span>
-      <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full border" style="color:${s.color}; background:${s.bg}; border-color:${s.color}33">${s.text}</span>
+      <span class="text-[11px] text-gray-800 font-bold text-center leading-tight w-full group-hover:text-blue-700 transition-colors" style="word-break:break-word">${s.name}</span>
+      <span class="text-[10px] font-semibold px-2.5 py-1 rounded-full" style="color:${s.color}; background:${s.bg}; border:1px solid ${s.color}44; letter-spacing:0.01em">${s.text}</span>
     </a>
   `).join('')
 
   const storesHTML = `
     <section class="bg-white border-b border-gray-100 overflow-hidden">
-      <div class="w-full px-4 pt-5 pb-3">
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-          <div class="flex items-center gap-2.5">
-            <div class="w-1 h-5 bg-gradient-to-b from-blue-500 to-blue-700 rounded-full"></div>
-            <h2 class="text-base font-black text-gray-800">Lojas Parceiras</h2>
-            <span class="inline-flex items-center gap-1 bg-blue-50 text-blue-600 text-xs font-bold px-2.5 py-1 rounded-full border border-blue-100">
+      <div class="w-full px-5 pt-6 pb-4">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+          <div class="flex items-center gap-3">
+            <div class="w-1 h-6 bg-gradient-to-b from-blue-500 to-blue-700 rounded-full"></div>
+            <h2 class="text-lg font-black text-gray-900 tracking-tight">Lojas Parceiras</h2>
+            <span class="inline-flex items-center gap-1.5 bg-blue-50 text-blue-600 text-[11px] font-bold px-3 py-1.5 rounded-full border border-blue-100 shadow-sm">
               <span class="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse"></span>
-              <span id="stores-count">${stores.length}</span> lojas
+              <span id="stores-count">${stores.length}</span> lojas ativas
             </span>
           </div>
           <!-- Campo de busca de loja -->
-          <div class="relative w-full sm:w-64">
-            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
+          <div class="relative w-full sm:w-72">
+            <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/></svg>
             </span>
             <input
@@ -808,29 +808,29 @@ app.get('/', async (c) => {
               type="text"
               placeholder="Buscar loja..."
               autocomplete="off"
-              class="w-full pl-9 pr-8 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 bg-gray-50 transition-all"
+              class="w-full pl-10 pr-9 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 bg-gray-50 transition-all shadow-sm"
             />
-            <button id="store-search-clear" onclick="document.getElementById('store-search-input').value='';document.getElementById('store-search-input').dispatchEvent(new Event('input'))" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 hidden text-lg leading-none">&times;</button>
+            <button id="store-search-clear" onclick="document.getElementById('store-search-input').value='';document.getElementById('store-search-input').dispatchEvent(new Event('input'))" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 hidden text-lg leading-none">&times;</button>
           </div>
         </div>
       </div>
 
       <!-- Lojas: marquee se tiver 10+, grid estático se tiver poucas -->
       <!-- Threshold 10: abaixo disso a duplicação do loop deixa lojas aparecendo 2× no viewport -->
-      <div id="stores-marquee-section" class="relative mb-4">
+      <div id="stores-marquee-section" class="relative mb-5">
         ${stores.length >= 10 ? `
         <div class="stores-marquee-wrapper">
           <div class="stores-marquee-fade-left"></div>
           <div class="stores-marquee-fade-right"></div>
           <div class="stores-marquee" style="animation-duration:${Math.max(30, stores.length * 1.8)}s">
-            <div class="stores-marquee-track flex gap-4 px-4 py-2">
+            <div class="stores-marquee-track flex gap-6 px-6 py-3">
               ${storeCards(stores)}
               ${storeCards(stores)}
             </div>
           </div>
         </div>
         ` : `
-        <div class="flex flex-wrap gap-3 px-4 py-2">
+        <div class="flex flex-wrap gap-6 px-6 py-3">
           ${storeCards(stores)}
         </div>
         `}
