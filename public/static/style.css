@@ -862,50 +862,54 @@ main, section, article, header, footer, nav {
   .section-title { font-size: 1.05rem !important; }
 
   /* ── OFFER CARD mobile: layout em 2 linhas fixas ── */
-  /* Linha 1: [logo] [preço+frete]   Linha 2: [botão full-width] */
+  /* Linha 1: [logo] [preço+frete]
+     Linha 2: [      botão centralizado      ]            */
 
   .offer-card-body {
+    display: flex !important;
+    flex-wrap: wrap !important;
     align-items: center;
     gap: 0.375rem 0.5rem;
-    padding: 0.625rem 0.875rem;
+    padding: 0.75rem 0.875rem 0.625rem;
   }
   .offer-card-logo {
     width: 40px;
     height: 32px;
     padding: 0 3px;
-    flex-shrink: 0;
+    flex: 0 0 auto;
     order: 1;
   }
-  /* Bloco do preço: ocupa o espaço restante da linha 1 */
+  /* Bloco do preço: cresce para preencher a linha 1 */
   .offer-card-body > div.flex-1 {
     order: 2;
     min-width: 0;
-    flex: 1 1 0%;
+    flex: 1 1 auto;
     overflow: hidden;
   }
   .offer-price {
-    font-size: 1rem !important;   /* 16px — cabe até R$ 9.999,99 */
+    font-size: 1rem !important;
     line-height: 1.2;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 100%;
   }
+  /* Botão: ocupa linha própria (flex-basis 100% força quebra),
+     centralizado com margin auto */
   .offer-card-btn {
-    /* Sempre na segunda linha */
     order: 3;
+    flex: 0 0 100% !important;
     width: 100% !important;
-    flex-basis: 100% !important;
-    flex-shrink: 0 !important;
-    flex-grow: 0 !important;
-    text-align: center;
+    display: flex !important;
+    align-items: center;
     justify-content: center;
-    padding: 0.45rem 0.75rem;
-    font-size: 0.8125rem;        /* 13px */
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
     font-weight: 700;
     border-radius: 0.625rem;
-    margin-top: 0;
+    margin-top: 0.375rem;
     box-sizing: border-box;
+    white-space: nowrap;
   }
 }
 
