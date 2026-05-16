@@ -1,386 +1,287 @@
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║  KainowRadar — Shopee Afiliados Console Script                  ║
-// ║  Cole este script no Console do Chrome na página:               ║
-// ║  https://affiliate.shopee.com.br/offer/product_offer            ║
-// ║                                                                  ║
-// ║  Ele roda em background, sem precisar de extensão.              ║
-// ╚══════════════════════════════════════════════════════════════════╝
+// ═══════════════════════════════════════════════════════════════════════
+// KainowRadar — Script de Console para Shopee Afiliados
+// Cole este script no Console do DevTools em affiliate.shopee.com.br
+// O script roda com sua sessão ativa — sem precisar de nada extra!
+// ═══════════════════════════════════════════════════════════════════════
+(async function KainowShopeeCollect() {
 
-;(async function KainowShopeeSync() {
+  // ── CONFIG ────────────────────────────────────────────────────────────
+  const KAINOW_URL = 'https://shopping-compare.pages.dev'   // URL do KainowRadar
+  const STORE_ID   = __KAINOW_STORE_ID__ || 4              // ID da loja no banco (substitua se necessário)
+  const PAGE_LIMIT = 100   // produtos por página
+  const BATCH_LINK = 50    // gerar links em lotes de 50
+  const MAX_ITEMS  = 0     // 0 = todos
+  const DELAY_MS   = 300   // delay entre requisições (ms)
 
-  // ════════════════════════════════════════════════
-  // ⚙️  CONFIGURAÇÃO — edite antes de rodar
-  // ════════════════════════════════════════════════
-  const CONFIG = {
-    storeId:   __STORE_ID__,                          // ID da loja Shopee no KainowRadar
-    kainowUrl: 'https://kainowradar.com.br',          // URL do KainowRadar
-    maxPages:  0,                                     // 0 = todas as páginas
-    pageSize:  100,                                   // itens por página (máx 100)
-    delayMs:   600,                                   // pausa entre páginas (ms)
-    chunkSize: 50,                                    // links por envio ao KainowRadar
-  }
-  // ════════════════════════════════════════════════
+  // ── UI OVERLAY ────────────────────────────────────────────────────────
+  const existing = document.getElementById('__kainow_overlay__')
+  if (existing) existing.remove()
 
-  if (!CONFIG.storeId || CONFIG.storeId === '__STORE_ID__') {
-    alert('⚠️ Configure o storeId no script antes de rodar!\nAbra o script e troque __STORE_ID__ pelo número da sua loja.')
-    return
-  }
-
-  // ─── Overlay de progresso ────────────────────────────────────────────
-  document.getElementById('__kr_overlay')?.remove()
-  const ov = document.createElement('div')
-  ov.id = '__kr_overlay'
-  ov.style.cssText = [
-    'position:fixed', 'bottom:24px', 'right:24px', 'z-index:2147483647',
-    'background:#0f172a', 'color:#f1f5f9',
-    'padding:18px 20px', 'border-radius:16px',
-    'font-family:system-ui,sans-serif', 'font-size:13px',
-    'min-width:320px', 'max-width:380px',
-    'box-shadow:0 8px 40px rgba(0,0,0,.6)',
-    'border:1px solid #1e293b',
-    'transition:opacity .3s',
-  ].join(';')
-
-  ov.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-      <div style="display:flex;align-items:center;gap:9px">
-        <div style="width:10px;height:10px;border-radius:50%;background:#EE4D2D;box-shadow:0 0 6px #EE4D2D80;animation:__kr_pulse 1s infinite"></div>
-        <strong style="color:#EE4D2D;font-size:14px">KainowRadar</strong>
-        <span style="color:#475569;font-size:11px">Shopee Sync</span>
-      </div>
-      <button onclick="this.closest('#__kr_overlay').style.opacity='.2'" style="background:none;border:none;color:#475569;cursor:pointer;font-size:16px">−</button>
-    </div>
-    <div id="__kr_status" style="color:#94a3b8;font-size:12px;margin-bottom:10px">Iniciando...</div>
-    <div style="background:#1e293b;border-radius:6px;height:5px;overflow:hidden;margin-bottom:10px">
-      <div id="__kr_bar" style="height:100%;background:linear-gradient(90deg,#EE4D2D,#FF7337);width:0%;transition:width .4s ease"></div>
-    </div>
-    <div style="display:flex;gap:0;margin-bottom:10px">
-      <div style="flex:1;background:#1e293b;border-radius:8px 0 0 8px;padding:8px;text-align:center;border:1px solid #334155;border-right:none">
-        <div id="__kr_found" style="font-size:16px;font-weight:800;color:#fb923c">0</div>
-        <div style="font-size:10px;color:#475569">Encontrados</div>
-      </div>
-      <div style="flex:1;background:#1e293b;padding:8px;text-align:center;border:1px solid #334155;border-right:none">
-        <div id="__kr_saved" style="font-size:16px;font-weight:800;color:#22c55e">0</div>
-        <div style="font-size:10px;color:#475569">Importados</div>
-      </div>
-      <div style="flex:1;background:#1e293b;border-radius:0 8px 8px 0;padding:8px;text-align:center;border:1px solid #334155">
-        <div id="__kr_page" style="font-size:16px;font-weight:800;color:#60a5fa">1</div>
-        <div style="font-size:10px;color:#475569">Página</div>
-      </div>
-    </div>
-    <div id="__kr_log" style="background:#020617;border:1px solid #1e293b;border-radius:8px;padding:8px;font-size:11px;font-family:monospace;max-height:80px;overflow-y:auto;color:#475569"></div>
-    <style>@keyframes __kr_pulse{0%,100%{opacity:1}50%{opacity:.3}}</style>
+  const overlay = document.createElement('div')
+  overlay.id = '__kainow_overlay__'
+  overlay.style.cssText = `
+    position:fixed;bottom:20px;right:20px;z-index:999999;
+    background:#1e293b;color:#e2e8f0;border-radius:16px;
+    padding:16px 20px;width:340px;font-family:monospace;font-size:12px;
+    box-shadow:0 8px 32px rgba(0,0,0,0.4);border:1px solid #334155;
   `
-  document.body.appendChild(ov)
+  overlay.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="font-size:14px;font-weight:bold;color:#f97316">🛒 KainowRadar Shopee</div>
+      <button id="__kainow_stop__" style="background:#ef4444;color:white;border:none;border-radius:8px;padding:3px 10px;cursor:pointer;font-size:11px">⏹ Parar</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px">
+      <div style="background:#0f172a;border-radius:8px;padding:6px;text-align:center">
+        <div id="__k_found__" style="font-size:18px;font-weight:900;color:#f97316">0</div>
+        <div style="font-size:10px;color:#64748b">Encontrados</div>
+      </div>
+      <div style="background:#0f172a;border-radius:8px;padding:6px;text-align:center">
+        <div id="__k_saved__" style="font-size:18px;font-weight:900;color:#22c55e">0</div>
+        <div style="font-size:10px;color:#64748b">Salvos</div>
+      </div>
+      <div style="background:#0f172a;border-radius:8px;padding:6px;text-align:center">
+        <div id="__k_page__" style="font-size:18px;font-weight:900;color:#3b82f6">0</div>
+        <div style="font-size:10px;color:#64748b">Páginas</div>
+      </div>
+    </div>
+    <div id="__k_bar_wrap__" style="background:#0f172a;border-radius:6px;height:6px;margin-bottom:8px;overflow:hidden">
+      <div id="__k_bar__" style="height:100%;background:linear-gradient(90deg,#f97316,#ef4444);width:0%;transition:width 0.4s"></div>
+    </div>
+    <div id="__k_log__" style="height:90px;overflow-y:auto;background:#0f172a;border-radius:8px;padding:8px;font-size:11px;color:#94a3b8;line-height:1.5"></div>
+    <div id="__k_status__" style="margin-top:8px;font-size:11px;color:#64748b;text-align:center">Iniciando...</div>
+  `
+  document.body.appendChild(overlay)
 
-  const elStatus = () => document.getElementById('__kr_status')
-  const elBar    = () => document.getElementById('__kr_bar')
-  const elFound  = () => document.getElementById('__kr_found')
-  const elSaved  = () => document.getElementById('__kr_saved')
-  const elPage   = () => document.getElementById('__kr_page')
-  const elLog    = () => document.getElementById('__kr_log')
+  let __stop = false
+  document.getElementById('__kainow_stop__').onclick = () => {
+    __stop = true
+    kLog('🛑 Parando após página atual...')
+  }
 
-  function setStatus(msg) {
-    const e = elStatus(); if (e) e.textContent = msg
+  // ── HELPERS ───────────────────────────────────────────────────────────
+  let totalFound = 0, totalSaved = 0, pagesDone = 0
+
+  function kLog(msg) {
+    const el = document.getElementById('__k_log__')
+    if (!el) return
+    const t = new Date().toLocaleTimeString('pt-BR')
+    el.innerHTML += `<div><span style="color:#475569">[${t}]</span> ${msg}</div>`
+    el.scrollTop = el.scrollHeight
     console.log('[KainowRadar]', msg)
   }
-  function setBar(pct) {
-    const e = elBar(); if (e) e.style.width = Math.min(100, pct) + '%'
-  }
-  function setStats(found, saved, page) {
-    const ef = elFound(), es = elSaved(), ep = elPage()
+
+  function kUpdate(found, saved, page, pct, status) {
+    const ef = document.getElementById('__k_found__')
+    const es = document.getElementById('__k_saved__')
+    const ep = document.getElementById('__k_page__')
+    const eb = document.getElementById('__k_bar__')
+    const est = document.getElementById('__k_status__')
     if (ef) ef.textContent = found.toLocaleString('pt-BR')
     if (es) es.textContent = saved.toLocaleString('pt-BR')
     if (ep) ep.textContent = page
-  }
-  function addLog(msg, color = '#475569') {
-    const el = elLog()
-    if (!el) return
-    const line = document.createElement('div')
-    line.style.color = color
-    line.style.marginBottom = '2px'
-    line.textContent = new Date().toLocaleTimeString('pt-BR') + ' ' + msg
-    el.appendChild(line)
-    el.scrollTop = el.scrollHeight
-    while (el.children.length > 80) el.removeChild(el.firstChild)
+    if (eb) eb.style.width = Math.min(pct, 100) + '%'
+    if (est) est.textContent = status || ''
   }
 
-  // ─── Variável de parada ───────────────────────────────────────────────
-  window.__krStop = false
-  console.log('[KainowRadar] Para parar: window.__krStop = true')
+  function delay(ms) { return new Promise(r => setTimeout(r, ms)) }
 
-  // ─── Estatísticas globais ─────────────────────────────────────────────
-  let totalFound   = 0
-  let totalSaved   = 0
-  let currentPage  = 1
-  let hasMore      = true
+  const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || ''
 
-  // ════════════════════════════════════════════════════════════════
-  // 1. Descobre total de produtos via API
-  // ════════════════════════════════════════════════════════════════
-  setStatus('Conectando à API da Shopee...')
+  // ── PASSO 1: Lista todos os produtos com paginação ────────────────────
+  kLog('🚀 Iniciando coleta via API da Shopee...')
+  kUpdate(0, 0, 0, 2, 'Buscando lista de produtos...')
 
-  async function apiGet(page, size) {
-    const url = `https://affiliate.shopee.com.br/api/v1/offer/product_offer?page_number=${page}&page_size=${size}&need_products_info=1&sort_type=2`
-    const r = await fetch(url, {
-      credentials: 'include',
-      headers: { 'Accept': 'application/json', 'x-requested-with': 'XMLHttpRequest' }
-    })
-    if (r.status === 401 || r.status === 403) throw new Error('Sessão expirada — faça login novamente')
-    if (!r.ok) throw new Error(`HTTP ${r.status}`)
-    return r.json()
-  }
+  const allItems = []
+  let offset = 0
+  let hasMore = true
+  let totalAPI = 0
 
-  // ════════════════════════════════════════════════════════════════
-  // 2. Gera link de afiliado para um produto
-  //    Tenta 3 endpoints em ordem de preferência
-  // ════════════════════════════════════════════════════════════════
-  async function getAffiliateLink(offer) {
-    // Opção A: já vem no objeto
-    const direct = offer.short_link || offer.affiliate_link || offer.offer_link
-      || offer.sub_link || offer.link
-    if (direct && direct.startsWith('http')) return direct
+  while (hasMore && (MAX_ITEMS === 0 || allItems.length < MAX_ITEMS)) {
+    if (__stop) break
 
-    const itemId = offer.item_id || offer.product_id || offer.itemid
-    const shopId = offer.shop_id || offer.shopid || 0
-    if (!itemId) return null
+    kLog(`📄 Página ${pagesDone + 1} (offset ${offset})...`)
 
-    // Opção B: endpoint /link/generate (botão "Obter link" da UI)
-    try {
-      const r = await fetch('https://affiliate.shopee.com.br/api/v1/link/generate', {
-        method: 'POST',
+    const res = await fetch(
+      `/api/v3/offer/product/list?list_type=2&sort_type=2&page_offset=${offset}&page_limit=${PAGE_LIMIT}&client_type=1`,
+      {
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'x-requested-with': 'XMLHttpRequest' },
-        body: JSON.stringify({ item_list: [{ item_id: itemId, shop_id: shopId }] })
-      })
-      if (r.ok) {
-        const d = await r.json()
-        const link = d?.data?.link_list?.[0]?.short_link
-          || d?.data?.link_list?.[0]?.affiliate_link
-          || d?.data?.[0]?.short_link
-        if (link) return link
-      }
-    } catch(_) {}
-
-    // Opção C: endpoint antigo /offer/generate_affiliate_link
-    try {
-      const r = await fetch('https://affiliate.shopee.com.br/api/v1/offer/generate_affiliate_link', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ item_id: itemId, shop_id: shopId })
-      })
-      if (r.ok) {
-        const d = await r.json()
-        return d?.data?.short_link || d?.data?.affiliate_link || null
-      }
-    } catch(_) {}
-
-    return null
-  }
-
-  // ════════════════════════════════════════════════════════════════
-  // 3. Gera links em massa via "Obter Link em Massa"
-  //    = mesmo endpoint que o botão laranja usa
-  // ════════════════════════════════════════════════════════════════
-  async function getBulkLinks(offers) {
-    const items = offers
-      .filter(o => o.item_id || o.product_id || o.itemid)
-      .map(o => ({ item_id: o.item_id || o.product_id || o.itemid, shop_id: o.shop_id || o.shopid || 0 }))
-
-    if (!items.length) return []
-
-    // Tenta endpoint de bulk
-    const endpoints = [
-      'https://affiliate.shopee.com.br/api/v1/link/generate',
-      'https://affiliate.shopee.com.br/api/v1/offer/batch_generate_affiliate_link',
-    ]
-
-    for (const ep of endpoints) {
-      try {
-        const body = ep.includes('batch')
-          ? { items }
-          : { item_list: items }
-
-        const r = await fetch(ep, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'x-requested-with': 'XMLHttpRequest' },
-          body: JSON.stringify(body)
-        })
-        if (!r.ok) continue
-        const d = await r.json()
-
-        // Normaliza resposta dos diferentes endpoints
-        const list = d?.data?.link_list || d?.data?.links || d?.data || []
-        if (Array.isArray(list) && list.length > 0) {
-          const links = list.map(l => l?.short_link || l?.affiliate_link || l?.link).filter(Boolean)
-          if (links.length > 0) return { links, items }
+        headers: {
+          'Accept': 'application/json',
+          'x-requested-with': 'XMLHttpRequest',
+          'x-csrftoken': csrf
         }
-      } catch(_) {}
+      }
+    ).catch(e => { kLog('❌ Erro: ' + e.message); return null })
+
+    if (!res) { hasMore = false; break }
+
+    const json = await res.json().catch(() => null)
+
+    if (!json || json.is_login === false || json.error) {
+      kLog('⚠️ Sessão inválida ou sem produtos: ' + JSON.stringify(json))
+      hasMore = false; break
     }
-    return { links: [], items }
+
+    const items = json?.data?.items || json?.data?.list || (Array.isArray(json?.data) ? json.data : [])
+    totalAPI = json?.data?.total_count || json?.data?.total || totalAPI
+
+    if (!items.length) { hasMore = false; break }
+
+    for (const it of items) {
+      allItems.push({
+        item_id:    it.item_id || it.id,
+        item_name:  it.item_name || it.name || it.title || '',
+        price_min:  it.price_min != null ? Number(it.price_min) / 100000 : null,
+        image:      it.image || it.image_url || null,
+        commission: it.commission_rate || it.commission || null,
+        sales:      it.sales || 0,
+        shop_id:    it.shop_id || null,
+      })
+    }
+
+    pagesDone++
+    totalFound = allItems.length
+    offset += PAGE_LIMIT
+
+    const pct = totalAPI > 0 ? Math.round((allItems.length / totalAPI) * 45) : Math.min(pagesDone * 3, 45)
+    kUpdate(totalFound, totalSaved, pagesDone, pct, `${totalFound} produtos encontrados...`)
+    kLog(`✅ Página ${pagesDone}: ${items.length} itens (total: ${totalFound}${totalAPI ? ' / ' + totalAPI : ''})`)
+
+    if (items.length < PAGE_LIMIT) hasMore = false
+    await delay(DELAY_MS)
   }
 
-  // ════════════════════════════════════════════════════════════════
-  // 4. Envia links para o KainowRadar
-  // ════════════════════════════════════════════════════════════════
-  async function sendToKainow(richLines) {
-    if (!richLines.length) return { imported: 0, updated: 0 }
+  if (allItems.length === 0) {
+    kLog('❌ Nenhum produto encontrado! Verifique se está logado.')
+    kUpdate(0, 0, 0, 0, '❌ Sem produtos')
+    return
+  }
+
+  kLog(`📦 Total de produtos encontrados: ${allItems.length}`)
+  kLog('🔗 Gerando links afiliados em lotes de ' + BATCH_LINK + '...')
+  kUpdate(totalFound, 0, pagesDone, 50, 'Gerando links afiliados...')
+
+  // ── PASSO 2: Gera links afiliados em lotes ────────────────────────────
+  const itemsWithLinks = []
+
+  for (let i = 0; i < allItems.length; i += BATCH_LINK) {
+    if (__stop) break
+
+    const batch = allItems.slice(i, i + BATCH_LINK)
+    const itemIds = batch.map(it => it.item_id).filter(Boolean)
+
+    kLog(`🔗 Lote ${Math.floor(i/BATCH_LINK)+1}: gerando ${itemIds.length} links...`)
+
+    const linkRes = await fetch('/api/v3/offer/batch_product_links', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'x-requested-with': 'XMLHttpRequest',
+        'x-csrftoken': csrf
+      },
+      body: JSON.stringify({
+        item_ids: itemIds,
+        source_caller: 'WEB_SITE_CALLER'
+      })
+    }).catch(e => { kLog('⚠️ Erro batch: ' + e.message); return null })
+
+    if (linkRes) {
+      const linkJson = await linkRes.json().catch(() => null)
+      const linksMap = {}
+
+      // Estrutura: data = array de { item_id, product_link } ou { item_id, short_link }
+      const linkData = linkJson?.data || []
+      if (Array.isArray(linkData)) {
+        for (const ld of linkData) {
+          const id = ld.item_id || ld.id
+          const lk = ld.short_link || ld.product_link || ld.affiliate_link || ld.link
+          if (id && lk) linksMap[id] = lk
+        }
+      }
+
+      for (const it of batch) {
+        itemsWithLinks.push({
+          ...it,
+          affiliate_link: linksMap[it.item_id] || null
+        })
+      }
+
+      const gotLinks = Object.keys(linksMap).length
+      kLog(`  ✅ ${gotLinks} links gerados`)
+    } else {
+      // Sem link — adiciona com link nulo (vai usar URL da página)
+      for (const it of batch) {
+        itemsWithLinks.push({ ...it, affiliate_link: null })
+      }
+    }
+
+    const pct = 50 + Math.round(((i + BATCH_LINK) / allItems.length) * 30)
+    kUpdate(totalFound, totalSaved, pagesDone, pct, 'Gerando links...')
+    await delay(DELAY_MS)
+  }
+
+  kLog(`✅ ${itemsWithLinks.filter(i => i.affiliate_link).length} links gerados de ${itemsWithLinks.length} produtos`)
+  kLog('💾 Enviando para o KainowRadar...')
+  kUpdate(totalFound, 0, pagesDone, 82, 'Salvando no banco...')
+
+  // ── PASSO 3: Envia para o backend em chunks ───────────────────────────
+  const IMPORT_CHUNK = 200
+  let savedTotal = 0
+
+  for (let i = 0; i < itemsWithLinks.length; i += IMPORT_CHUNK) {
+    if (__stop) break
+
+    const chunk = itemsWithLinks.slice(i, i + IMPORT_CHUNK)
+
+    // Monta formato URL|Nome|Preço|Img|ExternalId
+    const lines = chunk.map(it => {
+      const url   = it.affiliate_link
+                  || `https://affiliate.shopee.com.br/offer/product_offer/${it.item_id}`
+      const name  = (it.item_name || '').replace(/\|/g, ' ')
+      const price = it.price_min ? it.price_min.toFixed(2) : ''
+      const img   = it.image || ''
+      const extId = String(it.item_id || '')
+      return `${url}|${name}|${price}|${img}|${extId}`
+    }).join('\n')
+
+    kLog(`💾 Enviando chunk ${Math.floor(i/IMPORT_CHUNK)+1} (${chunk.length} itens)...`)
+
     try {
-      const r = await fetch(`${CONFIG.kainowUrl}/admin/api/stores/${CONFIG.storeId}/import-links`, {
+      const saveRes = await fetch(`${KAINOW_URL}/admin/api/stores/${STORE_ID}/import-links`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ links: richLines.join('\n') })
+        body: JSON.stringify({ links: lines })
       })
-      if (!r.ok) {
-        addLog(`⚠️ KainowRadar retornou ${r.status}`, '#f59e0b')
-        return { imported: 0, updated: 0 }
-      }
-      const d = await r.json()
-      return { imported: d.imported || 0, updated: d.updated || 0 }
-    } catch(e) {
-      addLog('Erro ao enviar: ' + e.message, '#f87171')
-      return { imported: 0, updated: 0 }
-    }
-  }
-
-  // ════════════════════════════════════════════════════════════════
-  // 5. Loop principal
-  // ════════════════════════════════════════════════════════════════
-  try {
-    // Testa conexão primeiro
-    const testData = await apiGet(1, 1)
-    const serverTotal = testData?.data?.total_count || testData?.data?.total || 0
-    setStatus(`Encontrados ${serverTotal > 0 ? serverTotal.toLocaleString('pt-BR') : '?'} produtos. Iniciando...`)
-    addLog(`Total servidor: ${serverTotal}`, '#60a5fa')
-    await new Promise(r => setTimeout(r, 800))
-
-    while (hasMore && !window.__krStop) {
-      if (CONFIG.maxPages > 0 && currentPage > CONFIG.maxPages) break
-
-      setStatus(`Buscando página ${currentPage}...`)
-      setBar(serverTotal > 0 ? Math.min(90, (totalFound / serverTotal) * 90) : (currentPage * 2))
-
-      // Busca página
-      let data
-      try {
-        data = await apiGet(currentPage, CONFIG.pageSize)
-      } catch(err) {
-        addLog('❌ ' + err.message, '#f87171')
-        setStatus('❌ ' + err.message)
-        break
-      }
-
-      const offers = data?.data?.offers || data?.data?.list || data?.data?.items
-        || (Array.isArray(data?.data) ? data.data : [])
-
-      if (!offers || !offers.length) {
-        addLog('Sem mais produtos', '#22c55e')
-        hasMore = false
-        break
-      }
-
-      addLog(`Pág ${currentPage}: ${offers.length} produtos`, '#60a5fa')
-
-      // ── Gera links ────────────────────────────────────────────────
-      setStatus(`Pág ${currentPage}: gerando ${offers.length} links...`)
-
-      // Tenta bulk primeiro (mais rápido, mesmo que o botão "Obter Link em Massa")
-      const { links: bulkLinks, items: bulkItems } = await getBulkLinks(offers)
-
-      const richLines = []
-
-      if (bulkLinks.length > 0) {
-        // Associa link gerado → oferta original pela posição
-        addLog(`Bulk: ${bulkLinks.length} links gerados`, '#22c55e')
-        bulkLinks.forEach((link, i) => {
-          const offer = bulkItems[i] ? offers.find(o =>
-            (o.item_id || o.product_id) === bulkItems[i].item_id
-          ) : offers[i]
-          if (!link) return
-          const name  = offer?.name || offer?.product_name || offer?.title || ''
-          const price = offer?.price || offer?.sale_price || offer?.min_price || ''
-          const image = offer?.image || offer?.item_image || offer?.product_image || ''
-          const extId = offer?.item_id || offer?.product_id || ''
-          richLines.push([link, name, price ? String(price) : '', image, extId ? String(extId) : ''].join('|'))
-        })
-      } else {
-        // Fallback: gera um por um
-        addLog(`Gerando links individualmente...`, '#f59e0b')
-        for (let i = 0; i < offers.length; i++) {
-          if (window.__krStop) break
-          const offer = offers[i]
-          const link  = await getAffiliateLink(offer)
-          if (link) {
-            const name  = offer?.name || offer?.product_name || offer?.title || ''
-            const price = offer?.price || offer?.sale_price || ''
-            const image = offer?.image || offer?.item_image || ''
-            const extId = offer?.item_id || offer?.product_id || ''
-            richLines.push([link, name, price ? String(price) : '', image, extId ? String(extId) : ''].join('|'))
-          }
-          if (i % 20 === 19) {
-            setStatus(`Pág ${currentPage}: ${i+1}/${offers.length} links gerados...`)
-            await new Promise(r => setTimeout(r, 100))
-          }
-        }
-      }
-
-      totalFound += richLines.length
-      setStats(totalFound, totalSaved, currentPage)
-
-      if (richLines.length === 0) {
-        addLog('⚠️ Nenhum link gerado nesta página', '#f59e0b')
-      }
-
-      // ── Envia para KainowRadar em chunks ──────────────────────────
-      if (richLines.length > 0) {
-        setStatus(`Enviando ${richLines.length} links para KainowRadar...`)
-        for (let i = 0; i < richLines.length; i += CONFIG.chunkSize) {
-          if (window.__krStop) break
-          const chunk = richLines.slice(i, i + CONFIG.chunkSize)
-          const res   = await sendToKainow(chunk)
-          totalSaved += res.imported + res.updated
-          setStats(totalFound, totalSaved, currentPage)
-          setBar(serverTotal > 0 ? Math.min(95, (totalSaved / serverTotal) * 95) : 50)
-        }
-        addLog(`✅ Pág ${currentPage}: ${richLines.length} enviados`, '#22c55e')
-      }
-
-      // ── Verifica se há mais páginas ───────────────────────────────
-      if (offers.length < CONFIG.pageSize) {
-        hasMore = false
-      } else if (serverTotal > 0 && totalFound >= serverTotal) {
-        hasMore = false
-      }
-
-      currentPage++
-
-      if (hasMore && !window.__krStop) {
-        await new Promise(r => setTimeout(r, CONFIG.delayMs))
-      }
+      const saveJson = await saveRes.json().catch(() => ({}))
+      const chunkSaved = (saveJson.imported || 0) + (saveJson.updated || 0)
+      savedTotal += chunkSaved
+      totalSaved = savedTotal
+      kLog(`  ✅ ${chunkSaved} salvos (total: ${savedTotal})`)
+    } catch (e) {
+      kLog('  ⚠️ Erro ao salvar: ' + e.message)
     }
 
-    // ── Concluído ────────────────────────────────────────────────────
-    setBar(100)
-    const dot = document.querySelector('#__kr_overlay div > div:first-child > div:first-child')
-    if (dot) { dot.style.background = '#22c55e'; dot.style.boxShadow = '0 0 6px #22c55e80'; dot.style.animation = 'none' }
-
-    const msg = window.__krStop
-      ? `⏹ Parado! ${totalSaved.toLocaleString('pt-BR')} importados de ${totalFound.toLocaleString('pt-BR')}`
-      : `🎉 Concluído! ${totalSaved.toLocaleString('pt-BR')} importados de ${totalFound.toLocaleString('pt-BR')}`
-
-    setStatus(msg)
-    addLog(msg, '#22c55e')
-    console.log('[KainowRadar] COMPLETO:', { totalFound, totalSaved, pages: currentPage - 1 })
-
-  } catch(e) {
-    setStatus('❌ Erro: ' + e.message)
-    addLog('❌ ' + e.message, '#f87171')
-    console.error('[KainowRadar] Erro:', e)
+    const pct = 82 + Math.round(((i + IMPORT_CHUNK) / itemsWithLinks.length) * 16)
+    kUpdate(totalFound, totalSaved, pagesDone, pct, `Salvando... ${savedTotal}/${totalFound}`)
+    await delay(200)
   }
 
-  // Retorna resultado para o console
-  return { ok: true, totalFound, totalSaved, pages: currentPage - 1 }
+  // ── CONCLUÍDO ─────────────────────────────────────────────────────────
+  kUpdate(totalFound, totalSaved, pagesDone, 100, '✅ Concluído!')
+  kLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+  kLog(`🎉 CONCLUÍDO!`)
+  kLog(`📦 Encontrados: ${totalFound} produtos`)
+  kLog(`💾 Salvos no banco: ${totalSaved}`)
+  kLog(`📄 Páginas: ${pagesDone}`)
+  kLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 
-})()
+  const btn = document.getElementById('__kainow_stop__')
+  if (btn) {
+    btn.textContent = '✓ Fechar'
+    btn.style.background = '#22c55e'
+    btn.onclick = () => overlay.remove()
+  }
+
+})();

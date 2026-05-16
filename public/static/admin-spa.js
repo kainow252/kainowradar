@@ -880,110 +880,95 @@ function openShopeeAfiliados(storeId) {
   const modal = document.getElementById('modal-container')
   modal.innerHTML = `
     <div class="modal-backdrop" onclick="if(event.target===this){_shCleanup();closeModal()}">
-      <div class="modal" style="max-width:560px;width:96vw;max-height:92vh;overflow-y:auto">
+      <div class="modal" style="max-width:580px;width:96vw;max-height:92vh;overflow-y:auto">
 
         <!-- Header -->
-        <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center justify-between mb-5">
           <div class="flex items-center gap-3">
-            <div class="w-11 h-11 rounded-2xl flex items-center justify-center" style="background:#fff3f0;border:2px solid #EE4D2D33">
+            <div class="w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0" style="background:#fff3f0;border:2px solid #EE4D2D33">
               <svg viewBox="0 0 56 56" class="w-7 h-7" xmlns="http://www.w3.org/2000/svg">
                 <rect width="56" height="56" rx="12" fill="#EE4D2D"/>
                 <path d="M28 10 C20 10 14 16 14 22 C14 26 16 28 20 30 L18 44 L28 38 L38 44 L36 30 C40 28 42 26 42 22 C42 16 36 10 28 10Z" fill="white" opacity="0.9"/>
               </svg>
             </div>
             <div>
-              <h3 class="font-bold text-slate-800 text-lg">Shopee Afiliados</h3>
-              <p class="text-xs text-slate-500">Login automático → busca todos os links → salva no banco</p>
+              <h3 class="font-bold text-slate-800 text-lg leading-tight">Importar Links Shopee</h3>
+              <p class="text-xs text-slate-500">Coleta automática • Salva nome, preço, imagem e link afiliado</p>
             </div>
           </div>
-          <button onclick="_shCleanup();closeModal()" class="text-slate-400 hover:text-slate-700 text-2xl">&times;</button>
+          <button onclick="_shCleanup();closeModal()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
         </div>
 
-        <!-- PASSO 1: Login -->
-        <div id="sh-step-1">
+        <!-- ════════════════════════════════════════════════════════
+             OPÇÃO 1 — SCRIPT DE CONSOLE  [RECOMENDADO]
+             Roda dentro do browser logado → sem CORS, sem fingerprint
+             ════════════════════════════════════════════════════════ -->
+        <div class="rounded-2xl border-2 border-orange-400 mb-4 overflow-hidden" style="background:linear-gradient(135deg,#1e293b,#0f172a)">
 
-          <!-- Status conta -->
-          <div id="sh-account-box" class="rounded-2xl border-2 p-4 mb-4 flex items-center gap-3 transition-all"
-               style="background:#f8fafc;border-color:#e2e8f0">
-            <div class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-xl flex-shrink-0">👤</div>
-            <div class="flex-1 min-w-0">
-              <div id="sh-account-label" class="text-sm font-semibold text-slate-700">Não conectado</div>
-              <div id="sh-account-sub"   class="text-xs text-slate-400">Clique abaixo para entrar com Google</div>
-            </div>
-            <span id="sh-dot" class="w-3 h-3 rounded-full bg-slate-300 flex-shrink-0"></span>
-          </div>
-
-          <!-- Botão Google Login -->
-          <button onclick="shOpenLogin(${storeId})" id="sh-login-btn"
-            class="w-full flex items-center justify-center gap-3 py-3.5 rounded-2xl font-bold text-white text-sm transition-all hover:opacity-90 active:scale-95 mb-3 shadow-lg"
-            style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
-            <svg class="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" fill="white">
-              <path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z"/>
-            </svg>
-            Entrar com Google na Shopee Afiliados
-          </button>
-
-          <!-- Instruções -->
-          <div class="bg-blue-50 border border-blue-100 rounded-xl p-3 mb-4 text-xs text-blue-800">
-            <div class="font-semibold mb-1">📋 Como funciona:</div>
-            <ol class="space-y-0.5 list-decimal list-inside text-blue-700">
-              <li>Clique no botão acima — abre janela da Shopee</li>
-              <li>Faça login com <strong>kainow252@gmail.com</strong></li>
-              <li>Volte aqui — sistema detecta automaticamente</li>
-              <li>Clique <strong>"Buscar e Importar"</strong> — pronto! 🎉</li>
-            </ol>
-          </div>
-
-          <!-- Aguardando login -->
-          <div id="sh-waiting" class="hidden bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-center">
-            <div class="flex items-center justify-center gap-2 mb-1">
-              <div class="spinner" style="width:14px;height:14px;border-color:#f59e0b;border-top-color:transparent"></div>
-              <span class="text-sm font-semibold text-amber-800">Aguardando seu login...</span>
-            </div>
-            <p class="text-xs text-amber-600">Complete o login na janela aberta e <strong>feche ela</strong></p>
-            <button onclick="shOpenLogin(${storeId})" class="mt-2 text-xs text-amber-700 underline font-medium">↩ Reabrir janela</button>
-          </div>
-
-          <!-- Conectado -->
-          <div id="sh-connected-box" class="hidden">
-            <!-- config de busca -->
-            <div class="bg-green-50 border border-green-200 rounded-xl p-3 mb-3">
-              <div class="flex items-center gap-2 mb-3">
-                <span class="text-green-600 text-lg">✅</span>
-                <span class="text-sm font-bold text-green-800">Conta conectada! Configure a busca:</span>
+          <!-- Badge cabeçalho -->
+          <div class="flex items-center justify-between px-4 pt-4 pb-2">
+            <div class="flex items-center gap-2">
+              <div class="w-8 h-8 rounded-xl flex items-center justify-center text-lg flex-shrink-0"
+                   style="background:linear-gradient(135deg,#f97316,#ef4444)">💻</div>
+              <div>
+                <div class="text-sm font-bold text-white leading-tight">Script de Console</div>
+                <div class="text-[11px] text-slate-400">Roda no browser já logado — zero extensão, zero nova página</div>
               </div>
-              <div class="grid grid-cols-2 gap-2 mb-3">
-                <div>
-                  <label class="text-xs font-semibold text-slate-600 mb-1 block">Tipo de oferta</label>
-                  <select id="sh-offer-type" class="input w-full text-xs">
-                    <option value="product_offer">Oferta de Produto</option>
-                    <option value="shop_offer">Oferta da Loja</option>
-                    <option value="shopee_offer">Oferta Shopee</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="text-xs font-semibold text-slate-600 mb-1 block">Quantidade</label>
-                  <select id="sh-limit" class="input w-full text-xs">
-                    <option value="100">100 links</option>
-                    <option value="500">500 links</option>
-                    <option value="1000" selected>1.000 links</option>
-                    <option value="5000">5.000 links</option>
-                    <option value="0">Todos</option>
-                  </select>
-                </div>
+            </div>
+            <span class="text-[10px] font-bold px-2 py-1 rounded-full" style="background:#f97316;color:white">✓ RECOMENDADO</span>
+          </div>
+
+          <!-- Passos visuais -->
+          <div class="px-4 py-3">
+            <div class="grid grid-cols-3 gap-2 mb-3">
+              <div class="bg-slate-800 rounded-xl p-2.5 text-center border border-slate-700">
+                <div class="text-lg mb-0.5">🌐</div>
+                <div class="text-[10px] font-bold text-slate-200 leading-tight">1. Abra</div>
+                <div class="text-[9px] text-slate-500 leading-tight">affiliate.shopee.com.br<br>(já logado)</div>
               </div>
-              <button onclick="shStartScrape(${storeId})" id="sh-scrape-btn"
-                class="w-full py-3 rounded-xl font-bold text-white text-sm shadow transition-all hover:opacity-90"
-                style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
-                🚀 Buscar e Importar Todos os Links Agora!
-              </button>
+              <div class="bg-slate-800 rounded-xl p-2.5 text-center border border-slate-700">
+                <div class="text-lg mb-0.5">⌨️</div>
+                <div class="text-[10px] font-bold text-slate-200 leading-tight">2. Console</div>
+                <div class="text-[9px] text-slate-500 leading-tight">F12 → aba Console<br>cole o script</div>
+              </div>
+              <div class="bg-slate-800 rounded-xl p-2.5 text-center border border-slate-700">
+                <div class="text-lg mb-0.5">🎉</div>
+                <div class="text-[10px] font-bold text-slate-200 leading-tight">3. Enter</div>
+                <div class="text-[9px] text-slate-500 leading-tight">Coleta automática<br>+ salva no banco</div>
+              </div>
+            </div>
+
+            <!-- Botão copiar -->
+            <button onclick="shCopyConsoleScript(${storeId})" id="sh-copy-script-btn"
+              class="w-full py-3 rounded-xl font-bold text-white text-sm transition-all hover:opacity-90 active:scale-95 shadow-lg flex items-center justify-center gap-2"
+              style="background:linear-gradient(135deg,#f97316,#ef4444)">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              </svg>
+              📋 Copiar Script para o Console
+            </button>
+
+            <!-- Dica extra -->
+            <div class="mt-2.5 flex items-start gap-2 text-[10px] text-slate-500">
+              <span class="flex-shrink-0 mt-0.5">💡</span>
+              <span>O script cria um painel flutuante com progresso em tempo real. Coleta <strong class="text-slate-400">todos os produtos</strong> com nome, preço, imagem e gera o link afiliado de cada um automaticamente.</span>
+            </div>
+
+            <!-- Link para página dedicada -->
+            <div class="mt-2 text-center">
+              <a href="/admin/shopee-script/${storeId}" target="_blank"
+                class="text-[10px] text-orange-400 hover:text-orange-300 underline">
+                ↗ Abrir página com o script completo (para copiar manualmente)
+              </a>
             </div>
           </div>
         </div>
 
-        <!-- PASSO 2: Progresso -->
-        <div id="sh-step-2" class="hidden">
-          <!-- Stats em tempo real -->
+        <!-- ════════════════════════════════════════════════════════
+             PROGRESSO DA COLETA (aparece quando shStartScrape roda)
+             ════════════════════════════════════════════════════════ -->
+        <div id="sh-step-2" class="hidden mb-4">
           <div class="grid grid-cols-3 gap-2 mb-3">
             <div class="bg-orange-50 rounded-xl p-2.5 text-center">
               <div id="sh-stat-found"    class="text-xl font-black text-orange-600">0</div>
@@ -998,11 +983,7 @@ function openShopeeAfiliados(storeId) {
               <div class="text-[10px] text-slate-500">Páginas</div>
             </div>
           </div>
-
-          <!-- Log terminal -->
-          <div class="bg-slate-900 rounded-xl p-3 font-mono text-xs text-slate-300 h-44 overflow-y-auto mb-3" id="sh-log"></div>
-
-          <!-- Progress bar -->
+          <div class="bg-slate-900 rounded-xl p-3 font-mono text-xs text-slate-300 h-36 overflow-y-auto mb-3" id="sh-log"></div>
           <div class="flex gap-2 items-center mb-1">
             <div class="flex-1 bg-slate-100 rounded-full h-3 overflow-hidden">
               <div id="sh-progress-bar" class="h-full rounded-full transition-all duration-500"
@@ -1011,8 +992,6 @@ function openShopeeAfiliados(storeId) {
             <span id="sh-progress-pct" class="text-sm font-black text-slate-700 w-10 text-right">0%</span>
           </div>
           <div id="sh-progress-msg" class="text-xs text-center text-slate-400 mb-3"></div>
-
-          <!-- Concluído -->
           <div id="sh-done" class="hidden bg-green-50 border border-green-200 rounded-xl p-4 text-center">
             <div class="text-3xl mb-1">🎉</div>
             <div class="font-bold text-green-800 text-sm" id="sh-done-msg"></div>
@@ -1020,122 +999,140 @@ function openShopeeAfiliados(storeId) {
           </div>
         </div>
 
-        <!-- ═══════════════════════════════════════════════════════════
-             COLETA NO SERVIDOR — usa cookies da sessão do usuário
-             O servidor chama a API interna da Shopee com esses cookies
-             ═══════════════════════════════════════════════════════════ -->
-        <div class="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-4 mb-4 border border-slate-700">
-          <div class="flex items-center gap-2 mb-3">
-            <div class="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 text-lg" style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">🖥️</div>
-            <div>
-              <div class="text-sm font-bold text-white">Coleta no Servidor <span class="text-[10px] bg-green-500 text-white rounded px-1.5 py-0.5 ml-1 font-semibold">RECOMENDADO</span></div>
-              <div class="text-xs text-slate-400">Servidor usa seus cookies para buscar todos os links — zero navegador extra</div>
-            </div>
-          </div>
-
-          <!-- Cookies salvos indicator -->
-          <div id="sh-cookies-status" class="hidden mb-2 flex items-center gap-1.5 text-xs text-green-400">
-            <span>✅</span><span id="sh-cookies-status-txt">Cookies salvos</span>
-          </div>
-
-          <!-- Textarea para colar cookies -->
-          <div class="mb-2">
-            <label class="text-xs font-semibold text-slate-300 mb-1 block">
-              Cole aqui seus cookies da Shopee Afiliados
-              <button onclick="shShowCookieHelp()" class="ml-1 text-slate-500 hover:text-slate-300 text-[10px] underline">Como obter?</button>
-            </label>
-            <textarea id="sh-cookies-input" rows="3"
-              class="w-full rounded-xl border border-slate-600 bg-slate-700 text-xs font-mono text-green-300 p-2.5 resize-none focus:outline-none focus:border-orange-400 transition-all placeholder-slate-500"
-              placeholder="token=eyJ...; csrftoken=abc123; shopee_webUnique_ccd=...&#10;(Cole todos os cookies do DevTools → Network → Request Headers → Cookie)"></textarea>
-          </div>
-
-          <!-- Como obter cookies (colapsável) -->
-          <div id="sh-cookie-help" class="hidden mb-3 bg-slate-700 rounded-xl p-3">
-            <div class="text-xs font-bold text-white mb-2">📋 Como copiar seus cookies:</div>
-            <ol class="text-xs text-slate-300 space-y-1 list-decimal list-inside">
-              <li>Abra <a href="https://affiliate.shopee.com.br/offer/product_offer" target="_blank" class="text-orange-400 underline">affiliate.shopee.com.br</a> no Chrome (já logado)</li>
-              <li>Pressione <kbd class="bg-slate-600 px-1 rounded">F12</kbd> → aba <strong class="text-white">Network</strong></li>
-              <li>Recarregue a página (<kbd class="bg-slate-600 px-1 rounded">F5</kbd>)</li>
-              <li>Clique na primeira requisição para <strong class="text-white">product_offer</strong></li>
-              <li>Em <strong class="text-white">Request Headers</strong>, clique com direito em <strong class="text-white">cookie:</strong> → <strong class="text-white">Copy value</strong></li>
-              <li>Cole no campo acima e clique em <strong class="text-white">Salvar e Coletar</strong></li>
-            </ol>
-          </div>
-
-          <!-- Botões de ação -->
-          <div class="flex gap-2">
-            <button onclick="shServerSync(${storeId})" id="sh-server-sync-btn"
-              class="flex-1 py-2.5 rounded-xl font-bold text-white text-xs transition-all hover:opacity-90 active:scale-95 shadow"
-              style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
-              🚀 Salvar e Coletar no Servidor
-            </button>
-            <button onclick="shSaveCookiesOnly(${storeId})" id="sh-save-cookies-btn"
-              class="px-3 py-2.5 rounded-xl font-semibold text-slate-300 text-xs border border-slate-600 hover:bg-slate-700 transition-all">
-              💾 Só Salvar
-            </button>
-          </div>
-        </div>
-
         <!-- Separador -->
-        <div class="flex items-center gap-2 my-4">
-          <div class="flex-1 h-px bg-slate-700"></div>
-          <span class="text-[10px] text-slate-500 font-semibold">OUTRAS OPÇÕES</span>
-          <div class="flex-1 h-px bg-slate-700"></div>
+        <div class="flex items-center gap-2 my-3">
+          <div class="flex-1 h-px bg-slate-200"></div>
+          <span class="text-[10px] text-slate-400 font-semibold uppercase tracking-wide">Outras opções</span>
+          <div class="flex-1 h-px bg-slate-200"></div>
         </div>
 
-        <!-- Extensão Chrome (colapsável) -->
-        <div class="mb-4">
-          <button onclick="shToggleExtSection()" class="w-full flex items-center justify-between px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-600 text-xs font-semibold hover:bg-slate-100 transition-all">
-            <span>💻 Extensão Chrome / Colagem Manual</span>
-            <span id="sh-ext-toggle-icon">▼</span>
+        <!-- ════════════════════════════════════════════════════════
+             OPÇÃO 2 — COLETA VIA BROWSER (login automático)
+             ════════════════════════════════════════════════════════ -->
+        <div class="mb-3">
+          <button onclick="shToggleBrowserSection()" class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-600 text-xs font-semibold hover:bg-slate-100 transition-all">
+            <span class="flex items-center gap-2">🔑 Coleta via Login Automático no Browser</span>
+            <span id="sh-browser-toggle-icon" class="text-slate-400">▼</span>
           </button>
-          <div id="sh-ext-section" class="hidden mt-2">
-            <!-- Extensão -->
-            <div class="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-3 mb-3 border border-slate-700">
-              <div class="text-xs font-bold text-white mb-1">Extensão Chrome</div>
-              <div class="text-xs text-slate-400 mb-2">Coleta automática via navegador — requer Chrome aberto</div>
-              <div class="flex gap-2">
-                <a href="/static/kainow-shopee-extension.zip" download="kainow-shopee-extension.zip"
-                  class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-white transition-all hover:opacity-90"
+          <div id="sh-browser-section" class="hidden mt-2 border border-slate-200 rounded-xl p-3">
+            <!-- Status conta -->
+            <div id="sh-account-box" class="rounded-xl border-2 p-3 mb-3 flex items-center gap-3 transition-all"
+                 style="background:#f8fafc;border-color:#e2e8f0">
+              <div class="w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center text-lg flex-shrink-0" id="sh-avatar">👤</div>
+              <div class="flex-1 min-w-0">
+                <div id="sh-account-label" class="text-xs font-semibold text-slate-700">Verificando sessão...</div>
+                <div id="sh-account-sub"   class="text-[10px] text-slate-400">Testando conexão com affiliate.shopee.com.br</div>
+              </div>
+              <span id="sh-dot" class="w-2.5 h-2.5 rounded-full bg-slate-300 flex-shrink-0"></span>
+            </div>
+
+            <!-- Aguardando login -->
+            <div id="sh-waiting" class="hidden bg-amber-50 border border-amber-200 rounded-xl p-2.5 mb-3 text-center">
+              <div class="flex items-center justify-center gap-2 mb-1">
+                <div class="spinner" style="width:12px;height:12px;border-color:#f59e0b;border-top-color:transparent"></div>
+                <span class="text-xs font-semibold text-amber-800">Aguardando seu login...</span>
+              </div>
+              <p class="text-[10px] text-amber-600">Complete o login na janela aberta e <strong>feche ela</strong></p>
+              <button onclick="shOpenLogin(${storeId})" class="mt-1.5 text-[10px] text-amber-700 underline font-medium">↩ Reabrir janela</button>
+            </div>
+
+            <!-- Botão login -->
+            <button onclick="shOpenLogin(${storeId})" id="sh-login-btn"
+              class="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-white text-xs transition-all hover:opacity-90 active:scale-95 mb-3 shadow"
+              style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
+              <svg class="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="white">
+                <path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z"/>
+              </svg>
+              Entrar com Google na Shopee Afiliados
+            </button>
+
+            <!-- Conectado -->
+            <div id="sh-connected-box" class="hidden">
+              <div class="bg-green-50 border border-green-200 rounded-xl p-3">
+                <div class="flex items-center gap-2 mb-2.5">
+                  <span class="text-green-600">✅</span>
+                  <span class="text-xs font-bold text-green-800">Conta conectada! Configure a busca:</span>
+                </div>
+                <div class="grid grid-cols-2 gap-2 mb-2.5">
+                  <div>
+                    <label class="text-[10px] font-semibold text-slate-600 mb-1 block">Quantidade</label>
+                    <select id="sh-limit" class="input w-full text-xs">
+                      <option value="500">500 links</option>
+                      <option value="1000" selected>1.000 links</option>
+                      <option value="5000">5.000 links</option>
+                      <option value="0">Todos</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="text-[10px] font-semibold text-slate-600 mb-1 block">Tipo</label>
+                    <select id="sh-offer-type" class="input w-full text-xs">
+                      <option value="product_offer">Produto</option>
+                      <option value="shop_offer">Loja</option>
+                      <option value="shopee_offer">Shopee</option>
+                    </select>
+                  </div>
+                </div>
+                <button onclick="shStartScrapeModal(${storeId})" id="sh-scrape-btn"
+                  class="w-full py-2.5 rounded-xl font-bold text-white text-xs shadow transition-all hover:opacity-90"
                   style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
-                  ⬇ Baixar .zip
-                </a>
-                <button onclick="shShowExtInstructions()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs text-slate-300 border border-slate-600 hover:bg-slate-700 transition-all">
-                  📖 Como instalar
+                  🚀 Buscar e Importar Links Agora
                 </button>
               </div>
-              <div id="sh-ext-instructions" class="hidden mt-2 pt-2 border-t border-slate-700">
-                <ol class="text-xs text-slate-300 space-y-1 list-decimal list-inside">
-                  <li>Baixe o .zip e extraia numa pasta</li>
-                  <li>Chrome → <code class="bg-slate-700 px-1 rounded">chrome://extensions</code></li>
-                  <li>Ative "Modo do desenvolvedor" → "Carregar sem compactação"</li>
-                  <li>Store ID: <strong class="text-orange-400">${storeId}</strong> → Iniciar Coleta</li>
-                </ol>
+            </div>
+          </div>
+        </div>
+
+        <!-- ════════════════════════════════════════════════════════
+             OPÇÃO 3 — COLAGEM MANUAL + EXTENSÃO
+             ════════════════════════════════════════════════════════ -->
+        <div class="mb-2">
+          <button onclick="shToggleExtSection()" class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-600 text-xs font-semibold hover:bg-slate-100 transition-all">
+            <span class="flex items-center gap-2">📋 Colar Links Manualmente / Extensão Chrome</span>
+            <span id="sh-ext-toggle-icon" class="text-slate-400">▼</span>
+          </button>
+          <div id="sh-ext-section" class="hidden mt-2 border border-slate-200 rounded-xl p-3">
+
+            <!-- Extensão -->
+            <div class="flex items-center justify-between mb-3 pb-3 border-b border-slate-200">
+              <div>
+                <div class="text-xs font-bold text-slate-700 mb-0.5">Extensão Chrome</div>
+                <div class="text-[10px] text-slate-500">Coleta automática via navegador</div>
+              </div>
+              <div class="flex gap-1.5">
+                <a href="/static/kainow-shopee-extension.zip" download="kainow-shopee-extension.zip"
+                  class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-bold text-white transition-all hover:opacity-90"
+                  style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
+                  ⬇ .zip
+                </a>
+                <button onclick="shShowExtInstructions()" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] text-slate-600 border border-slate-200 hover:bg-slate-100 transition-all">
+                  📖 Como usar
+                </button>
               </div>
             </div>
+            <div id="sh-ext-instructions" class="hidden mb-3 bg-slate-50 rounded-xl p-2.5">
+              <ol class="text-[10px] text-slate-600 space-y-0.5 list-decimal list-inside">
+                <li>Baixe o .zip e extraia numa pasta</li>
+                <li>Chrome → <code class="bg-slate-200 px-1 rounded">chrome://extensions</code></li>
+                <li>Ative "Modo do desenvolvedor" → "Carregar sem compactação"</li>
+                <li>Store ID: <strong class="text-orange-600">${storeId}</strong> → Iniciar Coleta</li>
+              </ol>
+            </div>
 
-        <!-- Separador manual -->
-        <div class="flex items-center gap-2 my-3">
-          <div class="flex-1 h-px bg-slate-100"></div>
-          <span class="text-[10px] text-slate-400 font-semibold">OU COLE OS LINKS MANUALMENTE</span>
-          <div class="flex-1 h-px bg-slate-100"></div>
+            <!-- Manual -->
+            <div class="text-[10px] text-slate-500 font-semibold uppercase tracking-wide mb-1.5">Cole links manualmente</div>
+            <textarea id="sh-manual-textarea" rows="3"
+              class="w-full rounded-xl border border-slate-200 bg-slate-50 text-xs font-mono p-2.5 resize-none focus:outline-none focus:border-orange-400 transition-all"
+              placeholder="https://s.shopee.com.br/7AaQssz5iE&#10;https://s.shopee.com.br/8BbRtty6jF&#10;(um link por linha)"></textarea>
+            <div class="flex items-center justify-between mt-1 mb-2">
+              <span id="sh-manual-count" class="text-[10px] text-slate-400">0 links</span>
+              <button onclick="document.getElementById('sh-manual-textarea').value='';shCountManual()" class="text-[10px] text-slate-400 hover:text-red-500">✕ limpar</button>
+            </div>
+            <button onclick="shImportManual(${storeId})"
+              class="w-full py-2 rounded-xl border-2 border-orange-300 bg-orange-50 text-orange-700 text-xs font-bold hover:bg-orange-100 transition-all">
+              📥 Importar Links Colados
+            </button>
+          </div>
         </div>
-
-        <!-- Manual sempre disponível -->
-        <textarea id="sh-manual-textarea" rows="3"
-          class="w-full rounded-xl border border-slate-200 bg-slate-50 text-xs font-mono p-3 resize-none focus:outline-none focus:border-orange-400 transition-all"
-          placeholder="https://s.shopee.com.br/7AaQssz5iE&#10;https://s.shopee.com.br/8BbRtty6jF&#10;(um link por linha)"></textarea>
-        <div class="flex items-center justify-between mt-1 mb-2">
-          <span id="sh-manual-count" class="text-xs text-slate-400">0 links</span>
-          <button onclick="document.getElementById('sh-manual-textarea').value='';shCountManual()" class="text-xs text-slate-400 hover:text-red-500">✕</button>
-        </div>
-        <button onclick="shImportManual(${storeId})"
-          class="w-full py-2.5 rounded-xl border-2 border-orange-300 bg-orange-50 text-orange-700 text-xs font-bold hover:bg-orange-100 transition-all">
-          📥 Importar Links Colados
-        </button>
-
-          </div><!-- /sh-ext-section -->
-        </div><!-- /mb-4 ext wrapper -->
 
       </div>
     </div>
@@ -1143,7 +1140,86 @@ function openShopeeAfiliados(storeId) {
 
   document.getElementById('sh-manual-textarea').addEventListener('input', shCountManual)
   shCheckStatus(storeId)
-  shLoadSavedCookiesIndicator(storeId)
+  shAutoDetectSession(storeId)
+}
+
+// Mostra/esconde a seção de login no browser
+function shToggleBrowserSection() {
+  const sec  = document.getElementById('sh-browser-section')
+  const icon = document.getElementById('sh-browser-toggle-icon')
+  if (!sec) return
+  const hidden = sec.classList.toggle('hidden')
+  if (icon) icon.textContent = hidden ? '▼' : '▲'
+}
+
+// Inicia scrape mas mostra progresso dentro do modal (seção sh-step-2)
+async function shStartScrapeModal(storeId) {
+  const limit     = parseInt(document.getElementById('sh-limit')?.value) || 0
+  const offerType = document.getElementById('sh-offer-type')?.value || 'product_offer'
+  document.getElementById('sh-browser-section').classList.add('hidden')
+  document.getElementById('sh-step-2').classList.remove('hidden')
+  await shStartScrape(storeId, limit, offerType)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// COPY CONSOLE SCRIPT — gera o script com o STORE_ID correto e copia
+// ═══════════════════════════════════════════════════════════════════
+async function shCopyConsoleScript(storeId) {
+  const btn = document.getElementById('sh-copy-script-btn')
+
+  // Tenta buscar o script do servidor; fallback inline
+  let scriptText = null
+  try {
+    const r = await fetch('/static/shopee-console-script.js')
+    if (r.ok) scriptText = await r.text()
+  } catch(e) { /* fallback inline */ }
+
+  if (!scriptText) {
+    // Script inline minificado (fallback caso /static não funcione)
+    scriptText = `/* KainowRadar — cole em affiliate.shopee.com.br > F12 > Console */
+(async function KainowShopeeCollect(){
+  const KAINOW_URL='https://shopping-compare.pages.dev';
+  const STORE_ID=__KAINOW_STORE_ID__;
+  const PAGE_LIMIT=100,BATCH_LINK=50,MAX_ITEMS=0,DELAY_MS=300;
+  // COLE O SCRIPT COMPLETO DA PÁGINA /admin/shopee-script/${storeId}
+})();`
+  }
+
+  // Substitui o placeholder do STORE_ID pelo valor real
+  scriptText = scriptText
+    .replace(/__KAINOW_STORE_ID__\s*\|\|\s*\d+/g, storeId)
+    .replace(/__KAINOW_STORE_ID__/g, storeId)
+
+  try {
+    await navigator.clipboard.writeText(scriptText)
+    if (btn) {
+      const orig = btn.innerHTML
+      btn.innerHTML = '✅ Script copiado! Cole no Console e pressione Enter'
+      btn.style.background = '#16a34a'
+      setTimeout(() => {
+        if (btn) {
+          btn.innerHTML = orig
+          btn.style.background = 'linear-gradient(135deg,#f97316,#ef4444)'
+        }
+      }, 3500)
+    }
+    toast('✅ Script copiado! Abra affiliate.shopee.com.br > F12 > Console > cole e Enter', 'success')
+  } catch(e) {
+    // Fallback: abre popup com o script para copiar manualmente
+    const win = window.open('', '_blank', 'width=700,height=500,scrollbars=yes')
+    if (win) {
+      win.document.write(`<html><head><title>Script KainowRadar</title></head><body style="background:#1e293b;color:#e2e8f0;font-family:monospace;font-size:12px;padding:16px">
+        <div style="margin-bottom:8px;font-size:14px;color:#f97316;font-weight:bold">📋 Copie o script abaixo (Ctrl+A depois Ctrl+C):</div>
+        <textarea style="width:100%;height:420px;background:#0f172a;color:#86efac;border:1px solid #334155;border-radius:8px;padding:12px;font-size:11px;font-family:monospace" readonly>${scriptText.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
+      </body></html>`)
+      win.document.close()
+    }
+    if (btn) {
+      const orig = btn.innerHTML
+      btn.innerHTML = '↗ Script aberto em nova aba (copie de lá)'
+      setTimeout(() => { if (btn) btn.innerHTML = orig }, 3500)
+    }
+  }
 }
 
 function _shCleanup() {
@@ -1190,20 +1266,28 @@ function shOpenLogin(storeId) {
 }
 
 function shOnLoggedIn(storeId) {
-  document.getElementById('sh-waiting').classList.add('hidden')
-  document.getElementById('sh-connected-box').classList.remove('hidden')
+  // Garante que a seção do browser está visível
+  const browserSec  = document.getElementById('sh-browser-section')
+  const browserIcon = document.getElementById('sh-browser-toggle-icon')
+  if (browserSec)  browserSec.classList.remove('hidden')
+  if (browserIcon) browserIcon.textContent = '▲'
+
+  const waiting      = document.getElementById('sh-waiting')
+  const connectedBox = document.getElementById('sh-connected-box')
+  if (waiting)      waiting.classList.add('hidden')
+  if (connectedBox) connectedBox.classList.remove('hidden')
 
   const box = document.getElementById('sh-account-box')
   if (box) {
     box.style.background = '#f0fdf4'
     box.style.borderColor = '#86efac'
     box.innerHTML = `
-      <div class="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-xl flex-shrink-0">✅</div>
+      <div class="w-9 h-9 rounded-full bg-green-100 flex items-center justify-center text-lg flex-shrink-0">✅</div>
       <div class="flex-1 min-w-0">
-        <div class="text-sm font-bold text-green-800">kainow252@gmail.com</div>
-        <div class="text-xs text-green-600">Shopee Afiliados • SocialSoul • Conectado</div>
+        <div class="text-xs font-bold text-green-800">kainow252@gmail.com</div>
+        <div class="text-[10px] text-green-600">Shopee Afiliados • Sessão ativa ✓</div>
       </div>
-      <span class="w-3 h-3 rounded-full bg-green-400 animate-pulse flex-shrink-0"></span>
+      <span class="w-2.5 h-2.5 rounded-full bg-green-400 animate-pulse flex-shrink-0"></span>
     `
   }
 
@@ -1247,13 +1331,9 @@ function showMsg(el, text, type) {
   el.classList.remove('hidden')
 }
 
-async function shStartScrape(storeId) {
-  const limit     = parseInt(document.getElementById('sh-limit').value) || 0
-  const offerType = document.getElementById('sh-offer-type').value
-
-  // Troca para tela de progresso
-  document.getElementById('sh-step-1').classList.add('hidden')
-  document.getElementById('sh-step-2').classList.remove('hidden')
+async function shStartScrape(storeId, limit, offerType) {
+  if (limit     === undefined) limit     = parseInt(document.getElementById('sh-limit')?.value) || 0
+  if (offerType === undefined) offerType = document.getElementById('sh-offer-type')?.value || 'product_offer'
 
   shLog('🚀 Iniciando busca de links no painel Shopee Afiliados...')
   shLog('📋 Tipo: <span class="text-orange-400">' + offerType + '</span> | Limite: ' + (limit || 'Todos'))
@@ -1279,53 +1359,60 @@ async function shStartScrape(storeId) {
     let pageTotal = 0
 
     try {
-      // ── Chamada direta à API interna do painel Shopee Afiliados ──
-      // URL descoberta via DevTools do painel affiliate.shopee.com.br
+      // ── API REAL descoberta via bundle JS da Shopee Afiliados ──
+      // Endpoint: /api/v3/offer/product/list (encontrado em app.8f1c7b91.js)
+      // Usa credentials:include → browser envia cookies da sessão ativa
       const shopeeRes = await fetch(
-        'https://affiliate.shopee.com.br/api/v1/offer/product_offer?' +
-        'page_number=' + page +
-        '&page_size=' + PAGE_SIZE +
-        '&need_products_info=1' +
-        '&sort_type=2',
+        'https://affiliate.shopee.com.br/api/v3/offer/product/list?' +
+        'list_type=2' +
+        '&sort_type=2' +
+        '&page_offset=' + ((page - 1) * PAGE_SIZE) +
+        '&page_limit=' + PAGE_SIZE +
+        '&client_type=1',
         {
-          credentials: 'include',   // envia cookies automaticamente!
+          credentials: 'include',
           headers: {
-            'Accept':      'application/json',
-            'Referer':     'https://affiliate.shopee.com.br/offer/product_offer',
-            'x-requested-with': 'XMLHttpRequest'
+            'Accept':            'application/json',
+            'x-requested-with':  'XMLHttpRequest',
+            'Referer':           'https://affiliate.shopee.com.br/offer/product_offer'
           }
         }
       )
 
-      if (!shopeeRes.ok) {
-        // Tenta endpoint alternativo
-        const r2 = await fetch(
-          'https://affiliate.shopee.com.br/api/v1/offer/get_offers?' +
-          'page=' + page + '&size=' + PAGE_SIZE,
-          { credentials: 'include', headers: { 'Accept': 'application/json' } }
-        ).catch(() => null)
-
-        if (r2 && r2.ok) {
-          const j2 = await r2.json().catch(() => ({}))
-          const items2 = j2?.data?.offers || j2?.data?.list || j2?.data || []
-          pageTotal = j2?.data?.total_count || j2?.data?.total || 0
-          for (const it of (Array.isArray(items2) ? items2 : [])) {
-            const lk = it.short_link || it.affiliate_link || it.offer_link || it.link
-            if (lk) links.push(lk)
-          }
-        } else {
-          shLog('⚠️ API retornou ' + shopeeRes.status + ' — você está logado na Shopee Afiliados?')
-          hasMore = false; break
-        }
+      if (!shopeeRes.ok || shopeeRes.headers.get('content-type')?.includes('text/html')) {
+        shLog('⚠️ API retornou ' + shopeeRes.status + ' — você está logado na Shopee Afiliados?')
+        shLog('💡 Abra <a href="https://affiliate.shopee.com.br" target="_blank" class="text-orange-400 underline">affiliate.shopee.com.br</a> e faça login')
+        hasMore = false; break
       } else {
         const json = await shopeeRes.json().catch(() => ({}))
-        const items = json?.data?.offers || json?.data?.items || json?.data?.list || json?.data || []
-        pageTotal = json?.data?.total_count || json?.data?.total || json?.total || 0
-        for (const it of (Array.isArray(items) ? items : [])) {
-          const lk = it.short_link || it.affiliate_link || it.offer_link || it.link || it.url
-          if (lk) links.push(lk)
+
+        // is_login:false = sessão expirou
+        if (json?.is_login === false) {
+          shLog('⚠️ Sessão expirada! Abra affiliate.shopee.com.br e faça login.')
+          hasMore = false; break
         }
-        if (links.length < PAGE_SIZE) hasMore = false
+
+        // Extrai itens — a API retorna: data.items[] ou data.list[] ou data[]
+        const items = json?.data?.items || json?.data?.list || (Array.isArray(json?.data) ? json.data : [])
+        pageTotal = json?.data?.total_count || json?.data?.total || json?.total || 0
+
+        for (const it of items) {
+          // Extrai link afiliado (pode ser short_link, affiliate_link, ou monta via item_id)
+          const lk = it.short_link || it.affiliate_link || it.offer_link || it.link || it.url
+          // Dados ricos
+          const name  = (it.item_name || it.name || it.title || '').substring(0, 200)
+          const price = it.price_min  != null ? (Number(it.price_min)  / 100000).toFixed(2)
+                      : it.price      != null ? (Number(it.price)      / 100000).toFixed(2)
+                      : null
+          const img   = it.image || it.image_url || null
+          const extId = String(it.item_id || it.id || '')
+
+          if (lk) {
+            // Formato rico: URL|Nome|Preço|Img|ExternalId
+            links.push(lk + (name ? '|' + name : '') + (price ? '|' + price : '') + (img ? '|' + img : '') + (extId ? '|' + extId : ''))
+          }
+        }
+        if (items.length < PAGE_SIZE) hasMore = false
       }
     } catch (fetchErr) {
       shLog('⚠️ Erro ao acessar Shopee: ' + fetchErr.message)
@@ -1393,7 +1480,9 @@ async function shImportManual(storeId) {
     .split('\n').map(l => l.trim()).filter(l => l.startsWith('http'))
   if (!lines.length) { alert('Cole pelo menos um link da Shopee!'); return }
 
-  document.getElementById('sh-step-1').classList.add('hidden')
+  // Esconde seções extras e mostra progresso
+  const extSec = document.getElementById('sh-ext-section')
+  if (extSec) extSec.classList.add('hidden')
   document.getElementById('sh-step-2').classList.remove('hidden')
 
   shLog('📋 ' + lines.length + ' links detectados — iniciando importação...')
@@ -1444,8 +1533,78 @@ async function shCheckStatus(storeId) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// COLETA NO SERVIDOR — funções de sync via cookies
+// AUTO-DETECT: verifica se já está logado na Shopee Afiliados
+// O browser tem a sessão → fetch com credentials:include funciona
 // ═══════════════════════════════════════════════════════════════════
+async function shAutoDetectSession(storeId) {
+  // Tenta fazer fetch direto à API da Shopee — se retornar dados JSON
+  // com is_login:true = já está logado!
+  try {
+    const res = await fetch(
+      'https://affiliate.shopee.com.br/api/v3/offer/product/list?list_type=2&sort_type=2&page_offset=0&page_limit=1&client_type=1',
+      {
+        credentials: 'include',
+        headers: {
+          'Accept': 'application/json',
+          'x-requested-with': 'XMLHttpRequest',
+          'Referer': 'https://affiliate.shopee.com.br/offer/product_offer'
+        }
+      }
+    )
+
+    if (res.ok) {
+      const json = await res.json().catch(() => null)
+      // Se retornou JSON sem is_login:false = sessão ativa!
+      if (json && json.is_login !== false && !json.error) {
+        shOnLoggedIn(storeId)
+        const lbl = document.getElementById('sh-account-label')
+        const sub = document.getElementById('sh-account-sub')
+        if (lbl) lbl.textContent = 'kainow252@gmail.com'
+        if (sub) sub.textContent = 'Shopee Afiliados • Sessão ativa ✓'
+        return
+      }
+      // is_login:false = não logado
+      if (json && json.is_login === false) {
+        _shSetNotLogged()
+        return
+      }
+    }
+
+    // Tenta alternativo — GET /api/v3/user/status
+    const res2 = await fetch('https://affiliate.shopee.com.br/api/v3/user/status', {
+      credentials: 'include',
+      headers: { 'Accept': 'application/json', 'x-requested-with': 'XMLHttpRequest' }
+    })
+    if (res2.ok) {
+      const j2 = await res2.json().catch(() => null)
+      if (j2 && (j2.is_login === true || j2.data?.is_login)) {
+        shOnLoggedIn(storeId)
+        return
+      }
+    }
+
+    // Nenhuma verificação confirmou — mostra tela de login
+    _shSetNotLogged()
+
+  } catch (e) {
+    // Erro de CORS ou rede — mostra tela de login
+    _shSetNotLogged()
+  }
+}
+
+function _shSetNotLogged() {
+  const box = document.getElementById('sh-account-box')
+  if (box) {
+    box.style.background = '#f8fafc'
+    box.style.borderColor = '#e2e8f0'
+  }
+  const lbl = document.getElementById('sh-account-label')
+  const sub = document.getElementById('sh-account-sub')
+  const dot = document.getElementById('sh-dot')
+  if (lbl) lbl.textContent = 'Não conectado'
+  if (sub) sub.textContent = 'Clique abaixo para entrar com Google'
+  if (dot) dot.style.background = '#cbd5e1'
+}
 
 // Mostra/esconde a seção de extensão Chrome
 function shToggleExtSection() {
@@ -1507,8 +1666,7 @@ async function shServerSync(storeId) {
     return
   }
 
-  // Troca para tela de progresso
-  document.getElementById('sh-step-1').classList.add('hidden')
+  // Mostra progresso
   document.getElementById('sh-step-2').classList.remove('hidden')
 
   shLog('🖥️ Iniciando coleta no servidor...')
