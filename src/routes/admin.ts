@@ -2016,6 +2016,117 @@ admin.post('/api/stores/ml/import-affiliate-links', async (c) => {
     return { mlbId, title: ogTitle, price: ogPrice, image: ogImage, longUrl }
   }
 
+  // ── resolveAndFetchShopee: resolve s.shopee.com.br e extrai dados ──
+  // Fluxo:
+  //   1. GET s.shopee.com.br/{hash} sem UA → HTML com <a href="shopee.com.br/{shopid}/{itemid}?...">
+  //   2. Extrai shopid + itemid do href
+  //   3. GET shopee.com.br/product/{shopid}/{itemid} com UA facebookexternalhit
+  //      → retorna HTML com og:title, og:image e preço em R$ no HTML
+  async function resolveAndFetchShopee(shortUrl: string): Promise<{
+    itemId: string | null
+    shopId: string | null
+    title: string | null
+    price: number | null
+    image: string | null
+    canonicalUrl: string | null
+  }> {
+    const SHOPEE_ID_RE = /shopee\.com\.br[^"']*?\/(\d{5,12})\/(\d{8,15})/i
+
+    // Etapa 1: Resolver link curto → extrair shopid/itemid
+    let shopId: string | null = null
+    let itemId: string | null = null
+
+    try {
+      // UA mobile → s.shopee retorna HTML compacto (7KB) com URL do produto no script CONFIG
+      // Sem UA correto, retorna SPA completa (150KB) sem dados úteis
+      const UA_MOBILE = 'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
+      const r1 = await fetch(shortUrl, {
+        redirect: 'follow',
+        headers: { 'User-Agent': UA_MOBILE, 'Accept': 'text/html' },
+      })
+      const html1 = await r1.text()
+
+      // O HTML do s.shopee com UA mobile tem os IDs embutidos no script (CONFIG ou deepLink)
+      // Padrão: shopee.com.br/.../{shopid}/{itemid}? (URL pode ter \/ escapado)
+      const html1clean = html1.replace(/\\\//g, '/').replace(/\\u002F/gi, '/')
+      const m1 = html1clean.match(SHOPEE_ID_RE)
+      if (m1) { shopId = m1[1]; itemId = m1[2] }
+
+      // Fallback: tentar href no HTML (para o caso sem UA que retorna redirect simples)
+      if (!shopId || !itemId) {
+        const hrefM = html1.replace(/&amp;/g, '&').match(
+          /href=["']([^"']*shopee\.com\.br[^"']*\/(\d{5,12})\/(\d{8,15})[^"']*)["']/
+        )
+        if (hrefM) { shopId = hrefM[2]; itemId = hrefM[3] }
+      }
+
+      // Fallback: URL final do fetch (se houve redirect HTTP)
+      if (!shopId || !itemId) {
+        const finalUrl = r1.url || ''
+        const mf = finalUrl.match(SHOPEE_ID_RE)
+        if (mf) { shopId = mf[1]; itemId = mf[2] }
+      }
+    } catch { /* ignora */ }
+
+    if (!shopId || !itemId) {
+      return { itemId: null, shopId: null, title: null, price: null, image: null, canonicalUrl: null }
+    }
+
+    // Etapa 2: Buscar dados do produto via Facebook UA (retorna og: tags com nome e imagem)
+    const productUrl = `https://shopee.com.br/product/${shopId}/${itemId}`
+    let title: string | null = null
+    let image: string | null = null
+    let price: number | null = null
+    let canonicalUrl: string | null = productUrl
+
+    try {
+      const r2 = await fetch(productUrl, {
+        redirect: 'follow',
+        headers: {
+          'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+          'Accept': 'text/html,application/xhtml+xml,*/*',
+        },
+      })
+      const html2 = await r2.text()
+
+      // og:title → nome do produto
+      const titleM = html2.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+               ?? html2.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+      if (titleM) {
+        title = titleM[1].replace(/\s*\|\s*Shopee Brasil\s*$/i, '').trim()
+      }
+
+      // og:image → imagem principal
+      const imgM = html2.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+              ?? html2.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
+      if (imgM) image = imgM[1].trim()
+
+      // og:url → URL canônica com slug (mais amigável)
+      const urlM = html2.match(/<meta[^>]+property=["']og:url["'][^>]+content=["']([^"']+)["']/i)
+              ?? html2.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:url["']/i)
+      if (urlM) canonicalUrl = urlM[1].trim()
+
+      // Preço: padrão R$ X,XX ou R$ X.XXX,XX no HTML
+      const priceM = html2.match(/R\$\s*([\d]+(?:[.,]\d{2})?)(?:\s|<|&|"|'|$)/i)
+      if (priceM) {
+        // normaliza: "1.299,90" → 1299.90 | "29,90" → 29.90
+        const raw = priceM[1]
+        // distingue separador decimal vs milhar
+        let norm: string
+        if (/^\d{1,3}\.\d{3},\d{2}$/.test(raw)) {
+          // 1.299,90 → milhar com ponto, decimal com vírgula (BR)
+          norm = raw.replace('.', '').replace(',', '.')
+        } else {
+          norm = raw.replace(',', '.')
+        }
+        const v = parseFloat(norm)
+        if (v > 0 && v < 1_000_000) price = v
+      }
+    } catch { /* ignora */ }
+
+    return { itemId, shopId, title, price, image, canonicalUrl }
+  }
+
   // ── Processamento ───────────────────────────────────────────
 
   const results: any[] = []
@@ -3581,17 +3692,38 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
     for (const item of parsed) {
       if (!item.url) { skipped++; continue }
       try {
+        // ── RESOLUÇÃO AUTOMÁTICA de links curtos Shopee ──────────────────
+        // s.shopee.com.br/HASH → extrai shopid/itemid → busca nome, preço e imagem
+        const isShortShopeeLink = /s\.shopee\.com\.br\//i.test(item.url)
+        let resolvedShopeeId: string | null = item.external_id || null
+        let resolvedShopeeShopId: string | null = null
+
+        if (isShopeeStore && isShortShopeeLink && (!item.name || !item.price)) {
+          try {
+            const shopeeData = await resolveAndFetchShopee(item.url)
+            if (shopeeData.itemId) {
+              resolvedShopeeId     = shopeeData.itemId
+              resolvedShopeeShopId = shopeeData.shopId
+              if (!item.name  && shopeeData.title) item.name      = shopeeData.title
+              if (!item.price && shopeeData.price) item.price     = shopeeData.price
+              if (!item.image_url && shopeeData.image) item.image_url = shopeeData.image
+            }
+          } catch { /* ignora — continua com dados parciais */ }
+        }
+
         // Dedup: normaliza URL removendo query string para comparação
         let baseUrl = item.url
         try { baseUrl = new URL(item.url).origin + new URL(item.url).pathname } catch { /* ignora */ }
 
-        // Para Shopee, também tenta dedup por external_id (item_id da Shopee)
+        // Para Shopee, dedup por itemId (chave canônica) em vez de URL
+        // Links diferentes podem apontar para o mesmo produto
         let existing: any = null
-        if (item.external_id) {
+        const dedupExtId = resolvedShopeeId || item.external_id
+        if (dedupExtId) {
           existing = await DB.prepare(
             `SELECT o.id, o.product_id, o.price FROM offers o
              WHERE o.external_id = ? LIMIT 1`
-          ).bind(item.external_id).first<any>()
+          ).bind(dedupExtId).first<any>()
         }
         if (!existing) {
           existing = await DB.prepare(
@@ -3600,19 +3732,19 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
           ).bind(item.url, baseUrl).first<any>()
         }
 
-        // Nome: usa o fornecido (pode vir da API Shopee) ou extrai da URL
+        // Nome: usa o fornecido (resolvido via Shopee) ou extrai da URL
         let name = (item.name || '').trim()
         if (!name) {
           try {
             const pth = new URL(item.url).pathname
             const slug = pth.replace(/\/$/, '').split('/').filter(Boolean).pop() || ''
+            // Só usa slug se NÃO for um hash curto (ex: "2qRS7tomiu")
             if (slug && slug.length >= 4 && !/^[A-Za-z0-9]{4,12}$/.test(slug)) {
-              // Só usa se parece com um nome real (não um hash curto como "7AaQssz")
               name = slug.replace(/-+/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()).trim().substring(0, 120)
             }
           } catch { /* ignora */ }
         }
-        // Para links curtos Shopee (s.shopee.com.br/HASH) sem nome, usa placeholder rastreável
+        // Para links curtos Shopee sem nome resolvido, usa placeholder rastreável
         if (!name) {
           const hash = item.url.split('/').filter(Boolean).pop() || ''
           name = isShopeeStore ? `Produto Shopee ${hash}` : 'Produto Importado ' + Date.now().toString(36).toUpperCase()
@@ -3620,7 +3752,8 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
 
         const price = item.price && item.price > 0 ? item.price : null
         const slug  = slugifyGeneric(name) + '-' + Date.now().toString(36)
-        const extId = item.external_id || ('imp-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6))
+        // extId: usa itemId da Shopee resolvido como chave canônica de dedup
+        const extId = resolvedShopeeId || item.external_id || ('imp-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6))
 
         if (existing) {
           // Atualiza oferta existente com novos dados se disponíveis
@@ -3659,7 +3792,7 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
                 affiliate_url, checkout_url, image_url, in_stock, is_active,
                 source, external_id, last_updated)
              VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 1, 1, ?, ?, CURRENT_TIMESTAMP)`
-          ).bind(productId, storeId, name, price,
+          ).bind(productId, storeId, name, price ?? 0,
             item.url, item.url, item.image_url,
             sourceLabel, extId).run()
 
@@ -3803,8 +3936,10 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
   }
 
   if (dataLines.length === 0) return c.json({ error: 'Nenhuma linha válida encontrada' }, 400)
-  // ML (meli-api): limita a 10 por chamada — cada item ML tem 5-8 queries D1 (dedup complexo)
-  // Outras lojas: 50 por chamada (queries simples)
+  // ML (meli-api) e Shopee: limita a 10 por chamada
+  // ML: 5-8 queries D1 por item (dedup complexo)
+  // Shopee: resolve 2 HTTP requests por item (resolveAndFetchShopee)
+  // Outras lojas: 50 por chamada (queries simples, sem HTTP externo)
   const CHUNK_LIMIT = 10
   const dataChunk = dataLines.slice(0, CHUNK_LIMIT)
   const hasMore   = dataLines.length > CHUNK_LIMIT
@@ -9555,7 +9690,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260516j"><\/script>
+<script src="/static/admin-spa.js?v=20260516l"><\/script>
 </body>
 </html>`
 }

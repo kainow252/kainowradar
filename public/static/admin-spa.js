@@ -1952,10 +1952,13 @@ async function siMassImport(storeId) {
   const total = lines.length
 
   // ML (storeId=3 / meli-api): usa chunks pequenos (10) pois o backend faz 5-8 queries D1 por link
+  // Shopee (storeId=4 / shopee-api/lomadee): chunks de 10 pois resolve 2 HTTP requests por link
   // Outras lojas: chunks maiores (50) com queries simples
-  const isMlStore = storeId == 3
-  const CHUNK = isMlStore ? 10 : 50
-  const TIMEOUT = isMlStore ? 90000 : 60000
+  const isMlStore     = storeId == 3
+  const isShopeeStore = storeId == 4
+  const isSlowStore   = isMlStore || isShopeeStore
+  const CHUNK   = isSlowStore ? 10 : 50
+  const TIMEOUT = isSlowStore ? 90000 : 60000
 
   // Mostra painel de status
   btn.disabled = true
@@ -1974,7 +1977,7 @@ async function siMassImport(storeId) {
   const chunks = []
   for (let i = 0; i < total; i += CHUNK) chunks.push(lines.slice(i, i + CHUNK))
 
-  const chunkLabel = isMlStore ? 'lotes de 10 (ML)' : 'lotes de 50'
+  const chunkLabel = isMlStore ? 'lotes de 10 (ML — resolve links meli.la)' : isShopeeStore ? 'lotes de 10 (Shopee — resolve links s.shopee)' : 'lotes de 50'
   // Injeta o HTML de progresso (mesmo layout do siFastImportChunked)
   liveWrapper.innerHTML = `
     <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-3">
