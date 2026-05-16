@@ -1128,6 +1128,71 @@ function openShopeeAfiliados(storeId) {
           </div>
         </div>
 
+        <!-- ════════════════════════════════════════════════════════
+             OPÇÃO 4 — API GRAPHQL SHOPEE AFILIADOS (preços reais)
+             Conecta à open-api.affiliate.shopee.com.br/graphql
+             Requer AppId + Secret da Shopee Open Platform API
+             ════════════════════════════════════════════════════════ -->
+        <div class="mb-2">
+          <button onclick="shToggleApiSection()" class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl border border-orange-300 bg-orange-50 text-orange-700 text-xs font-semibold hover:bg-orange-100 transition-all">
+            <span class="flex items-center gap-2">⚡ API GraphQL — Preços Reais Automáticos</span>
+            <span id="sh-api-toggle-icon" class="text-orange-400">▼</span>
+          </button>
+          <div id="sh-api-section" class="hidden mt-2 border-2 border-orange-200 rounded-xl p-3 bg-orange-50/30">
+
+            <!-- Info da API -->
+            <div class="mb-3 bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-[10px] text-amber-800">
+              <div class="font-bold mb-1">🔑 API GraphQL da Shopee Afiliados</div>
+              <div class="space-y-0.5 text-amber-700">
+                <div>• Busca <strong>preço real</strong> de cada produto direto na Shopee</div>
+                <div>• Gera <strong>link curto afiliado</strong> novo (com tracking de comissão)</div>
+                <div>• Cron automático a cada hora atualiza todos os produtos</div>
+                <div class="mt-1 pt-1 border-t border-amber-200">Para obter AppId + Secret: <a href="https://affiliate.shopee.com.br/open_api" target="_blank" class="underline font-bold">affiliate.shopee.com.br/open_api</a> → Solicitar acesso à API</div>
+              </div>
+            </div>
+
+            <!-- Status atual -->
+            <div id="sh-api-status" class="mb-3 text-[10px] text-slate-500 text-center italic">Verificando configuração...</div>
+
+            <!-- Campos AppId + Secret -->
+            <div class="grid grid-cols-1 gap-2 mb-3">
+              <div>
+                <label class="text-[10px] font-bold text-slate-600 mb-1 block">App ID <span class="text-red-400">*</span></label>
+                <input id="sh-api-app-id" type="text"
+                  class="input w-full text-xs font-mono"
+                  placeholder="Ex: 123456789">
+              </div>
+              <div>
+                <label class="text-[10px] font-bold text-slate-600 mb-1 block">Secret <span class="text-red-400">*</span></label>
+                <input id="sh-api-secret" type="password"
+                  class="input w-full text-xs font-mono"
+                  placeholder="Sua chave secreta da API">
+              </div>
+              <div>
+                <label class="text-[10px] font-bold text-slate-600 mb-1 block">Sub ID (tracking personalizado)</label>
+                <input id="sh-api-sub-id" type="text"
+                  class="input w-full text-xs"
+                  placeholder="Ex: kainow" value="kainow">
+              </div>
+            </div>
+
+            <!-- Botões -->
+            <div class="flex gap-2 mb-2">
+              <button onclick="shSaveApiCredentials(${storeId})" id="sh-api-save-btn"
+                class="flex-1 py-2 rounded-xl border-2 border-orange-400 bg-orange-500 text-white text-xs font-bold hover:bg-orange-600 transition-all">
+                💾 Salvar Credenciais
+              </button>
+              <button onclick="shRunRefresh(${storeId})" id="sh-api-refresh-btn"
+                class="flex-1 py-2 rounded-xl border-2 border-green-400 bg-green-50 text-green-700 text-xs font-bold hover:bg-green-100 transition-all">
+                🔄 Atualizar Preços Agora
+              </button>
+            </div>
+
+            <!-- Resultado do refresh -->
+            <div id="sh-api-result" class="hidden text-[10px] rounded-xl p-2.5 border"></div>
+          </div>
+        </div>
+
       </div>
     </div>
   `
@@ -1135,6 +1200,7 @@ function openShopeeAfiliados(storeId) {
   document.getElementById('sh-manual-textarea').addEventListener('input', shCountManual)
   shCheckStatus(storeId)
   shAutoDetectSession(storeId)
+  shLoadApiStatus(storeId)
 }
 
 // Mostra/esconde a seção de login no browser
@@ -1144,6 +1210,117 @@ function shToggleBrowserSection() {
   if (!sec) return
   const hidden = sec.classList.toggle('hidden')
   if (icon) icon.textContent = hidden ? '▼' : '▲'
+}
+
+// Mostra/esconde a seção de API GraphQL
+function shToggleApiSection() {
+  const sec  = document.getElementById('sh-api-section')
+  const icon = document.getElementById('sh-api-toggle-icon')
+  if (!sec) return
+  const hidden = sec.classList.toggle('hidden')
+  if (icon) icon.textContent = hidden ? '▼' : '▲'
+}
+
+// Carrega status atual das credenciais da API Shopee
+async function shLoadApiStatus(storeId) {
+  const el = document.getElementById('sh-api-status')
+  if (!el) return
+  try {
+    const res = await api('GET', '/admin/api/stores/shopee/status?store_id=' + storeId)
+    if (res.configured && res.app_id && res.app_id !== 'kainow252@gmail.com') {
+      el.innerHTML = `<span class="text-green-700 font-bold">✅ API configurada — App ID: ${res.app_id.substring(0,8)}... | Último sync: ${res.last_sync ? new Date(res.last_sync).toLocaleString('pt-BR') : 'nunca'}</span>`
+      document.getElementById('sh-api-app-id').value = res.app_id || ''
+    } else {
+      el.textContent = '⚠️ API não configurada — insira AppId + Secret para ativar preços automáticos'
+    }
+  } catch {
+    el.textContent = 'Não foi possível verificar status da API'
+  }
+}
+
+// Salva credenciais AppId + Secret da API GraphQL Shopee
+async function shSaveApiCredentials(storeId) {
+  const appId  = document.getElementById('sh-api-app-id')?.value?.trim()
+  const secret = document.getElementById('sh-api-secret')?.value?.trim()
+  const subId  = document.getElementById('sh-api-sub-id')?.value?.trim() || 'kainow'
+  const btn    = document.getElementById('sh-api-save-btn')
+  const result = document.getElementById('sh-api-result')
+
+  if (!appId || !secret) {
+    if (result) {
+      result.textContent = '⚠️ Informe App ID e Secret'
+      result.className = 'text-[10px] rounded-xl p-2.5 border border-amber-300 bg-amber-50 text-amber-700'
+      result.classList.remove('hidden')
+    }
+    return
+  }
+
+  if (btn) { btn.textContent = '⏳ Salvando...'; btn.disabled = true }
+
+  try {
+    const res = await api('POST', '/admin/api/stores/shopee/token', {
+      store_id: storeId,
+      app_id: appId,
+      secret: secret,
+      sub_id: subId
+    })
+
+    if (result) {
+      if (res.ok) {
+        result.innerHTML = '✅ Credenciais salvas! O cron horário vai atualizar os preços automaticamente.<br><span class="text-slate-500">Clique em "Atualizar Preços Agora" para teste imediato.</span>'
+        result.className = 'text-[10px] rounded-xl p-2.5 border border-green-300 bg-green-50 text-green-700'
+      } else {
+        result.textContent = '❌ Erro ao salvar: ' + (res.error || 'desconhecido')
+        result.className = 'text-[10px] rounded-xl p-2.5 border border-red-300 bg-red-50 text-red-700'
+      }
+      result.classList.remove('hidden')
+    }
+    shLoadApiStatus(storeId)
+  } catch(e) {
+    if (result) {
+      result.textContent = '❌ Erro: ' + e.message
+      result.className = 'text-[10px] rounded-xl p-2.5 border border-red-300 bg-red-50 text-red-700'
+      result.classList.remove('hidden')
+    }
+  } finally {
+    if (btn) { btn.textContent = '💾 Salvar Credenciais'; btn.disabled = false }
+  }
+}
+
+// Chama o endpoint de refresh manual de preços Shopee
+async function shRunRefresh(storeId) {
+  const btn    = document.getElementById('sh-api-refresh-btn')
+  const result = document.getElementById('sh-api-result')
+
+  if (btn) { btn.textContent = '⏳ Atualizando...'; btn.disabled = true }
+  if (result) { result.classList.add('hidden') }
+
+  try {
+    const res = await api('POST', '/admin/api/cron/shopee-refresh', {})
+
+    if (result) {
+      if (res.ok) {
+        const via = res.graphql ? '🟢 via API GraphQL (preços reais)' : '🟡 via HTML fallback (sem credenciais API)'
+        result.innerHTML = `
+          ✅ Refresh concluído! ${via}<br>
+          <span class="text-slate-600">Total: ${res.total} | Atualizados: ${res.updated} | Sem dados: ${res.nodata || 0} | ${res.duration_ms}ms</span>
+        `
+        result.className = 'text-[10px] rounded-xl p-2.5 border border-green-300 bg-green-50 text-green-700'
+      } else {
+        result.textContent = '❌ Erro: ' + (res.error || JSON.stringify(res))
+        result.className = 'text-[10px] rounded-xl p-2.5 border border-red-300 bg-red-50 text-red-700'
+      }
+      result.classList.remove('hidden')
+    }
+  } catch(e) {
+    if (result) {
+      result.textContent = '❌ Erro: ' + e.message
+      result.className = 'text-[10px] rounded-xl p-2.5 border border-red-300 bg-red-50 text-red-700'
+      result.classList.remove('hidden')
+    }
+  } finally {
+    if (btn) { btn.textContent = '🔄 Atualizar Preços Agora'; btn.disabled = false }
+  }
 }
 
 // Inicia scrape mas mostra progresso dentro do modal (seção sh-step-2)
