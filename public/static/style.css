@@ -836,6 +836,12 @@ main, section, article, header, footer, nav {
 }
 .offer-card-btn {
   flex-shrink: 0;
+  flex-grow: 0;
+  flex-basis: auto;
+}
+/* O container do card deve sempre suportar quebra de linha */
+.offer-card-body {
+  flex-wrap: wrap;
 }
 
 /* ── RESPONSIVE ───────────────────────────────────────────── */
@@ -865,13 +871,19 @@ main, section, article, header, footer, nav {
     font-size: 1.625rem; /* 26px — cabe bem ao lado do logo menor */
   }
   .offer-card-btn {
-    flex: 1 1 100%;        /* quebra para linha própria */
+    /* Força quebra para linha própria — width 100% é mais confiável
+       que flex: 1 1 100% quando há flex-shrink: 0 no base */
+    width: 100% !important;
+    flex-shrink: 1 !important;
+    flex-grow: 1 !important;
+    flex-basis: 100% !important;
     text-align: center;
     justify-content: center;
     padding: 0.75rem 1rem;
     font-size: 1rem;
     border-radius: 0.875rem;
     margin-top: 0.25rem;
+    box-sizing: border-box;
   }
 }
 
