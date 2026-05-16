@@ -1053,9 +1053,18 @@ async function siMassImport(storeId) {
     const saveUrl  = it.url2 || it.url1
     if (!it.url2) return saveUrl  // link simples
     // par produto+afiliado → extrai MLB do url1 como hint
-    // Aceita MLB, MLBU (uplift), MLB- para cobrir todos os formatos de URL do ML
-    const mlbMatch = (it.url1 || '').match(/\bMLBU?[\-]?(\d{6,12})\b/i)
-    const mlbHint  = mlbMatch ? ' | mlb:MLB' + mlbMatch[1] : ''
+    // PRIORIDADE: wid= da URL (variante específica — mais preciso que MLB do path)
+    // O wid= pode estar em ?wid= (query) OU no fragment #...&wid= (antes da conversão)
+    const url1 = it.url1 || ''
+    const widInQuery  = url1.match(/[?&]wid=(MLB[\w-]+)/i)           // ?wid= ou &wid= na query
+    const widInFrag   = url1.match(/#[^?]*[&?]?wid=(MLB[\w-]+)/i)   // #...&wid= no fragment
+    const widVal      = (widInQuery || widInFrag)?.[1] || null
+    // Fallback: ID do path MLBU/MLB (menos preciso para dedup mas melhor que nada)
+    const mlbMatch    = url1.match(/\/p\/(MLB[\w-]+)/i)             // /p/MLB... (URL universal)
+                     || url1.match(/\/(MLB[\d-]{6,})/i)             // /MLB... no path
+    const mlbFallback = mlbMatch ? mlbMatch[1].replace(/-/g, '') : null
+    const hintId      = widVal ? widVal.replace(/-/g, '') : mlbFallback
+    const mlbHint     = hintId ? ' | mlb:' + (hintId.startsWith('MLB') ? hintId : 'MLB' + hintId) : ''
     return saveUrl + mlbHint
   })
 
@@ -1098,6 +1107,7 @@ async function siMassImport(storeId) {
   let totalUpdated    = 0   // offers existentes atualizadas
   let totalDuplicates = 0
   let totalErrors     = 0
+  let totalSkipped    = 0   // pulados por URL inválida/vazia
   let processedLines  = 0
 
   try {
@@ -1128,12 +1138,14 @@ async function siMassImport(storeId) {
       totalUpdated    += data.updated    || 0
       totalDuplicates += data.duplicates || 0
       totalErrors     += data.errors     || 0
+      totalSkipped    += data.skipped    || 0
 
       const logEl = document.getElementById('si-fast-log')
       if (logEl) {
         const icon = data.ok ? '✅' : '⚠'
-        const updPart = data.updated > 0 ? ` · ${data.updated} atualizados` : ''
-        let msg = `${icon} Lote ${ci+1}: ${data.imported||0} novos${updPart} · ${data.duplicates||0} duplicados · ${data.errors||0} erros`
+        const updPart  = data.updated  > 0 ? ` · <span class="text-amber-500">${data.updated} atual.</span>` : ''
+        const skipPart = data.skipped  > 0 ? ` · <span class="text-slate-400">${data.skipped} pulados</span>` : ''
+        let msg = `${icon} Lote ${ci+1}: <b>${data.imported||0} novos</b>${updPart} · ${data.duplicates||0} dup · ${data.errors||0} erros${skipPart}`
         if (data.errors > 0 && data.results) {
           const firstErr = data.results.find(r => r.status === 'erro')
           if (firstErr?.error) msg += `<br><span class="text-red-400 ml-4">↳ ${firstErr.error}</span>`
@@ -1151,10 +1163,11 @@ async function siMassImport(storeId) {
     if (barEl)     { barEl.style.width = '100%'; barEl.className = barEl.className.replace('bg-indigo-500','bg-green-500') }
     if (statusEl2) statusEl2.textContent = '✓ Concluído!'
     if (countEl)   countEl.textContent   = processedLines + '/' + total
-    const updLabel = totalUpdated > 0 ? ` · ${totalUpdated} atualizados` : ''
-    if (labelEl)   labelEl.textContent   = `${totalImported} novos${updLabel} · ${totalDuplicates} duplicados · ${totalErrors} erros`
+    const updLabel  = totalUpdated > 0 ? ` · ${totalUpdated} atualizados` : ''
+    const skipLabel = totalSkipped > 0 ? ` · ${totalSkipped} pulados` : ''
+    if (labelEl)   labelEl.textContent   = `${totalImported} novos${updLabel} · ${totalDuplicates} duplicados · ${totalErrors} erros${skipLabel}`
 
-    // Card de resultado final — 4 colunas quando há atualizados
+    // Card de resultado final — colunas dinâmicas baseadas nos valores
     const enrichTip = (totalImported + totalUpdated) > 0
       ? `<p class="text-xs text-indigo-600 mt-2">💡 Use <strong>Enriquecer Ofertas</strong> para completar preço, nome e imagem.</p>`
       : ''
@@ -1164,12 +1177,19 @@ async function siMassImport(storeId) {
            <div class="text-xs text-amber-500">Atualizados</div>
          </div>`
       : ''
+    const skippedCol = totalSkipped > 0
+      ? `<div class="bg-white rounded-lg p-2 text-center border border-slate-100">
+           <div class="text-xl font-black text-slate-400">${totalSkipped.toLocaleString('pt-BR')}</div>
+           <div class="text-xs text-slate-400">Pulados</div>
+         </div>`
+      : ''
+    const totalCols = 3 + (totalUpdated > 0 ? 1 : 0) + (totalSkipped > 0 ? 1 : 0)
 
     const resultCard = document.createElement('div')
     resultCard.innerHTML = `
       <div class="bg-green-50 border border-green-200 rounded-xl p-4 mt-3">
         <p class="text-sm font-bold text-green-800">✅ Importação concluída!</p>
-        <div class="grid grid-cols-${totalUpdated > 0 ? 4 : 3} gap-2 mt-3">
+        <div class="grid grid-cols-${totalCols} gap-2 mt-3">
           <div class="bg-white rounded-lg p-2 text-center border border-green-100">
             <div class="text-xl font-black text-green-700">${total.toLocaleString('pt-BR')}</div>
             <div class="text-xs text-green-500">Enviados</div>
@@ -1183,6 +1203,7 @@ async function siMassImport(storeId) {
             <div class="text-xl font-black text-${totalErrors>0?'red':'slate'}-600">${totalErrors.toLocaleString('pt-BR')}</div>
             <div class="text-xs text-${totalErrors>0?'red':'slate'}-400">Erros</div>
           </div>
+          ${skippedCol}
         </div>
         ${enrichTip}
       </div>`

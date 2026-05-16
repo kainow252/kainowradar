@@ -2721,12 +2721,33 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
   //   - URL | Nome | Preço | ImageURL
   //   - CSV: url,name,price,image_url
   // Separa linhas — também divide 2 URLs coladas na mesma linha por espaço
+  // Normaliza URL: converte #...&wid=MLB... (fragment) para ?wid=MLB... (query param)
+  // Necessário para URLs coladas diretamente sem passar pelo frontend (siExtractUrlsFromText)
+  // Também remove o restante do fragment (ex: #polycard_client=...) que não é necessário
+  function normalizeFragmentWid(u: string): string {
+    if (!u.includes('#')) return u
+    const hashIdx = u.indexOf('#')
+    const base    = u.substring(0, hashIdx)
+    const frag    = u.substring(hashIdx + 1)
+    const widMatch = frag.match(/(?:^|[&?])wid=(MLB[\w-]+)/i)
+    if (widMatch) {
+      const sep = base.includes('?') ? '&' : '?'
+      return base + sep + 'wid=' + widMatch[1]
+    }
+    return base // descarta fragment sem wid=
+  }
+
   const rawLines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
   const lines: string[] = []
   for (const l of rawLines) {
     const parts = l.split(/\s+/).filter(Boolean)
     if (parts.length >= 2 && parts.every(p => p.startsWith('http'))) {
-      lines.push(...parts) // cola "url1 url2" → separa em 2 linhas
+      // Linha com 2+ URLs separadas por espaço (ex: "url_produto url_social")
+      // Normaliza cada URL: converte #...&wid= para ?wid= (mesmo comportamento do frontend)
+      lines.push(...parts.map(normalizeFragmentWid))
+    } else if (l.startsWith('http') && l.includes('#')) {
+      // URL simples com fragment — normaliza para remover fragment e converter wid=
+      lines.push(normalizeFragmentWid(l))
     } else {
       lines.push(l)
     }
@@ -2933,9 +2954,11 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
       //   3) URL exata sem query string (fallback último recurso)
       // NUNCA usar LIKE %cfegdhabc31955% — publisher_id é igual em TODOS os links.
 
-      // Extrai wid= da query param (frontend converte #...&wid=MLB... → ?wid=MLB...)
+      // Extrai wid= da URL do produto (query param OU fragment — backend normaliza antes)
       // O wid é o item-ID da variante (cor/tamanho) — tem prioridade para dedup precisa
+      // Busca tanto ?wid= (após normalizeFragmentWid) quanto #...&wid= (por segurança)
       const widMatch = productUrl.match(/[?&]wid=(MLB[\w-]+)/i)
+                    || productUrl.match(/#[^?]*(?:^|[&?])wid=(MLB[\w-]+)/i)
       const widMlbId = widMatch ? widMatch[1].replace(/-/g, '') : null
 
       // Prioridade 0: hint do frontend (MLB-ID resolvido via url1 quando saveUrl=/social/)
