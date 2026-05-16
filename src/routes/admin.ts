@@ -3803,9 +3803,9 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
   }
 
   if (dataLines.length === 0) return c.json({ error: 'Nenhuma linha válida encontrada' }, 400)
-  // Limita a 50 itens por chamada para não estourar o timeout do Worker (cada item faz 4-5 queries D1)
-  // Frontend deve enviar em chunks de 50 e combinar os resultados
-  const CHUNK_LIMIT = 50
+  // ML (meli-api): limita a 10 por chamada — cada item ML tem 5-8 queries D1 (dedup complexo)
+  // Outras lojas: 50 por chamada (queries simples)
+  const CHUNK_LIMIT = 10
   const dataChunk = dataLines.slice(0, CHUNK_LIMIT)
   const hasMore   = dataLines.length > CHUNK_LIMIT
 

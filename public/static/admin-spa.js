@@ -1951,7 +1951,13 @@ async function siMassImport(storeId) {
 
   const total = lines.length
 
-  // Mostra painel de status e usa siFastImportChunked com IDs próprios da aba Em Massa
+  // ML (storeId=3 / meli-api): usa chunks pequenos (10) pois o backend faz 5-8 queries D1 por link
+  // Outras lojas: chunks maiores (50) com queries simples
+  const isMlStore = storeId == 3
+  const CHUNK = isMlStore ? 10 : 50
+  const TIMEOUT = isMlStore ? 90000 : 60000
+
+  // Mostra painel de status
   btn.disabled = true
   btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> Importando ' + total.toLocaleString('pt-BR') + ' links...'
   statusEl.classList.remove('hidden')
@@ -1965,15 +1971,15 @@ async function siMassImport(storeId) {
   liveWrapper.id = 'si-mass-live'
   statusEl.appendChild(liveWrapper)
 
-  const CHUNK = 50
   const chunks = []
   for (let i = 0; i < total; i += CHUNK) chunks.push(lines.slice(i, i + CHUNK))
 
+  const chunkLabel = isMlStore ? 'lotes de 10 (ML)' : 'lotes de 50'
   // Injeta o HTML de progresso (mesmo layout do siFastImportChunked)
   liveWrapper.innerHTML = `
     <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-3">
       <p class="text-sm font-semibold text-indigo-800">⚡ Importando — <span id="si-fast-label">${total.toLocaleString('pt-BR')} links em ${chunks.length} lote(s)</span></p>
-      <p class="text-xs text-indigo-600 mt-1">Lotes de 50 direto no banco — sem fila intermediária.</p>
+      <p class="text-xs text-indigo-600 mt-1">${chunkLabel} direto no banco — sem fila intermediária.</p>
       <div class="flex justify-between text-xs text-slate-500 mt-2 mb-1">
         <span id="si-fast-status">Preparando...</span>
         <span id="si-fast-count" class="font-bold text-indigo-600">0/${total}</span>
@@ -2006,8 +2012,7 @@ async function siMassImport(storeId) {
       btn.innerHTML = '<svg class="w-4 h-4 animate-spin mr-2 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> Lote ' + (ci+1) + '/' + chunks.length + ' — ' + processedLines + '/' + total
 
       const data = await api('POST', '/admin/api/stores/' + storeId + '/import-links',
-        { links: chunk.join('\n') }, 60000)
-
+        { links: chunk.join('\n') }, TIMEOUT)
       if (!data) {
         const logEl = document.getElementById('si-fast-log')
         if (logEl) logEl.innerHTML += `<div class="text-red-500">⚠ Lote ${ci+1}: sem resposta (timeout) — interrompido.</div>`
