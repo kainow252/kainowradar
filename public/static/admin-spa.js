@@ -1020,43 +1020,102 @@ function openShopeeAfiliados(storeId) {
           </div>
         </div>
 
-        <!-- Extensão Chrome -->
+        <!-- ═══════════════════════════════════════════════════════════
+             COLETA NO SERVIDOR — usa cookies da sessão do usuário
+             O servidor chama a API interna da Shopee com esses cookies
+             ═══════════════════════════════════════════════════════════ -->
         <div class="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-4 mb-4 border border-slate-700">
-          <div class="flex items-start gap-3">
-            <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
-              <svg class="w-5 h-5" viewBox="0 0 24 24" fill="white"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="text-sm font-bold text-white mb-0.5">Extensão Chrome <span class="text-[10px] bg-orange-500 text-white rounded px-1.5 py-0.5 ml-1 font-semibold">RECOMENDADO</span></div>
-              <div class="text-xs text-slate-400 mb-3">Coleta automática de até 1 milhão de links — roda no seu navegador com sua sessão Shopee já ativa. <strong class="text-slate-300">Login permanente, zero re-autenticação.</strong></div>
-              <div class="flex gap-2 flex-wrap">
-                <a href="/static/kainow-shopee-extension.zip" download="kainow-shopee-extension.zip"
-                  class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-white transition-all hover:opacity-90 active:scale-95"
-                  style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
-                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" stroke="white" stroke-width="2.5" stroke-linecap="round"/><polyline points="7 10 12 15 17 10" stroke="white" stroke-width="2.5" stroke-linecap="round"/><line x1="12" y1="15" x2="12" y2="3" stroke="white" stroke-width="2.5" stroke-linecap="round"/></svg>
-                  Baixar Extensão (.zip)
-                </a>
-                <button onclick="shShowExtInstructions()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 border border-slate-600 hover:bg-slate-700 transition-all">
-                  📖 Como instalar
-                </button>
-              </div>
+          <div class="flex items-center gap-2 mb-3">
+            <div class="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 text-lg" style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">🖥️</div>
+            <div>
+              <div class="text-sm font-bold text-white">Coleta no Servidor <span class="text-[10px] bg-green-500 text-white rounded px-1.5 py-0.5 ml-1 font-semibold">RECOMENDADO</span></div>
+              <div class="text-xs text-slate-400">Servidor usa seus cookies para buscar todos os links — zero navegador extra</div>
             </div>
           </div>
-          <!-- Instruções colapsáveis -->
-          <div id="sh-ext-instructions" class="hidden mt-3 pt-3 border-t border-slate-700">
-            <ol class="text-xs text-slate-300 space-y-1.5 list-decimal list-inside">
-              <li>Baixe o <strong class="text-white">.zip</strong> acima e extraia numa pasta</li>
-              <li>No Chrome, abra <code class="bg-slate-700 px-1 rounded">chrome://extensions</code></li>
-              <li>Ative <strong class="text-white">"Modo do desenvolvedor"</strong> (canto superior direito)</li>
-              <li>Clique <strong class="text-white">"Carregar sem compactação"</strong> → selecione a pasta extraída</li>
-              <li>Clique no ícone <span style="color:#EE4D2D">●</span><strong class="text-white"> KainowRadar</strong> na barra do Chrome</li>
-              <li>Configure o <strong class="text-white">Store ID: ${storeId}</strong> e clique <strong class="text-white">Iniciar Coleta</strong></li>
+
+          <!-- Cookies salvos indicator -->
+          <div id="sh-cookies-status" class="hidden mb-2 flex items-center gap-1.5 text-xs text-green-400">
+            <span>✅</span><span id="sh-cookies-status-txt">Cookies salvos</span>
+          </div>
+
+          <!-- Textarea para colar cookies -->
+          <div class="mb-2">
+            <label class="text-xs font-semibold text-slate-300 mb-1 block">
+              Cole aqui seus cookies da Shopee Afiliados
+              <button onclick="shShowCookieHelp()" class="ml-1 text-slate-500 hover:text-slate-300 text-[10px] underline">Como obter?</button>
+            </label>
+            <textarea id="sh-cookies-input" rows="3"
+              class="w-full rounded-xl border border-slate-600 bg-slate-700 text-xs font-mono text-green-300 p-2.5 resize-none focus:outline-none focus:border-orange-400 transition-all placeholder-slate-500"
+              placeholder="token=eyJ...; csrftoken=abc123; shopee_webUnique_ccd=...&#10;(Cole todos os cookies do DevTools → Network → Request Headers → Cookie)"></textarea>
+          </div>
+
+          <!-- Como obter cookies (colapsável) -->
+          <div id="sh-cookie-help" class="hidden mb-3 bg-slate-700 rounded-xl p-3">
+            <div class="text-xs font-bold text-white mb-2">📋 Como copiar seus cookies:</div>
+            <ol class="text-xs text-slate-300 space-y-1 list-decimal list-inside">
+              <li>Abra <a href="https://affiliate.shopee.com.br/offer/product_offer" target="_blank" class="text-orange-400 underline">affiliate.shopee.com.br</a> no Chrome (já logado)</li>
+              <li>Pressione <kbd class="bg-slate-600 px-1 rounded">F12</kbd> → aba <strong class="text-white">Network</strong></li>
+              <li>Recarregue a página (<kbd class="bg-slate-600 px-1 rounded">F5</kbd>)</li>
+              <li>Clique na primeira requisição para <strong class="text-white">product_offer</strong></li>
+              <li>Em <strong class="text-white">Request Headers</strong>, clique com direito em <strong class="text-white">cookie:</strong> → <strong class="text-white">Copy value</strong></li>
+              <li>Cole no campo acima e clique em <strong class="text-white">Salvar e Coletar</strong></li>
             </ol>
+          </div>
+
+          <!-- Botões de ação -->
+          <div class="flex gap-2">
+            <button onclick="shServerSync(${storeId})" id="sh-server-sync-btn"
+              class="flex-1 py-2.5 rounded-xl font-bold text-white text-xs transition-all hover:opacity-90 active:scale-95 shadow"
+              style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
+              🚀 Salvar e Coletar no Servidor
+            </button>
+            <button onclick="shSaveCookiesOnly(${storeId})" id="sh-save-cookies-btn"
+              class="px-3 py-2.5 rounded-xl font-semibold text-slate-300 text-xs border border-slate-600 hover:bg-slate-700 transition-all">
+              💾 Só Salvar
+            </button>
           </div>
         </div>
 
         <!-- Separador -->
         <div class="flex items-center gap-2 my-4">
+          <div class="flex-1 h-px bg-slate-700"></div>
+          <span class="text-[10px] text-slate-500 font-semibold">OUTRAS OPÇÕES</span>
+          <div class="flex-1 h-px bg-slate-700"></div>
+        </div>
+
+        <!-- Extensão Chrome (colapsável) -->
+        <div class="mb-4">
+          <button onclick="shToggleExtSection()" class="w-full flex items-center justify-between px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-600 text-xs font-semibold hover:bg-slate-100 transition-all">
+            <span>💻 Extensão Chrome / Colagem Manual</span>
+            <span id="sh-ext-toggle-icon">▼</span>
+          </button>
+          <div id="sh-ext-section" class="hidden mt-2">
+            <!-- Extensão -->
+            <div class="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-3 mb-3 border border-slate-700">
+              <div class="text-xs font-bold text-white mb-1">Extensão Chrome</div>
+              <div class="text-xs text-slate-400 mb-2">Coleta automática via navegador — requer Chrome aberto</div>
+              <div class="flex gap-2">
+                <a href="/static/kainow-shopee-extension.zip" download="kainow-shopee-extension.zip"
+                  class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-white transition-all hover:opacity-90"
+                  style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
+                  ⬇ Baixar .zip
+                </a>
+                <button onclick="shShowExtInstructions()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs text-slate-300 border border-slate-600 hover:bg-slate-700 transition-all">
+                  📖 Como instalar
+                </button>
+              </div>
+              <div id="sh-ext-instructions" class="hidden mt-2 pt-2 border-t border-slate-700">
+                <ol class="text-xs text-slate-300 space-y-1 list-decimal list-inside">
+                  <li>Baixe o .zip e extraia numa pasta</li>
+                  <li>Chrome → <code class="bg-slate-700 px-1 rounded">chrome://extensions</code></li>
+                  <li>Ative "Modo do desenvolvedor" → "Carregar sem compactação"</li>
+                  <li>Store ID: <strong class="text-orange-400">${storeId}</strong> → Iniciar Coleta</li>
+                </ol>
+              </div>
+            </div>
+
+        <!-- Separador manual -->
+        <div class="flex items-center gap-2 my-3">
           <div class="flex-1 h-px bg-slate-100"></div>
           <span class="text-[10px] text-slate-400 font-semibold">OU COLE OS LINKS MANUALMENTE</span>
           <div class="flex-1 h-px bg-slate-100"></div>
@@ -1075,12 +1134,16 @@ function openShopeeAfiliados(storeId) {
           📥 Importar Links Colados
         </button>
 
+          </div><!-- /sh-ext-section -->
+        </div><!-- /mb-4 ext wrapper -->
+
       </div>
     </div>
   `
 
   document.getElementById('sh-manual-textarea').addEventListener('input', shCountManual)
   shCheckStatus(storeId)
+  shLoadSavedCookiesIndicator(storeId)
 }
 
 function _shCleanup() {
@@ -1378,6 +1441,147 @@ async function shCheckStatus(storeId) {
       }
     }
   } catch(e) { /* silencioso */ }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// COLETA NO SERVIDOR — funções de sync via cookies
+// ═══════════════════════════════════════════════════════════════════
+
+// Mostra/esconde a seção de extensão Chrome
+function shToggleExtSection() {
+  const sec  = document.getElementById('sh-ext-section')
+  const icon = document.getElementById('sh-ext-toggle-icon')
+  if (!sec) return
+  const hidden = sec.classList.toggle('hidden')
+  if (icon) icon.textContent = hidden ? '▼' : '▲'
+}
+
+// Mostra/esconde dicas de como copiar cookies
+function shShowCookieHelp() {
+  const el = document.getElementById('sh-cookie-help')
+  if (el) el.classList.toggle('hidden')
+}
+
+// Carrega indicator se há cookies salvos no servidor
+async function shLoadSavedCookiesIndicator(storeId) {
+  try {
+    const res = await api('GET', '/admin/api/stores/' + storeId + '/shopee-cookies-status')
+    if (res?.has_cookies) {
+      const el = document.getElementById('sh-cookies-status')
+      const txt = document.getElementById('sh-cookies-status-txt')
+      if (el) el.classList.remove('hidden')
+      if (txt) txt.textContent = 'Cookies salvos — ' + (res.saved_at ? new Date(res.saved_at).toLocaleDateString('pt-BR') : 'disponíveis')
+    }
+  } catch(e) { /* silencioso */ }
+}
+
+// Salva cookies no KV sem iniciar coleta
+async function shSaveCookiesOnly(storeId) {
+  const cookies = (document.getElementById('sh-cookies-input')?.value || '').trim()
+  if (!cookies) { alert('Cole os cookies antes de salvar!'); return }
+  const btn = document.getElementById('sh-save-cookies-btn')
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Salvando...' }
+  try {
+    const res = await api('POST', '/admin/api/stores/' + storeId + '/shopee-save-cookies', { cookies })
+    if (res?.ok) {
+      const el  = document.getElementById('sh-cookies-status')
+      const txt = document.getElementById('sh-cookies-status-txt')
+      if (el)  el.classList.remove('hidden')
+      if (txt) txt.textContent = 'Cookies salvos com sucesso!'
+      if (btn) { btn.textContent = '✅ Salvo!'; setTimeout(() => { if(btn){btn.disabled=false;btn.textContent='💾 Só Salvar'} }, 2000) }
+    } else {
+      alert('Erro ao salvar: ' + (res?.error || 'falha desconhecida'))
+      if (btn) { btn.disabled = false; btn.textContent = '💾 Só Salvar' }
+    }
+  } catch(e) {
+    alert('Erro: ' + e.message)
+    if (btn) { btn.disabled = false; btn.textContent = '💾 Só Salvar' }
+  }
+}
+
+// Inicia coleta no servidor usando cookies
+async function shServerSync(storeId) {
+  const cookies = (document.getElementById('sh-cookies-input')?.value || '').trim()
+  if (!cookies) {
+    alert('Cole seus cookies da Shopee Afiliados antes de iniciar!\n\nAbra affiliate.shopee.com.br → F12 → Network → copie o valor do header "cookie:"')
+    return
+  }
+
+  // Troca para tela de progresso
+  document.getElementById('sh-step-1').classList.add('hidden')
+  document.getElementById('sh-step-2').classList.remove('hidden')
+
+  shLog('🖥️ Iniciando coleta no servidor...')
+  shLog('🔑 Enviando cookies para autenticação...')
+  shProgress(3, 'Preparando...')
+
+  let totalFound    = 0
+  let totalImported = 0
+  let pagesDone     = 0
+
+  try {
+    // 1. Salva cookies no KV
+    shLog('💾 Salvando cookies no KV...')
+    const saveRes = await api('POST', '/admin/api/stores/' + storeId + '/shopee-save-cookies', { cookies })
+    if (!saveRes?.ok) {
+      shLog('⚠️ Aviso: não foi possível salvar cookies no KV: ' + (saveRes?.error || ''))
+    } else {
+      shLog('✅ Cookies salvos!')
+    }
+
+    shProgress(8, 'Iniciando busca servidor-side...')
+
+    // 2. Dispara o sync no servidor (loop paginado)
+    //    Fazemos até 20 rounds de 200 itens cada = até 4.000/rodada
+    //    Para 1 milhão usamos o endpoint que faz loop completo no servidor
+    shLog('🚀 Servidor buscando ofertas na Shopee Afiliados...')
+    shLog('⏳ Aguarde — o servidor está fazendo loop por todas as páginas...')
+
+    const syncRes = await api('POST', '/admin/api/stores/' + storeId + '/shopee-server-sync', {
+      cookies,
+      limit: 0          // 0 = todos
+    })
+
+    if (!syncRes) {
+      shLog('❌ Sem resposta do servidor')
+      shProgress(100, 'Erro')
+      return
+    }
+
+    if (!syncRes.ok) {
+      shLog('❌ Erro: ' + (syncRes.error || syncRes.message || 'falha na coleta'))
+      if (syncRes.message) shLog('💡 ' + syncRes.message)
+      shProgress(100, 'Erro')
+      return
+    }
+
+    totalFound    = syncRes.fetched    || 0
+    totalImported = syncRes.imported   || 0
+    pagesDone     = syncRes.pages      || 0
+    const updated = syncRes.updated    || 0
+
+    shStat(totalFound, totalImported + updated, pagesDone)
+    shProgress(100, 'Concluído!')
+    shLog('✅ Servidor concluiu!')
+    shLog('📦 Encontrados: <strong class="text-orange-400">' + totalFound.toLocaleString('pt-BR') + '</strong>')
+    shLog('💾 Importados: <strong class="text-green-400">'   + totalImported.toLocaleString('pt-BR') + '</strong>')
+    shLog('🔄 Atualizados: <strong class="text-blue-400">'  + updated.toLocaleString('pt-BR') + '</strong>')
+    if (syncRes.errors > 0) shLog('⚠️ Erros: ' + syncRes.errors)
+
+    await _refreshStoreCard(storeId)
+
+    const done    = document.getElementById('sh-done')
+    const doneMsg = document.getElementById('sh-done-msg')
+    if (done && doneMsg) {
+      doneMsg.textContent = `🎉 ${(totalImported+updated).toLocaleString('pt-BR')} produto(s) salvos no banco!`
+      done.classList.remove('hidden')
+    }
+
+  } catch(err) {
+    shLog('❌ Erro: ' + err.message)
+    shLog('💡 Verifique se os cookies são válidos e se você está logado em affiliate.shopee.com.br')
+    shProgress(100, 'Erro')
+  }
 }
 
 

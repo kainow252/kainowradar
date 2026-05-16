@@ -2964,7 +2964,318 @@ admin.post('/api/stores/shopee/scrape', async (c) => {
   })
 })
 
-// POST /admin/api/stores/shopee/fetch-links — Busca links via Shopee Afiliados API (SocialSoul)
+// ── GET /admin/api/stores/:id/shopee-cookies-status ────────────────────
+// Verifica se há cookies salvos no KV para este store
+admin.get('/api/stores/:id/shopee-cookies-status', async (c) => {
+  const { CACHE } = c.env
+  const storeId = c.req.param('id')
+  const kvKey   = `shopee_cookies_${storeId}`
+
+  const raw = await CACHE.get(kvKey, 'text').catch(() => null)
+  if (!raw) return c.json({ has_cookies: false })
+
+  try {
+    const parsed = JSON.parse(raw)
+    return c.json({
+      has_cookies: !!(parsed.cookies),
+      saved_at:    parsed.saved_at || null,
+      store_id:    storeId
+    })
+  } catch {
+    // valor antigo era só a string de cookies
+    return c.json({ has_cookies: true, saved_at: null, store_id: storeId })
+  }
+})
+
+// ── POST /admin/api/stores/:id/shopee-save-cookies ─────────────────────
+// Salva cookies da sessão do usuário no KV (TTL 7 dias)
+admin.post('/api/stores/:id/shopee-save-cookies', async (c) => {
+  const { CACHE } = c.env
+  const storeId = c.req.param('id')
+  const body    = await c.req.json().catch(() => ({}))
+  const { cookies } = body
+
+  if (!cookies || typeof cookies !== 'string' || cookies.trim().length < 20) {
+    return c.json({ ok: false, error: 'Cookies inválidos ou muito curtos' }, 400)
+  }
+
+  const kvKey  = `shopee_cookies_${storeId}`
+  const payload = JSON.stringify({
+    cookies:  cookies.trim(),
+    saved_at: new Date().toISOString(),
+    store_id: storeId
+  })
+
+  // Salva por 7 dias (604800 segundos)
+  await CACHE.put(kvKey, payload, { expirationTtl: 604800 })
+
+  return c.json({ ok: true, store_id: storeId, saved_at: new Date().toISOString() })
+})
+
+// ── POST /admin/api/stores/:id/shopee-server-sync ──────────────────────
+// Coleta server-side: usa cookies salvos no KV (ou enviados no body)
+// para chamar a API interna da Shopee Afiliados e importar todos os produtos
+admin.post('/api/stores/:id/shopee-server-sync', async (c) => {
+  const { DB, CACHE } = c.env
+  const storeId = parseInt(c.req.param('id'))
+  if (!storeId) return c.json({ ok: false, error: 'storeId inválido' }, 400)
+
+  // Busca a loja
+  const store = await DB.prepare(
+    `SELECT id, name, affiliate_network FROM stores WHERE id = ?`
+  ).bind(storeId).first<any>()
+  if (!store) return c.json({ ok: false, error: 'Loja não encontrada' }, 404)
+
+  const body = await c.req.json().catch(() => ({}))
+  let cookies: string = (body.cookies || '').trim()
+
+  // Se não veio no body, busca no KV
+  if (!cookies) {
+    const kvKey = `shopee_cookies_${storeId}`
+    const raw   = await CACHE.get(kvKey, 'text').catch(() => null)
+    if (raw) {
+      try { cookies = JSON.parse(raw).cookies || raw } catch { cookies = raw }
+    }
+  }
+
+  if (!cookies) {
+    return c.json({
+      ok: false,
+      error: 'Cookies não encontrados. Cole seus cookies e clique "Salvar e Coletar".',
+      hint: 'Abra affiliate.shopee.com.br → F12 → Network → copie o header "cookie:"'
+    }, 400)
+  }
+
+  // Salva/atualiza cookies no KV para reutilizar depois
+  const kvKey   = `shopee_cookies_${storeId}`
+  const kvPayload = JSON.stringify({ cookies, saved_at: new Date().toISOString(), store_id: storeId })
+  await CACHE.put(kvKey, kvPayload, { expirationTtl: 604800 }).catch(() => {})
+
+  // ── Headers para a API interna da Shopee Afiliados ─────────────────
+  const csrfMatch = cookies.match(/csrftoken=([^;]+)/)
+  const csrf      = csrfMatch ? csrfMatch[1] : ''
+
+  const shopeeHeaders: Record<string, string> = {
+    'Cookie':            cookies,
+    'Accept':            'application/json, text/plain, */*',
+    'Content-Type':      'application/json',
+    'Referer':           'https://affiliate.shopee.com.br/offer/product_offer',
+    'Origin':            'https://affiliate.shopee.com.br',
+    'User-Agent':        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'x-requested-with':  'XMLHttpRequest',
+    'x-csrftoken':       csrf,
+  }
+
+  const maxLinks    = (body.limit && body.limit > 0) ? body.limit : 999999
+  const PAGE_SIZE   = 100
+  const SHOPEE_BASE = 'https://affiliate.shopee.com.br/api/v1'
+
+  // ── Slugify helper ────────────────────────────────────────────────
+  const slugify = (t: string): string =>
+    t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').substring(0, 120)
+
+  // ── Coleta paginada ───────────────────────────────────────────────
+  type ShopeeItem = {
+    url: string; name: string; price: number | null
+    image_url: string | null; external_id: string | null
+  }
+
+  const allItems: ShopeeItem[] = []
+  let   currentPage = 1
+  let   hasMore     = true
+  let   totalAPI    = 0
+  let   apiErrors   = 0
+
+  while (hasMore && allItems.length < maxLinks) {
+    const apiUrl = `${SHOPEE_BASE}/offer/product_offer?` + new URLSearchParams({
+      page_number:        String(currentPage),
+      page_size:          String(PAGE_SIZE),
+      need_products_info: '1',
+      sort_type:          '2'
+    })
+
+    const res = await fetch(apiUrl, { headers: shopeeHeaders }).catch(() => null)
+
+    // Tenta endpoint alternativo se o principal falhar
+    if (!res || !res.ok) {
+      apiErrors++
+      if (apiErrors >= 3) break
+
+      // Endpoint alternativo: lista de ofertas por POST
+      const res2 = await fetch(`${SHOPEE_BASE}/offer/get_offer_link`, {
+        method:  'POST',
+        headers: shopeeHeaders,
+        body:    JSON.stringify({ page_number: currentPage, page_size: PAGE_SIZE, sort_type: 2 })
+      }).catch(() => null)
+
+      if (!res2 || !res2.ok) { hasMore = false; break }
+
+      const json2: any = await res2.json().catch(() => null)
+      const list2 = json2?.data?.offers || json2?.data?.items || json2?.data || []
+      if (!Array.isArray(list2) || list2.length === 0) { hasMore = false; break }
+
+      for (const item of list2) {
+        const link = item.affiliate_link || item.short_link || item.offer_link || item.link || item.url
+        if (!link) continue
+        allItems.push({
+          url:         link,
+          name:        item.item_name || item.name || item.title || '',
+          price:       item.price_min != null ? Number(item.price_min) / 100000 :
+                       item.price     != null ? Number(item.price)     / 100000 : null,
+          image_url:   item.image || item.image_url || null,
+          external_id: String(item.item_id || item.id || '')
+        })
+      }
+      totalAPI = json2?.data?.total_count || json2?.total || allItems.length
+      if (list2.length < PAGE_SIZE) hasMore = false
+      currentPage++
+      apiErrors = 0
+      continue
+    }
+
+    const json: any = await res.json().catch(() => null)
+    if (!json) { apiErrors++; if (apiErrors >= 3) break; continue }
+
+    const list = json?.data?.offers   ||
+                 json?.data?.items    ||
+                 json?.data?.list     ||
+                 (Array.isArray(json?.data) ? json.data : null) || []
+
+    if (!Array.isArray(list) || list.length === 0) { hasMore = false; break }
+
+    for (const item of list) {
+      const link = item.affiliate_link || item.short_link || item.offer_link || item.link || item.url
+      if (!link) continue
+      allItems.push({
+        url:         link,
+        name:        item.item_name || item.name || item.title || '',
+        price:       item.price_min != null ? Number(item.price_min) / 100000 :
+                     item.price     != null ? Number(item.price)     / 100000 : null,
+        image_url:   item.image || item.image_url || null,
+        external_id: String(item.item_id || item.id || ''),
+      })
+    }
+
+    totalAPI = json?.data?.total_count || json?.data?.total || json?.total || allItems.length
+    if (list.length < PAGE_SIZE) hasMore = false
+    currentPage++
+    apiErrors = 0
+  }
+
+  if (allItems.length === 0) {
+    return c.json({
+      ok:      false,
+      fetched: 0,
+      error:   'Nenhum produto encontrado.',
+      message: 'Verifique se os cookies são válidos e se você está logado em affiliate.shopee.com.br',
+      pages:   currentPage - 1,
+      api_total: totalAPI
+    }, 422)
+  }
+
+  // ── Salva no banco (mesma lógica do import-links) ─────────────────
+  let imported = 0, updated = 0, skipped = 0, errors = 0
+
+  for (const item of allItems) {
+    if (!item.url) { skipped++; continue }
+    try {
+      let baseUrl = item.url
+      try { baseUrl = new URL(item.url).origin + new URL(item.url).pathname } catch { /* ignora */ }
+
+      // Dedup por external_id primeiro
+      let existing: any = null
+      if (item.external_id && item.external_id !== '' && item.external_id !== 'undefined') {
+        existing = await DB.prepare(
+          `SELECT o.id, o.product_id, o.price FROM offers o WHERE o.external_id = ? LIMIT 1`
+        ).bind(item.external_id).first<any>()
+      }
+      if (!existing) {
+        existing = await DB.prepare(
+          `SELECT o.id, o.product_id, o.price FROM offers o
+           WHERE o.affiliate_url = ? OR o.affiliate_url = ? LIMIT 1`
+        ).bind(item.url, baseUrl).first<any>()
+      }
+
+      // Nome fallback
+      let name = (item.name || '').trim()
+      if (!name) {
+        const hash = item.url.split('/').filter(Boolean).pop() || ''
+        name = `Produto Shopee ${hash}`
+      }
+      name = name.substring(0, 200)
+
+      const price = item.price && item.price > 0 ? item.price : null
+      const extId = (item.external_id && item.external_id !== '' && item.external_id !== 'undefined')
+        ? item.external_id
+        : 'sh-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+
+      if (existing) {
+        await DB.prepare(
+          `UPDATE offers
+           SET price       = COALESCE(?, price),
+               image_url   = COALESCE(?, image_url),
+               affiliate_url = COALESCE(NULLIF(?, ''), affiliate_url),
+               last_updated = CURRENT_TIMESTAMP
+           WHERE id = ?`
+        ).bind(price, item.image_url, item.url, existing.id).run()
+
+        if (price) {
+          await DB.prepare(
+            `UPDATE products
+             SET best_price = COALESCE(?, best_price),
+                 image_url  = COALESCE(?, image_url)
+             WHERE id = ? AND (best_price IS NULL OR ? < best_price)`
+          ).bind(price, item.image_url, existing.product_id, price).run()
+        }
+        updated++
+      } else {
+        const slug = slugify(name) + '-' + Date.now().toString(36)
+        const insP = await DB.prepare(
+          `INSERT INTO products (name, slug, best_price, image_url, is_active, created_at)
+           VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP)`
+        ).bind(name, slug, price, item.image_url).run()
+        const productId = insP.meta.last_row_id as number
+
+        await DB.prepare(
+          `INSERT INTO offers
+             (product_id, store_id, title, price, original_price,
+              affiliate_url, checkout_url, image_url, in_stock, is_active,
+              source, external_id, last_updated)
+           VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 1, 1, 'shopee-affiliate', ?, CURRENT_TIMESTAMP)`
+        ).bind(productId, storeId, name, price, item.url, item.url, item.image_url, extId).run()
+
+        await DB.prepare(
+          `UPDATE products SET best_store_id = ? WHERE id = ?`
+        ).bind(storeId, productId).run()
+
+        imported++
+      }
+    } catch (e: any) {
+      errors++
+    }
+  }
+
+  // Registra timestamp do último sync no api_configs
+  await DB.prepare(`
+    INSERT INTO api_configs (id, name, network, is_active, commission_rate, created_at, updated_at)
+    VALUES ('shopee-afiliados','Shopee Afiliados','shopee-api',1,6.0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+    ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+  `).run().catch(() => {})
+
+  return c.json({
+    ok:        true,
+    store_id:  storeId,
+    store_name: store.name,
+    fetched:   allItems.length,
+    api_total: totalAPI,
+    pages:     currentPage - 1,
+    imported,
+    updated,
+    skipped,
+    errors
+  })
+})
 admin.post('/api/stores/shopee/fetch-links', async (c) => {
   const { DB } = c.env
   const body   = await c.req.json().catch(() => ({}))
@@ -9084,7 +9395,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260516g"><\/script>
+<script src="/static/admin-spa.js?v=20260516h"><\/script>
 </body>
 </html>`
 }
