@@ -286,7 +286,8 @@ pages.get('/produto/:slug', async (c) => {
   // ── DADOS CALCULADOS ────────────────────────────────────
   const specs    = product.specs ? (() => { try { return JSON.parse(product.specs!) } catch { return {} } })() : {}
   const specKeys = Object.keys(specs)
-  const minPrice = offers.length ? Math.min(...offers.filter(o => o.price > 0.01).map(o => o.price).concat([0])) : product.best_price || 0
+  const validPrices = offers.filter(o => o.price > 0.01).map(o => o.price)
+  const minPrice = validPrices.length ? Math.min(...validPrices) : (product.best_price || 0)
   const maxPrice = offers.length ? Math.max(...offers.map(o => o.price)) : minPrice
   const savings  = maxPrice - minPrice
   const histMin  = priceHistory.length ? Math.min(...priceHistory.map((h:any) => h.price)) : 0
