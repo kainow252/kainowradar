@@ -2565,6 +2565,167 @@ admin.get('/api/resolve-url', async (c) => {
   }
 })
 
+// ── SHOPEE AFILIADOS — Token, Fetch Links, Status ────────────────
+
+// POST /admin/api/stores/shopee/token — Salva credenciais da Shopee Afiliados
+admin.post('/api/stores/shopee/token', async (c) => {
+  const { DB } = c.env
+  const body = await c.req.json().catch(() => ({}))
+  const { store_id, app_id, secret, sub_id } = body
+  if (!app_id || !secret) return c.json({ error: 'app_id e secret são obrigatórios' }, 400)
+
+  // Salva nas configs da loja (api_configs)
+  await DB.prepare(`
+    INSERT INTO api_configs (id, name, network, endpoint_url, api_key, extra_json, is_active, commission_rate, created_at, updated_at)
+    VALUES ('shopee-afiliados', 'Shopee Afiliados', 'shopee-api',
+      'https://open-api.affiliate.shopee.com.br',
+      ?, ?, 1, 6.0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT(id) DO UPDATE SET
+      api_key     = excluded.api_key,
+      extra_json  = excluded.extra_json,
+      is_active   = 1,
+      updated_at  = CURRENT_TIMESTAMP
+  `).bind(
+    app_id,
+    JSON.stringify({ secret, sub_id: sub_id || 'kainow', store_id })
+  ).run()
+
+  return c.json({ ok: true, message: 'Credenciais Shopee salvas com sucesso!' })
+})
+
+// GET /admin/api/stores/shopee/status — Verifica status da conexão Shopee
+admin.get('/api/stores/shopee/status', async (c) => {
+  const { DB } = c.env
+  const storeId = c.req.query('store_id') || ''
+
+  const cfg = await DB.prepare(
+    `SELECT api_key, extra_json, updated_at FROM api_configs WHERE id = 'shopee-afiliados'`
+  ).first<any>()
+
+  if (!cfg || !cfg.api_key) {
+    return c.json({ configured: false })
+  }
+
+  const extra = JSON.parse(cfg.extra_json || '{}')
+
+  // Conta links/produtos da loja Shopee
+  const store = storeId
+    ? await DB.prepare(`SELECT id FROM stores WHERE affiliate_network = 'shopee-api' AND id = ?`).bind(storeId).first<any>()
+    : await DB.prepare(`SELECT id FROM stores WHERE affiliate_network = 'shopee-api' LIMIT 1`).first<any>()
+
+  let totalLinks = 0
+  let totalProducts = 0
+  if (store) {
+    const pCount = await DB.prepare(`SELECT COUNT(*) as ct FROM products WHERE store_id = ?`).bind(store.id).first<any>()
+    totalProducts = pCount?.ct || 0
+    const oCount = await DB.prepare(`SELECT COUNT(*) as ct FROM offers WHERE store_id = ?`).bind(store.id).first<any>()
+    totalLinks = oCount?.ct || 0
+  }
+
+  return c.json({
+    configured: true,
+    app_id: cfg.api_key,
+    sub_id: extra.sub_id || '',
+    last_sync: cfg.updated_at,
+    total_links: totalLinks,
+    total_products: totalProducts
+  })
+})
+
+// POST /admin/api/stores/shopee/fetch-links — Busca links via Shopee Afiliados API (SocialSoul)
+admin.post('/api/stores/shopee/fetch-links', async (c) => {
+  const { DB } = c.env
+  const body   = await c.req.json().catch(() => ({}))
+  const { store_id, limit = 1000, period = 30 } = body
+
+  // Busca credenciais salvas
+  const cfg = await DB.prepare(
+    `SELECT api_key, extra_json FROM api_configs WHERE id = 'shopee-afiliados'`
+  ).first<any>()
+
+  if (!cfg || !cfg.api_key) {
+    // Sem credenciais — retorna instrução para configurar
+    return c.json({
+      ok: false,
+      fetched: 0,
+      links: [],
+      message: 'Configure o Token API primeiro na aba "Token API".'
+    })
+  }
+
+  const extra  = JSON.parse(cfg.extra_json || '{}')
+  const appId  = cfg.api_key
+  const secret = extra.secret || ''
+  const subId  = extra.sub_id || 'kainow'
+
+  // ── Tenta buscar via Shopee Open Platform API ──────────────────
+  // Endpoint: GET /v2/affiliate/get_offer_list
+  const links: string[] = []
+  let page = 0
+  const pageSize = 100
+  const maxLinks = limit > 0 ? limit : 100000
+  let hasMore = true
+
+  try {
+    while (hasMore && links.length < maxLinks) {
+      const params = new URLSearchParams({
+        app_id:    appId,
+        token:     secret,
+        page:      String(page),
+        page_size: String(pageSize),
+        scenario:  'ALL'
+      })
+
+      const res = await fetch(`https://open-api.affiliate.shopee.com.br/graphql`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${secret}`
+        },
+        body: JSON.stringify({
+          query: `{ getOfferList(page: ${page}, pageSize: ${pageSize}) { offers { productLink affiliateLink } totalCount } }`
+        })
+      }).catch(() => null)
+
+      if (!res || !res.ok) break
+
+      const json: any = await res.json().catch(() => null)
+      const offers = json?.data?.getOfferList?.offers || []
+
+      if (!offers.length) { hasMore = false; break }
+
+      for (const o of offers) {
+        const link = o.affiliateLink || o.productLink
+        if (link) links.push(link)
+      }
+
+      page++
+      if (offers.length < pageSize) hasMore = false
+    }
+  } catch (_) { /* silencia — API pode não estar disponível */ }
+
+  // ── Fallback: Se API não retornou nada, orienta o usuário ────────
+  if (links.length === 0) {
+    return c.json({
+      ok: true,
+      fetched: 0,
+      links: [],
+      message: 'A API da Shopee Afiliados requer credenciais válidas. Use o modo Manual para colar seus links.'
+    })
+  }
+
+  // Atualiza timestamp de sync
+  await DB.prepare(
+    `UPDATE api_configs SET updated_at = CURRENT_TIMESTAMP WHERE id = 'shopee-afiliados'`
+  ).run()
+
+  return c.json({
+    ok: true,
+    fetched: links.length,
+    links: links.slice(0, maxLinks)
+  })
+})
+
 // ── POST /admin/api/stores/:storeId/import-links ─────────────────
 // Importa produtos/links em massa para qualquer loja
 // Aceita bloco de texto ou CSV com URLs (uma por linha)
@@ -8553,7 +8714,7 @@ function renderAdminSPA(): string {
 <div id="modal-container"></div>
 
 <\/script>
-<script src="/static/admin-spa.js?v=20260515u"><\/script>
+<script src="/static/admin-spa.js?v=20260516s"><\/script>
 </body>
 </html>`
 }
