@@ -60,13 +60,51 @@ export function normalizeName(name: string): string {
     .trim()
 }
 
+// ── Palavras de COR — usadas para distinguir variantes ────
+// Se dois produtos têm nomes similares MAS cores DIFERENTES,
+// são variantes separadas (não o mesmo produto).
+export const COLOR_WORDS = new Set([
+  // PT
+  'preto','preta','pretos','pretas',
+  'branco','branca',
+  'prata','prateado','prateada',
+  'dourado','dourada','gold',
+  'rosa','pink',
+  'azul','blue',
+  'verde','green',
+  'vermelho','vermelha','red',
+  'cinza','grey','gray',
+  'laranja','orange',
+  'roxo','roxa','purple','violeta',
+  'amarelo','amarela','yellow',
+  'bege','creme',
+  'chumbo','grafite',
+  'champagne','champanhe',
+  'titanio','titanium','titânio',
+  'coral','midnight','starlight','navy',
+  'cobre','bronze',
+  'off-white','offwhite',
+])
+
+// ── Extrai a cor detectada do nome (primeira encontrada) ──
+export function extractColor(name: string): string | null {
+  const norm = normalizeName(name)
+  const tokens = norm.split(' ')
+  for (const t of tokens) {
+    if (COLOR_WORDS.has(t)) return t
+  }
+  return null
+}
+
 // ── Extrai tokens relevantes do nome ─────────────────────
+// Remove stopwords, palavras de cor e termos genéricos
 function extractTokens(name: string): string[] {
   const stopwords = new Set([
-    'de', 'do', 'da', 'com', 'para', 'por', 'em', 'no', 'na',
-    'the', 'with', 'for', 'and', 'or', 'in',
-    'preto', 'branco', 'azul', 'prata', 'dourado', 'rosa', 'cinza',
-    'lacrado', 'original', 'novo', 'nf', 'garantia', 'oferta'
+    'de','do','da','com','para','por','em','no','na','e','a','o','os','as','um','uma',
+    'the','with','for','and','or','in',
+    'lacrado','original','novo','nova','nf','garantia','oferta','promoção',
+    'importado','nacional','nacional','revisado','seminovo',
+    ...COLOR_WORDS,  // cores ficam FORA dos tokens de matching
   ])
   return normalizeName(name)
     .split(' ')
@@ -91,6 +129,18 @@ export function nameSimilarity(a: string, b: string): number {
   const tok = tokenSimilarity(a, b)
   // Peso maior para token overlap em nomes de produto
   return jw * 0.4 + tok * 0.6
+}
+
+// ── Dois nomes têm cores DIFERENTES entre si? ─────────────
+// Ex: "S11 Prateado" vs "S11 Preto" → cores diferentes → variantes
+// Ex: "S11 Prateado" vs "S11 Prateado 44mm" → mesma cor → mesmo produto
+// Ex: "S11" (sem cor) vs "S11 Preto" → sem conflito → mesmo produto
+function hasDifferentColor(nameA: string, nameB: string): boolean {
+  const colorA = extractColor(nameA)
+  const colorB = extractColor(nameB)
+  // Só conflita se AMBOS têm cor E são cores diferentes
+  if (!colorA || !colorB) return false
+  return colorA !== colorB
 }
 
 // ── Threshold de confiança ────────────────────────────────
@@ -150,6 +200,11 @@ export class MatchingEngine {
   }
 
   // 3. Tenta por similaridade de nome — confiança variável
+  //
+  // REGRA DE COR:
+  // ✅ "S11 Prateado" (Shopee) vs "S11 Prateado" (ML) → mesma cor → MESMO PRODUTO → agrupa
+  // ✅ "S11" (sem cor, Shopee)  vs "S11 Prateado" (ML) → sem conflito → MESMO PRODUTO → agrupa
+  // ❌ "S11 Preto" (Shopee)    vs "S11 Prateado" (ML) → cores distintas → VARIANTE SEPARADA → cria novo
   async matchByName(name: string, brand?: string, category?: string): Promise<MatchingResult> {
     // Busca candidatos filtrando por categoria/marca para reduzir comparações
     const query = brand
@@ -165,6 +220,11 @@ export class MatchingEngine {
     for (const product of results) {
       const score = nameSimilarity(name, product.name)
       if (score >= SIMILARITY_THRESHOLD) {
+        // ── Verificação de cor: cores diferentes = variante, não o mesmo produto ──
+        // Ex: "S11 Preto" não deve ser agrupado com "S11 Prateado"
+        if (hasDifferentColor(name, product.name)) {
+          continue  // pula — é uma variante diferente, cria produto separado
+        }
         if (!best || score > best.score) {
           best = { product, score }
         }

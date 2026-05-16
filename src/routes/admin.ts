@@ -3648,6 +3648,133 @@ admin.post('/api/sweep', async (c) => {
   })
 })
 
+// ── GET /admin/api/match-preview — Simula matching de nome cross-loja ──
+// Mostra como o sistema agruparia um produto importado de outra loja
+// Query: name (obrigatório), brand (opcional), category (opcional)
+admin.get('/api/match-preview', async (c) => {
+  const db    = c.env.DB
+  const name  = c.req.query('name') || ''
+  const brand = c.req.query('brand') || undefined
+  const cat   = c.req.query('category') || undefined
+
+  if (!name.trim()) return c.json({ ok: false, error: 'name é obrigatório' }, 400)
+
+  const normStr = (s: string) => s.toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
+
+  const COLOR_SET = new Set([
+    'preto','preta','branco','branca','prata','prateado','prateada',
+    'dourado','dourada','gold','rosa','pink','azul','blue','verde','green',
+    'vermelho','vermelha','red','cinza','grey','gray','laranja','orange',
+    'roxo','roxa','purple','violeta','lilas','amarelo','amarela','yellow',
+    'bege','chumbo','grafite','champagne','titanio','titanium','silver','black','white',
+  ])
+
+  const extractColor = (n: string): string | null => {
+    const tokens = normStr(n).split(' ')
+    for (const t of tokens) if (COLOR_SET.has(t)) return t
+    return null
+  }
+
+  const STOP = new Set([
+    'de','do','da','com','para','por','em','no','na','e','a','o','os','as','um','uma',
+    'the','with','for','and','or','in','lacrado','original','novo','nova',
+    ...COLOR_SET,
+  ])
+
+  const VARIANTS = new Set([...COLOR_SET,'128gb','256gb','512gb','1tb','2tb','4gb','6gb','8gb',
+    '12gb','16gb','32gb','64gb','wi-fi','4g','5g','wifi'])
+
+  const extractFP = (n: string) => normStr(n).split(' ')
+    .filter(t => t.length > 1 && !STOP.has(t) && !VARIANTS.has(t))
+
+  const linkFP    = extractFP(name)
+  const linkNorm  = normStr(name)
+  const linkTokens= linkNorm.split(' ').filter(t => t.length > 1 && !STOP.has(t))
+  const linkColor = extractColor(name)
+
+  // Busca candidatos
+  const queryStr = brand
+    ? `SELECT id, name, brand, category, slug, best_price, image_url FROM products WHERE (brand = ? OR category = ?) AND is_active = 1 LIMIT 400`
+    : `SELECT id, name, brand, category, slug, best_price, image_url FROM products WHERE is_active = 1 LIMIT 600`
+
+  const { results: candidates } = brand
+    ? await db.prepare(queryStr).bind(brand, cat || '').all<any>()
+    : await db.prepare(queryStr).all<any>()
+
+  const scored: Array<{
+    id: number; name: string; brand: string|null; category: string|null; slug: string
+    best_price: number; image_url: string|null
+    score: number; method: string
+    color_mine: string|null; color_theirs: string|null; color_conflict: boolean
+    action: 'agrupar' | 'variante'
+  }> = []
+
+  for (const cand of candidates) {
+    if (/^(Produto\s+Importado|Produto\s+MLB|Cfegdhabc|MLBU?\d{6,12})/i.test(cand.name)) continue
+
+    const candFP    = extractFP(cand.name)
+    const candNorm  = normStr(cand.name)
+    const candTokens= new Set(candNorm.split(' ').filter(t => t.length > 1 && !STOP.has(t)))
+
+    const candFPSet = new Set(candFP)
+    const fpInter = linkFP.filter(t => candFPSet.has(t)).length
+    const fpUnion = new Set([...linkFP, ...candFP]).size
+    const fpJacc  = fpUnion > 0 ? fpInter / fpUnion : 0
+
+    const fullInter = linkTokens.filter(t => candTokens.has(t)).length
+    const fullUnion = new Set([...linkTokens, ...candTokens]).size
+    const fullJacc  = fullUnion > 0 ? fullInter / fullUnion : 0
+
+    // Cobertura: quantos dos meus tokens existem no candidato?
+    // Robusto quando candidato tem tokens extras (Series 11, Whatsapp, 2026)
+    const coverageInter = linkFP.filter(t => candFPSet.has(t)).length
+    const inputCoverage = linkFP.length > 0 ? coverageInter / linkFP.length : 0
+
+    // Bônus de modelo alfanumérico (S11, X100, Tab5 etc) — token muito específico
+    const modelTokensL = linkFP.filter(t => /^[a-z]+\d+/.test(t) || /^\d+[a-z]+/.test(t))
+    const modelMatch   = modelTokensL.length > 0 && modelTokensL.every(t => candFPSet.has(t))
+    const modelBonus   = modelMatch ? 0.10 : 0
+
+    const brandBonus = (brand && cand.brand && normStr(brand) === normStr(cand.brand)) ? 0.08 : 0
+    const score = Math.min(1.0, Math.max(fpJacc, fullJacc, inputCoverage) + brandBonus + modelBonus)
+    const threshold = brandBonus > 0 ? 0.60 : modelMatch ? 0.65 : 0.72
+
+    if (score >= threshold) {
+      const candColor = extractColor(cand.name)
+      const colorConflict = !!(linkColor && candColor && linkColor !== candColor)
+      scored.push({
+        id: cand.id, name: cand.name, brand: cand.brand, category: cand.category,
+        slug: cand.slug, best_price: cand.best_price, image_url: cand.image_url,
+        score: Math.round(score * 100) / 100,
+        method: inputCoverage >= fpJacc && inputCoverage >= fullJacc ? 'coverage' : fpJacc >= fullJacc ? 'fingerprint' : 'fuzzy',
+        color_mine: linkColor, color_theirs: candColor, color_conflict: colorConflict,
+        action: colorConflict ? 'variante' : 'agrupar',
+      })
+    }
+  }
+
+  // Ordena: maior score primeiro; desempate → mesma cor tem prioridade sobre cor diferente
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score
+    // Desempate: prefere agrupar (mesma cor ou sem conflito) sobre variante (cor diferente)
+    if (a.action === 'agrupar' && b.action !== 'agrupar') return -1
+    if (b.action === 'agrupar' && a.action !== 'agrupar') return 1
+    return 0
+  })
+
+  return c.json({
+    ok: true,
+    input: { name, brand: brand||null, color: linkColor },
+    fingerprint: linkFP,
+    total_candidates_scanned: candidates.length,
+    matches: scored.slice(0, 10),
+    top_action: scored[0]?.action || 'novo_produto',
+    top_match: scored[0] || null,
+  })
+})
+
 // ── GET /admin/api/fetch-debug — Testa acesso a URL externa do Worker ──
 // Debug: verifica se o Worker consegue acessar URLs do ML
 admin.get('/api/fetch-debug', async (c) => {
@@ -7468,14 +7595,53 @@ admin.post('/api/feed/process', async (c) => {
           'original','lacrado','novo','semi','usado','importado','nacional',
         ])
 
-        // Palavras de cor/variante: diminuem penalização se divergem
+        // Palavras de COR: ficam FORA do fingerprint (modelo base não tem cor)
+        // MAS se ambos os nomes têm cor e são DIFERENTES → variante separada
+        const COLOR_SET = new Set([
+          'preto','preta','pretos','pretas',
+          'branco','branca',
+          'prata','prateado','prateada',
+          'dourado','dourada','gold',
+          'rosa','pink',
+          'azul','blue',
+          'verde','green',
+          'vermelho','vermelha','red',
+          'cinza','grey','gray',
+          'laranja','orange',
+          'roxo','roxa','purple','violeta','lilas',
+          'amarelo','amarela','yellow',
+          'bege','creme',
+          'chumbo','grafite',
+          'champagne','champanhe',
+          'titanio','titanium',
+          'coral','midnight','starlight','navy',
+          'cobre','bronze',
+          'black','white','silver',
+        ])
+
+        // Palavras de variante (memória, conectividade) — fora do fingerprint mas não causam separação
         const VARIANTS = new Set([
-          'preto','branco','prata','dourado','azul','vermelho','verde','rosa',
-          'cinza','bege','amarelo','laranja','roxo','lilas','grafite','titanium',
-          'black','white','silver','gold','blue','red','green','pink','gray',
+          ...COLOR_SET,
           '128gb','256gb','512gb','1tb','2tb','4gb','6gb','8gb','12gb','16gb',
           '32gb','64gb','wi-fi','4g','5g','wifi',
         ])
+
+        // Extrai cor de um nome (primeira cor encontrada)
+        const extractColor = (name: string): string | null => {
+          const tokens = normStr(name).split(' ')
+          for (const t of tokens) {
+            if (COLOR_SET.has(t)) return t
+          }
+          return null
+        }
+
+        // Dois nomes têm cores DIFERENTES? (ambos com cor e cores distintas)
+        const hasDifferentColor = (nameA: string, nameB: string): boolean => {
+          const cA = extractColor(nameA)
+          const cB = extractColor(nameB)
+          if (!cA || !cB) return false  // sem conflito se algum não tem cor
+          return cA !== cB
+        }
 
         // ── Extrai "modelo fingerprint" ─────────────────────────
         // Retém marca + modelo + spec chave, ignorando marketing e variantes de cor
@@ -7547,22 +7713,51 @@ admin.post('/api/feed/process', async (c) => {
             const fullUnion   = new Set([...linkTokens, ...candTokens]).size
             const fullJacc    = fullUnion > 0 ? fullInter / fullUnion : 0
 
+            // ── Score 3: Cobertura dos tokens do input no candidato ───────────
+            // "Quantos dos meus tokens existem no candidato?"
+            // Ex: input tem [s11, mini, gps] e candidato tem todos → cobertura = 1.0
+            // Mais robusto que Jaccard quando candidato tem tokens extras (Series 11, Whatsapp, 2026)
+            const coverageInter = linkFP.filter(t => candFPSet.has(t)).length
+            const inputCoverage = linkFP.length > 0 ? coverageInter / linkFP.length : 0
+
             // ── Bônus: mesma marca explícita
             const brandBonus = (link.brand && cand.brand &&
               normStr(link.brand) === normStr(cand.brand)) ? 0.08 : 0
 
-            // Score final: usa o melhor dos dois + bônus de marca
-            const score = Math.min(1.0, Math.max(fpJacc, fullJacc) + brandBonus)
+            // ── Bônus: token de modelo alfanumérico coincide (S11, X100, Tab5, etc.)
+            // Token que começa com letra e tem número — muito específico de produto
+            const modelTokens = linkFP.filter(t => /^[a-z]+\d+/.test(t) || /^\d+[a-z]+/.test(t))
+            const modelMatch  = modelTokens.length > 0 && modelTokens.every(t => candFPSet.has(t))
+            const modelBonus  = modelMatch ? 0.10 : 0
+
+            // Score final: melhor entre os 3 métodos + bônus
+            const score = Math.min(1.0, Math.max(fpJacc, fullJacc, inputCoverage) + brandBonus + modelBonus)
 
             // ── Limiares adaptativos ──────────────────────────────
             // - Se mesma marca: 0.60 (nomes podem variar entre plataformas)
-            // - Se sem marca: 0.72 (mais conservador para evitar falsos positivos)
-            const threshold = brandBonus > 0 ? 0.60 : 0.72
+            // - Se modelo alfanumérico coincide (S11): 0.65 (token muito específico)
+            // - Se sem marca nem modelo: 0.72 (mais conservador)
+            const threshold = brandBonus > 0 ? 0.60 : modelMatch ? 0.65 : 0.72
 
-            if (score > bestScore && score >= threshold) {
-              bestScore  = score
-              bestId     = cand.id
-              bestMethod = fpJacc >= fullJacc ? 'name_fp' : 'name_fuzzy'
+            if (score >= threshold) {
+              // ── REGRA DE COR: cores diferentes = variante separada ──
+              // Ex: "S11 Preto" (Shopee) vs "S11 Prateado" (ML) → NÃO agrupa
+              // Ex: "S11 Prateado" (Shopee) vs "S11 Prateado" (ML) → agrupa ✅
+              // Ex: "S11" (sem cor) vs "S11 Prateado" (ML) → agrupa ✅
+              if (hasDifferentColor(link.name, cand.name)) continue
+
+              // ── Bônus de cor: prefere candidato com mesma cor explícita ──
+              // Quando há empate de score (vários S11), o com mesma cor vence
+              const myColor   = extractColor(link.name)
+              const candColor = extractColor(cand.name)
+              const sameColor = myColor && candColor && myColor === candColor
+              const scoreFinal = sameColor ? Math.min(1.0, score + 0.05) : score
+
+              if (scoreFinal > bestScore) {
+                bestScore  = scoreFinal
+                bestId     = cand.id
+                bestMethod = fpJacc >= fullJacc ? 'name_fp' : 'name_fuzzy'
+              }
             }
           }
 
