@@ -861,29 +861,50 @@ main, section, article, header, footer, nav {
   /* Títulos de seção menores em telas < 768 */
   .section-title { font-size: 1.05rem !important; }
 
-  /* ── OFFER CARD mobile: logo menor, botão compacto full-width ── */
+  /* ── OFFER CARD mobile: layout em 2 linhas fixas ── */
+
+  /* Linha 1: logo + preço (lado a lado)
+     Linha 2: botão full-width
+     Garantido pelo order + flex-basis no container wrap */
+
+  .offer-card-body {
+    align-items: flex-start;   /* evita esticamento vertical */
+    gap: 0.5rem 0.625rem;
+  }
   .offer-card-logo {
-    width: 52px;
+    width: 44px;
     height: 36px;
-    padding: 0 6px;
+    padding: 0 4px;
+    flex-shrink: 0;
+    order: 1;
+  }
+  /* Bloco do preço: cresce mas nunca ultrapassa a primeira linha */
+  .offer-card-body > div.flex-1 {
+    order: 2;
+    min-width: 0;
+    flex: 1 1 0%;   /* cresce, mas não força a segunda linha */
   }
   .offer-price {
-    font-size: 1.25rem !important; /* 20px — compacto no mobile */
-    line-height: 1.1;
+    font-size: 1.125rem !important; /* 18px — funciona até 4 dígitos */
+    line-height: 1.15;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .offer-card-btn {
-    /* Força quebra para linha própria */
+    /* Sempre na linha de baixo, independente do preço */
+    order: 3;
     width: 100% !important;
-    flex-shrink: 1 !important;
-    flex-grow: 1 !important;
+    flex-shrink: 0 !important;
+    flex-grow: 0 !important;
     flex-basis: 100% !important;
     text-align: center;
     justify-content: center;
-    padding: 0.5rem 0.875rem;   /* menor que antes */
-    font-size: 0.8125rem;        /* 13px — compacto */
+    padding: 0.5rem 0.875rem;
+    font-size: 0.8125rem;        /* 13px */
     font-weight: 700;
     border-radius: 0.75rem;
-    margin-top: 0.25rem;
+    margin-top: 0;
     box-sizing: border-box;
   }
 }
