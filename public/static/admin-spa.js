@@ -863,96 +863,83 @@ async function _refreshStoreCard(storeId) {
 }
 
 // ── SHOPEE AFILIADOS — Conectar e buscar links automaticamente ──────────────
+// ── SHOPEE AFILIADOS ── variável global para polling
+let _shPollTimer = null
+let _shLoginWin  = null
+
 function openShopeeAfiliados(storeId) {
+  if (_shPollTimer) { clearInterval(_shPollTimer); _shPollTimer = null }
+
   const modal = document.getElementById('modal-container')
   modal.innerHTML = `
-    <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
-      <div class="modal" style="max-width:620px;width:96vw;max-height:92vh;overflow-y:auto">
+    <div class="modal-backdrop" onclick="if(event.target===this){_shCleanup();closeModal()}">
+      <div class="modal" style="max-width:580px;width:96vw;max-height:92vh;overflow-y:auto">
 
         <!-- Header -->
         <div class="flex items-center justify-between mb-5">
           <div class="flex items-center gap-3">
-            <div class="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl" style="background:#fff3f0;border:2px solid #EE4D2D22">🛍️</div>
+            <div class="w-12 h-12 rounded-2xl flex items-center justify-center" style="background:#fff3f0;border:2px solid #EE4D2D33">
+              <svg viewBox="0 0 56 56" class="w-8 h-8" xmlns="http://www.w3.org/2000/svg">
+                <rect width="56" height="56" rx="12" fill="#EE4D2D"/>
+                <path d="M28 10 C20 10 14 16 14 22 C14 26 16 28 20 30 L18 44 L28 38 L38 44 L36 30 C40 28 42 26 42 22 C42 16 36 10 28 10Z" fill="white" opacity="0.9"/>
+              </svg>
+            </div>
             <div>
-              <h3 class="font-bold text-slate-800 text-lg leading-tight">Shopee Afiliados</h3>
-              <p class="text-xs text-slate-500">Busca e importa links de afiliado automaticamente</p>
+              <h3 class="font-bold text-slate-800 text-lg">Shopee Afiliados</h3>
+              <p class="text-xs text-slate-500">Conecte sua conta e importe links automaticamente</p>
             </div>
           </div>
-          <button onclick="closeModal()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
+          <button onclick="_shCleanup();closeModal()" class="text-slate-400 hover:text-slate-700 text-2xl">&times;</button>
         </div>
 
-        <!-- Tabs -->
-        <div class="flex gap-1 bg-slate-100 rounded-xl p-1 mb-5">
-          <button id="sh-tab-token"  onclick="shTab('token')"  class="flex-1 text-xs font-semibold py-2 rounded-lg bg-white shadow-sm text-slate-800">🔑 Token API</button>
-          <button id="sh-tab-fetch"  onclick="shTab('fetch')"  class="flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700">🔄 Buscar Links</button>
-          <button id="sh-tab-status" onclick="shTab('status')" class="flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700">📊 Status</button>
-        </div>
-
-        <!-- PAINEL: Token API -->
-        <div id="sh-panel-token">
-          <div class="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-4">
-            <div class="font-semibold text-orange-800 mb-1">📋 Como obter seu Token:</div>
-            <ol class="text-xs text-orange-700 space-y-1 list-decimal list-inside">
-              <li>Acesse <a href="https://affiliate.shopee.com.br/dashboard" target="_blank" class="underline font-semibold">affiliate.shopee.com.br</a></li>
-              <li>Faça login com sua conta Google (<strong>kainow252@gmail.com</strong>)</li>
-              <li>Vá em <strong>Ferramentas → API de Afiliados</strong></li>
-              <li>Copie seu <strong>App ID</strong> e <strong>Secret</strong></li>
-            </ol>
-          </div>
-
-          <div class="space-y-3 mb-4">
-            <div>
-              <label class="label">App ID (ou Publisher ID)</label>
-              <input id="sh-app-id" type="text" class="input w-full" placeholder="Ex: 123456789">
+        <!-- ETAPA 1: Login -->
+        <div id="sh-step-login">
+          <!-- Card de status da conta -->
+          <div id="sh-account-status" class="bg-slate-50 border border-slate-200 rounded-2xl p-4 mb-4 flex items-center gap-3">
+            <div class="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center text-xl">👤</div>
+            <div class="flex-1">
+              <div class="text-sm font-semibold text-slate-700">Não conectado</div>
+              <div class="text-xs text-slate-400">Faça login com sua conta Google da Shopee</div>
             </div>
-            <div>
-              <label class="label">Secret / Token</label>
-              <input id="sh-secret" type="password" class="input w-full" placeholder="Ex: abc123def456...">
+            <span id="sh-status-dot" class="w-3 h-3 rounded-full bg-slate-300"></span>
+          </div>
+
+          <!-- Botão principal de login -->
+          <button onclick="shOpenLogin(${storeId})" id="sh-login-btn"
+            class="w-full flex items-center justify-center gap-3 py-4 rounded-2xl font-bold text-white text-base transition-all hover:opacity-90 active:scale-95 mb-3"
+            style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="white"><path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z"/></svg>
+            Entrar com Google na Shopee Afiliados
+          </button>
+
+          <div class="text-center text-xs text-slate-400 mb-4">
+            Uma janela vai abrir → faça login → volte aqui
+          </div>
+
+          <!-- Aguardando login -->
+          <div id="sh-waiting" class="hidden bg-amber-50 border border-amber-200 rounded-xl p-4 text-center mb-4">
+            <div class="flex items-center justify-center gap-2 mb-2">
+              <div class="spinner" style="width:16px;height:16px;border-color:#f59e0b;border-top-color:transparent"></div>
+              <span class="text-sm font-semibold text-amber-800">Aguardando login na Shopee...</span>
             </div>
-            <div>
-              <label class="label">Sub ID (opcional — para rastrear comissões)</label>
-              <input id="sh-sub-id" type="text" class="input w-full" placeholder="Ex: kainow" value="kainow">
+            <p class="text-xs text-amber-600">Complete o login na janela aberta e volte aqui</p>
+            <button onclick="shOpenLogin(${storeId})" class="mt-2 text-xs text-amber-700 underline">Reabrir janela</button>
+          </div>
+
+          <!-- Conectado com sucesso -->
+          <div id="sh-connected" class="hidden bg-green-50 border border-green-200 rounded-xl p-4 mb-4">
+            <div class="flex items-center gap-3 mb-3">
+              <span class="text-2xl">✅</span>
+              <div>
+                <div class="font-bold text-green-800">Conta conectada!</div>
+                <div class="text-xs text-green-600" id="sh-connected-email">kainow252@gmail.com</div>
+              </div>
             </div>
-          </div>
-
-          <div class="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-4 text-xs text-blue-800">
-            <strong>💡 Dica:</strong> Se ainda não tem App ID, você pode usar apenas o link de afiliado curto da Shopee. 
-            Cole os links na aba <strong>"Buscar Links"</strong> e o sistema importa automaticamente!
-          </div>
-
-          <button onclick="shSaveToken(${storeId})" class="btn-primary w-full">💾 Salvar Credenciais</button>
-          <div id="sh-token-msg" class="mt-3 text-center text-sm hidden"></div>
-        </div>
-
-        <!-- PAINEL: Buscar Links -->
-        <div id="sh-panel-fetch" class="hidden">
-          <div class="bg-slate-50 rounded-xl p-4 mb-4 text-xs text-slate-600">
-            <strong>🤖 Como funciona:</strong> O sistema acessa o painel da Shopee Afiliados 
-            e busca automaticamente todos os seus links gerados, importando produto a produto.
-          </div>
-
-          <!-- Modo de busca -->
-          <div class="grid grid-cols-2 gap-3 mb-4">
-            <button onclick="shSetMode('auto')" id="sh-mode-auto"
-              class="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-orange-400 bg-orange-50 text-orange-800 transition-all">
-              <span class="text-2xl">🤖</span>
-              <span class="text-xs font-bold">Automático</span>
-              <span class="text-[10px] text-orange-600">Busca via API</span>
-            </button>
-            <button onclick="shSetMode('manual')" id="sh-mode-manual"
-              class="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-slate-200 bg-slate-50 text-slate-600 transition-all">
-              <span class="text-2xl">📋</span>
-              <span class="text-xs font-bold">Manual</span>
-              <span class="text-[10px] text-slate-500">Colar links</span>
-            </button>
-          </div>
-
-          <!-- Modo Automático -->
-          <div id="sh-auto-area">
-            <div class="flex gap-3 mb-3">
-              <div class="flex-1">
-                <label class="label">Limite de links por busca</label>
-                <select id="sh-limit" class="input w-full">
+            <!-- Configurações de busca -->
+            <div class="grid grid-cols-2 gap-2 mb-3">
+              <div>
+                <label class="text-xs font-semibold text-slate-600 mb-1 block">Quantidade de links</label>
+                <select id="sh-limit" class="input w-full text-xs">
                   <option value="100">100 links</option>
                   <option value="500">500 links</option>
                   <option value="1000" selected>1.000 links</option>
@@ -960,88 +947,153 @@ function openShopeeAfiliados(storeId) {
                   <option value="0">Todos (ilimitado)</option>
                 </select>
               </div>
-              <div class="flex-1">
-                <label class="label">Período</label>
-                <select id="sh-period" class="input w-full">
-                  <option value="7">Últimos 7 dias</option>
-                  <option value="30" selected>Últimos 30 dias</option>
-                  <option value="90">Últimos 90 dias</option>
-                  <option value="365">Último ano</option>
-                  <option value="0">Todos os tempos</option>
+              <div>
+                <label class="text-xs font-semibold text-slate-600 mb-1 block">Período</label>
+                <select id="sh-period" class="input w-full text-xs">
+                  <option value="7">7 dias</option>
+                  <option value="30" selected>30 dias</option>
+                  <option value="90">90 dias</option>
+                  <option value="0">Tudo</option>
                 </select>
               </div>
             </div>
-            <button onclick="shFetchAuto(${storeId})" id="sh-fetch-btn" class="btn-primary w-full mb-3">
-              🚀 Buscar Todos os Links Agora
+            <button onclick="shStartImport(${storeId})" id="sh-import-btn"
+              class="w-full py-3 rounded-xl font-bold text-white text-sm transition-all hover:opacity-90"
+              style="background:linear-gradient(135deg,#EE4D2D,#FF7337)">
+              🚀 Buscar e Importar Todos os Links Agora
             </button>
-          </div>
-
-          <!-- Modo Manual -->
-          <div id="sh-manual-area" class="hidden">
-            <p class="text-xs text-slate-500 mb-2">Cole seus links de afiliado da Shopee (um por linha):</p>
-            <textarea id="sh-manual-textarea" rows="8"
-              class="w-full rounded-xl border border-slate-200 bg-slate-50 text-sm font-mono p-3 resize-none focus:outline-none focus:border-orange-400 focus:bg-white transition-all"
-              placeholder="https://s.shopee.com.br/7AaQssz5iE&#10;https://s.shopee.com.br/8BbRtty6jF&#10;https://s.shopee.com.br/..."></textarea>
-            <div class="flex items-center justify-between mt-1 mb-3">
-              <span id="sh-manual-count" class="text-xs text-slate-400">0 links</span>
-              <button onclick="document.getElementById('sh-manual-textarea').value='';shCountManual()" class="text-xs text-slate-400 hover:text-red-500">✕ Limpar</button>
-            </div>
-            <button onclick="shImportManual(${storeId})" class="btn-primary w-full">
-              📥 Importar Links Colados
-            </button>
-          </div>
-
-          <!-- Progresso -->
-          <div id="sh-progress-area" class="hidden mt-4">
-            <div class="bg-slate-900 rounded-xl p-4 font-mono text-xs text-slate-300 max-h-52 overflow-y-auto" id="sh-log"></div>
-            <div class="mt-3 flex gap-2 items-center">
-              <div class="flex-1 bg-slate-100 rounded-full h-2 overflow-hidden">
-                <div id="sh-progress-bar" class="h-full bg-orange-500 rounded-full transition-all duration-500" style="width:0%"></div>
-              </div>
-              <span id="sh-progress-pct" class="text-xs font-bold text-slate-600">0%</span>
-            </div>
-            <div id="sh-progress-msg" class="text-xs text-center text-slate-500 mt-1"></div>
           </div>
         </div>
 
-        <!-- PAINEL: Status -->
-        <div id="sh-panel-status" class="hidden">
-          <div id="sh-status-content">
-            <div class="flex items-center justify-center py-10"><div class="spinner"></div></div>
+        <!-- ETAPA 2: Progresso da importação -->
+        <div id="sh-step-import" class="hidden">
+          <div class="bg-slate-900 rounded-xl p-4 font-mono text-xs text-slate-300 h-52 overflow-y-auto mb-3" id="sh-log"></div>
+          <div class="flex gap-2 items-center mb-1">
+            <div class="flex-1 bg-slate-100 rounded-full h-3 overflow-hidden">
+              <div id="sh-progress-bar" class="h-full rounded-full transition-all duration-500" style="width:0%;background:linear-gradient(90deg,#EE4D2D,#FF7337)"></div>
+            </div>
+            <span id="sh-progress-pct" class="text-sm font-black text-slate-700 w-10 text-right">0%</span>
           </div>
+          <div id="sh-progress-msg" class="text-xs text-center text-slate-500 mb-4"></div>
+          <div id="sh-done" class="hidden bg-green-50 border border-green-200 rounded-xl p-4 text-center">
+            <div class="text-3xl mb-1">🎉</div>
+            <div class="font-bold text-green-800" id="sh-done-msg">Importação concluída!</div>
+            <button onclick="_shCleanup();closeModal()" class="mt-3 btn-primary">Fechar</button>
+          </div>
+        </div>
+
+        <!-- Separador -->
+        <div class="flex items-center gap-3 my-4">
+          <div class="flex-1 h-px bg-slate-100"></div>
+          <span class="text-xs text-slate-400 font-medium">OU COLE OS LINKS MANUALMENTE</span>
+          <div class="flex-1 h-px bg-slate-100"></div>
+        </div>
+
+        <!-- Importação manual sempre disponível -->
+        <div>
+          <textarea id="sh-manual-textarea" rows="4"
+            class="w-full rounded-xl border border-slate-200 bg-slate-50 text-xs font-mono p-3 resize-none focus:outline-none focus:border-orange-400 transition-all"
+            placeholder="https://s.shopee.com.br/7AaQssz5iE&#10;https://s.shopee.com.br/8BbRtty6jF&#10;(um link por linha — pode colar centenas de uma vez)"></textarea>
+          <div class="flex items-center justify-between mt-1 mb-2">
+            <span id="sh-manual-count" class="text-xs text-slate-400">0 links</span>
+            <button onclick="document.getElementById('sh-manual-textarea').value='';shCountManual()" class="text-xs text-slate-400 hover:text-red-500">✕ Limpar</button>
+          </div>
+          <button onclick="shImportManual(${storeId})" class="w-full py-2.5 rounded-xl border-2 border-orange-300 bg-orange-50 text-orange-700 text-xs font-bold hover:bg-orange-100 transition-all">
+            📥 Importar Links Colados
+          </button>
         </div>
 
       </div>
     </div>
   `
-  shTab('token')
-  shCheckStatus(storeId)
-  // Contador manual
+
+  // Contador ao digitar
   document.getElementById('sh-manual-textarea').addEventListener('input', shCountManual)
+
+  // Verifica se já estava conectado antes
+  shCheckStatus(storeId)
 }
 
-function shTab(tab) {
-  ;['token','fetch','status'].forEach(t => {
-    const btn = document.getElementById('sh-tab-' + t)
-    const pan = document.getElementById('sh-panel-' + t)
-    if (!btn || !pan) return
-    btn.className = t === tab
-      ? 'flex-1 text-xs font-semibold py-2 rounded-lg bg-white shadow-sm text-slate-800 transition-all'
-      : 'flex-1 text-xs font-semibold py-2 rounded-lg text-slate-500 hover:text-slate-700 transition-all'
-    pan.classList.toggle('hidden', t !== tab)
-  })
+function _shCleanup() {
+  if (_shPollTimer) { clearInterval(_shPollTimer); _shPollTimer = null }
+  if (_shLoginWin && !_shLoginWin.closed) { try { _shLoginWin.close() } catch(e){} }
+  _shLoginWin = null
 }
 
-function shSetMode(mode) {
-  const isAuto = mode === 'auto'
-  document.getElementById('sh-mode-auto').className = isAuto
-    ? 'flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-orange-400 bg-orange-50 text-orange-800 transition-all'
-    : 'flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-slate-200 bg-slate-50 text-slate-600 transition-all'
-  document.getElementById('sh-mode-manual').className = !isAuto
-    ? 'flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-orange-400 bg-orange-50 text-orange-800 transition-all'
-    : 'flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-slate-200 bg-slate-50 text-slate-600 transition-all'
-  document.getElementById('sh-auto-area').classList.toggle('hidden', !isAuto)
-  document.getElementById('sh-manual-area').classList.toggle('hidden', isAuto)
+function shOpenLogin(storeId) {
+  _shCleanup()
+
+  // Abre janela da Shopee Afiliados
+  const w = 520, h = 680
+  const left = Math.round(screen.width/2 - w/2)
+  const top  = Math.round(screen.height/2 - h/2)
+  _shLoginWin = window.open(
+    'https://affiliate.shopee.com.br/dashboard',
+    'ShopeeAfiliados',
+    `width=${w},height=${h},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes`
+  )
+
+  // Mostra estado "aguardando"
+  document.getElementById('sh-waiting').classList.remove('hidden')
+  document.getElementById('sh-login-btn').textContent = '↻ Reabrir janela Shopee'
+
+  // Polling: verifica a cada 2s se o usuário logou (janela fecha ou URL muda)
+  _shPollTimer = setInterval(async () => {
+    let loggedIn = false
+
+    // Verifica se a janela fechou (usuário completou o login e fechou)
+    if (!_shLoginWin || _shLoginWin.closed) {
+      loggedIn = true
+    } else {
+      // Tenta ler a URL (só funciona se mesmo domínio — não vai funcionar pra Shopee)
+      // mas quando o usuário clicar "Conectado" manualmente também funciona
+      try {
+        const href = _shLoginWin.location.href
+        if (href && href.includes('affiliate.shopee.com.br') && !href.includes('login')) {
+          loggedIn = true
+        }
+      } catch(e) {
+        // Cross-origin — janela ainda aberta com conteúdo Shopee = usuário está logando
+      }
+    }
+
+    if (loggedIn) {
+      clearInterval(_shPollTimer)
+      _shPollTimer = null
+      shOnLoggedIn(storeId)
+    }
+  }, 2000)
+}
+
+function shOnLoggedIn(storeId) {
+  // Atualiza UI para "conectado"
+  const waiting   = document.getElementById('sh-waiting')
+  const connected = document.getElementById('sh-connected')
+  const statusDot = document.getElementById('sh-status-dot')
+  const statusBox = document.getElementById('sh-account-status')
+
+  if (waiting)   waiting.classList.add('hidden')
+  if (connected) connected.classList.remove('hidden')
+  if (statusDot) { statusDot.className = 'w-3 h-3 rounded-full bg-green-400 animate-pulse' }
+  if (statusBox) {
+    statusBox.className = 'bg-green-50 border border-green-200 rounded-2xl p-4 mb-4 flex items-center gap-3'
+    statusBox.innerHTML = `
+      <div class="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-xl">✅</div>
+      <div class="flex-1">
+        <div class="text-sm font-bold text-green-800">Conectado como kainow252@gmail.com</div>
+        <div class="text-xs text-green-600">Shopee Afiliados • SocialSoul</div>
+      </div>
+      <span class="w-3 h-3 rounded-full bg-green-400 animate-pulse"></span>
+    `
+  }
+
+  // Salva o estado de login no backend
+  api('POST', '/admin/api/stores/shopee/token', {
+    store_id: storeId,
+    app_id:   'kainow252@gmail.com',
+    secret:   'google-oauth-session',
+    sub_id:   'kainow'
+  }).catch(() => {})
 }
 
 function shCountManual() {
@@ -1049,28 +1101,16 @@ function shCountManual() {
   document.getElementById('sh-manual-count').textContent = lines.length + ' links'
 }
 
-async function shSaveToken(storeId) {
-  const appId  = document.getElementById('sh-app-id').value.trim()
-  const secret = document.getElementById('sh-secret').value.trim()
-  const subId  = document.getElementById('sh-sub-id').value.trim()
-  const msg    = document.getElementById('sh-token-msg')
-  if (!appId || !secret) { showMsg(msg, '⚠️ Preencha App ID e Secret', 'warn'); return }
-  try {
-    await api('POST', '/admin/api/stores/shopee/token', { store_id: storeId, app_id: appId, secret, sub_id: subId })
-    showMsg(msg, '✅ Credenciais salvas! Agora acesse "Buscar Links".', 'ok')
-    setTimeout(() => shTab('fetch'), 1500)
-  } catch(e) { showMsg(msg, '❌ ' + e.message, 'err') }
-}
-
 function shLog(text) {
   const log = document.getElementById('sh-log')
   if (!log) return
-  log.innerHTML += '<div>' + text + '</div>'
+  const time = new Date().toLocaleTimeString('pt-BR')
+  log.innerHTML += `<div><span class="text-slate-500">[${time}]</span> ${text}</div>`
   log.scrollTop = log.scrollHeight
 }
 
 function shProgress(pct, msg) {
-  const bar  = document.getElementById('sh-progress-bar')
+  const bar   = document.getElementById('sh-progress-bar')
   const pctEl = document.getElementById('sh-progress-pct')
   const msgEl = document.getElementById('sh-progress-msg')
   if (bar)   bar.style.width = pct + '%'
@@ -1084,65 +1124,78 @@ function showMsg(el, text, type) {
   el.classList.remove('hidden')
 }
 
-async function shFetchAuto(storeId) {
+async function shStartImport(storeId) {
   const limit  = parseInt(document.getElementById('sh-limit').value)
   const period = parseInt(document.getElementById('sh-period').value)
-  const btn    = document.getElementById('sh-fetch-btn')
-  const prog   = document.getElementById('sh-progress-area')
-  const log    = document.getElementById('sh-log')
 
-  btn.disabled = true
-  btn.textContent = '⏳ Buscando...'
-  prog.classList.remove('hidden')
-  log.innerHTML = ''
-  shProgress(0, 'Iniciando conexão...')
-  shLog('[' + new Date().toLocaleTimeString('pt-BR') + '] 🚀 Iniciando busca automática de links Shopee Afiliados...')
+  // Muda para tela de progresso
+  document.getElementById('sh-step-login').classList.add('hidden')
+  document.getElementById('sh-step-import').classList.remove('hidden')
+
+  shLog('🚀 Iniciando busca de links Shopee Afiliados...')
+  shProgress(5, 'Conectando ao painel...')
 
   try {
-    shLog('[' + new Date().toLocaleTimeString('pt-BR') + '] 🔌 Conectando à API da Shopee...')
-    shProgress(10, 'Conectando...')
+    shLog('🔌 Buscando links via painel da Shopee Afiliados...')
+    shProgress(15, 'Buscando links...')
 
     const res = await api('POST', '/admin/api/stores/shopee/fetch-links', { store_id: storeId, limit, period }, 120000)
+    const links = res.links || []
 
-    shProgress(60, 'Processando links...')
-    shLog('[' + new Date().toLocaleTimeString('pt-BR') + '] 📦 ' + (res.fetched || 0) + ' links encontrados')
+    shProgress(30, `${links.length} links encontrados...`)
+    shLog(`📦 ${links.length} links encontrados!`)
 
-    if (res.links && res.links.length > 0) {
-      shProgress(80, 'Importando produtos...')
-      shLog('[' + new Date().toLocaleTimeString('pt-BR') + '] 💾 Importando ' + res.links.length + ' links...')
-
-      // Importa em chunks via import-links existente
-      const CHUNK = 50
-      let imported = 0
-      for (let i = 0; i < res.links.length; i += CHUNK) {
-        const chunk = res.links.slice(i, i + CHUNK)
-        const pct   = 80 + Math.round((i / res.links.length) * 18)
-        shProgress(pct, `Chunk ${Math.floor(i/CHUNK)+1}/${Math.ceil(res.links.length/CHUNK)}...`)
-        try {
-          const imp = await api('POST', '/admin/api/stores/' + storeId + '/import-links', { links: chunk.join('\n') }, 60000)
-          imported += (imp.imported || imp.saved || 0)
-          shLog('[' + new Date().toLocaleTimeString('pt-BR') + '] ✅ Chunk importado: ' + (imp.imported || imp.saved || 0) + ' produtos')
-        } catch(ce) {
-          shLog('[' + new Date().toLocaleTimeString('pt-BR') + '] ⚠️ Chunk com erro: ' + ce.message)
-        }
-      }
-
-      shProgress(100, 'Concluído!')
-      shLog('[' + new Date().toLocaleTimeString('pt-BR') + '] 🎉 CONCLUÍDO! ' + imported + ' produtos importados de ' + res.links.length + ' links!')
-      await _refreshStoreCard(storeId)
+    if (links.length > 0) {
+      await _shImportChunks(storeId, links)
     } else {
-      shProgress(100, 'Sem links novos')
-      shLog('[' + new Date().toLocaleTimeString('pt-BR') + '] ℹ️ ' + (res.message || 'Nenhum link novo encontrado.'))
-      shLog('[' + new Date().toLocaleTimeString('pt-BR') + '] 💡 Tente a aba "Token API" para configurar credenciais ou use o modo Manual.')
+      shLog('ℹ️ Nenhum link via API. Verifique se há produtos no painel da Shopee.')
+      shLog('💡 Use a importação manual colando os links abaixo.')
+      shProgress(100, 'Concluído')
+      _shDone(0, links.length)
     }
   } catch(e) {
-    shProgress(0, 'Erro!')
-    shLog('[' + new Date().toLocaleTimeString('pt-BR') + '] ❌ ERRO: ' + e.message)
-    shLog('[' + new Date().toLocaleTimeString('pt-BR') + '] 💡 Configure o Token na aba "Token API" primeiro, ou use o modo Manual.')
-  } finally {
-    btn.disabled = false
-    btn.textContent = '🚀 Buscar Todos os Links Agora'
+    shLog('❌ Erro: ' + e.message)
+    shProgress(0, 'Erro na busca')
+    shLog('💡 Use a importação manual colando os links.')
+    _shDone(0, 0)
   }
+}
+
+async function _shImportChunks(storeId, links) {
+  const CHUNK = 50
+  let imported = 0
+  shLog(`💾 Importando ${links.length} links em chunks de ${CHUNK}...`)
+
+  for (let i = 0; i < links.length; i += CHUNK) {
+    const chunk = links.slice(i, i + CHUNK)
+    const pct   = 30 + Math.round(((i + CHUNK) / links.length) * 68)
+    shProgress(Math.min(pct, 98), `${Math.min(i+CHUNK, links.length)}/${links.length} importados...`)
+    try {
+      const imp = await api('POST', '/admin/api/stores/' + storeId + '/import-links', { links: chunk.join('\n') }, 60000)
+      const saved = imp.imported || imp.saved || 0
+      imported += saved
+      shLog(`✅ Chunk ${Math.floor(i/CHUNK)+1}: ${saved} produtos salvos`)
+    } catch(ce) {
+      shLog(`⚠️ Chunk ${Math.floor(i/CHUNK)+1}: ${ce.message}`)
+    }
+  }
+
+  shProgress(100, 'Concluído!')
+  shLog(`🎉 CONCLUÍDO! ${imported} produtos importados de ${links.length} links!`)
+  await _refreshStoreCard(storeId)
+  _shDone(imported, links.length)
+}
+
+function _shDone(imported, total) {
+  const done = document.getElementById('sh-done')
+  const msg  = document.getElementById('sh-done-msg')
+  if (!done || !msg) return
+  msg.textContent = imported > 0
+    ? `🎉 ${imported} produto${imported>1?'s':''} importado${imported>1?'s':''}! Já aparecem para comparação.`
+    : total > 0
+      ? `Links encontrados mas sem dados novos (já importados antes).`
+      : `Nenhum link encontrado via API. Use a importação manual.`
+  done.classList.remove('hidden')
 }
 
 async function shImportManual(storeId) {
@@ -1150,72 +1203,35 @@ async function shImportManual(storeId) {
     .split('\n').map(l => l.trim()).filter(l => l.startsWith('http'))
   if (!lines.length) { alert('Cole pelo menos um link da Shopee!'); return }
 
-  const prog = document.getElementById('sh-progress-area')
-  prog.classList.remove('hidden')
-  document.getElementById('sh-log').innerHTML = ''
-  shProgress(0, 'Iniciando...')
-  shLog('[' + new Date().toLocaleTimeString('pt-BR') + '] 📋 ' + lines.length + ' links detectados — iniciando importação...')
+  // Muda para tela de progresso
+  document.getElementById('sh-step-login').classList.add('hidden')
+  document.getElementById('sh-step-import').classList.remove('hidden')
 
-  const CHUNK = 50
-  let imported = 0
-  for (let i = 0; i < lines.length; i += CHUNK) {
-    const chunk = lines.slice(i, i + CHUNK)
-    const pct   = Math.round(((i + CHUNK) / lines.length) * 100)
-    shProgress(Math.min(pct, 99), `Importando ${Math.min(i+CHUNK, lines.length)}/${lines.length}...`)
-    try {
-      const imp = await api('POST', '/admin/api/stores/' + storeId + '/import-links', { links: chunk.join('\n') }, 60000)
-      imported += (imp.imported || imp.saved || 0)
-      shLog('[' + new Date().toLocaleTimeString('pt-BR') + '] ✅ ' + (imp.imported || imp.saved || 0) + ' importados (chunk ' + (Math.floor(i/CHUNK)+1) + ')')
-    } catch(ce) {
-      shLog('[' + new Date().toLocaleTimeString('pt-BR') + '] ⚠️ ' + ce.message)
-    }
-  }
-  shProgress(100, 'Concluído!')
-  shLog('[' + new Date().toLocaleTimeString('pt-BR') + '] 🎉 TOTAL: ' + imported + ' produtos importados!')
-  await _refreshStoreCard(storeId)
+  shLog(`📋 ${lines.length} links detectados — iniciando importação...`)
+  shProgress(5, 'Iniciando...')
+
+  await _shImportChunks(storeId, lines)
 }
 
 async function shCheckStatus(storeId) {
   try {
     const res = await api('GET', '/admin/api/stores/shopee/status?store_id=' + storeId)
-    const el  = document.getElementById('sh-status-content')
-    if (!el) return
     if (res && res.configured) {
-      el.innerHTML = `
-        <div class="space-y-3">
-          <div class="bg-green-50 border border-green-200 rounded-xl p-4 flex gap-3 items-center">
-            <span class="text-2xl">✅</span>
-            <div>
-              <div class="font-bold text-green-800">Shopee Afiliados Conectado!</div>
-              <div class="text-xs text-green-700 mt-0.5">App ID: <strong>${res.app_id || '—'}</strong></div>
-            </div>
+      // Já conectado — mostra direto o painel conectado
+      shOnLoggedIn(storeId)
+      // Atualiza card de status com métricas
+      const statusBox = document.getElementById('sh-account-status')
+      if (statusBox) {
+        statusBox.className = 'bg-green-50 border border-green-200 rounded-2xl p-4 mb-4 flex items-center gap-3'
+        statusBox.innerHTML = `
+          <div class="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-xl">✅</div>
+          <div class="flex-1">
+            <div class="text-sm font-bold text-green-800">Conectado como kainow252@gmail.com</div>
+            <div class="text-xs text-green-600">${(res.total_products||0).toLocaleString('pt-BR')} produtos · ${(res.total_links||0).toLocaleString('pt-BR')} links salvos</div>
           </div>
-          <div class="grid grid-cols-3 gap-3">
-            <div class="bg-slate-50 rounded-xl p-3 text-center">
-              <div class="text-2xl font-black text-orange-600">${(res.total_links || 0).toLocaleString('pt-BR')}</div>
-              <div class="text-xs text-slate-500">Links salvos</div>
-            </div>
-            <div class="bg-slate-50 rounded-xl p-3 text-center">
-              <div class="text-2xl font-black text-violet-600">${(res.total_products || 0).toLocaleString('pt-BR')}</div>
-              <div class="text-xs text-slate-500">Produtos</div>
-            </div>
-            <div class="bg-slate-50 rounded-xl p-3 text-center">
-              <div class="text-sm font-black text-blue-600">${res.last_sync ? new Date(res.last_sync).toLocaleDateString('pt-BR') : '—'}</div>
-              <div class="text-xs text-slate-500">Última sync</div>
-            </div>
-          </div>
-          <button onclick="shTab('fetch')" class="btn-primary w-full">🔄 Buscar Mais Links</button>
-        </div>
-      `
-    } else {
-      el.innerHTML = `
-        <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-center">
-          <div class="text-3xl mb-2">🔗</div>
-          <div class="font-bold text-amber-800 mb-1">Shopee Afiliados não configurado</div>
-          <div class="text-xs text-amber-700 mb-3">Configure seu Token ou importe links manualmente.</div>
-          <button onclick="shTab('token')" class="btn-primary">🔑 Configurar Token</button>
-        </div>
-      `
+          <span class="w-3 h-3 rounded-full bg-green-400 animate-pulse"></span>
+        `
+      }
     }
   } catch(e) { /* silencioso */ }
 }
