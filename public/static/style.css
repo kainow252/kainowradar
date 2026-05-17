@@ -831,38 +831,36 @@ main, section, article, header, footer, nav {
 
 /* ── OFFER CARD ─────────────────────────────────────────────── */
 
-/* Logo box */
+/* Logo box — tamanho fixo, não cresce */
 .offer-card-logo {
-  width: 80px;
+  width: 72px;
   height: 72px;
   flex-shrink: 0;
 }
-.offer-logo-img {
-  width: 52px;
-  height: 44px;
-}
-.offer-logo-name {
-  font-size: 0.6rem;
-  margin-top: 2px;
-}
 
-/* Preço — grande e bold */
+/* Preço — grande e bold (desktop) */
 .offer-price {
-  font-size: 2rem;
+  font-size: 1.875rem; /* 30px */
   font-weight: 900;
+  line-height: 1;
 }
 
-/* Botão verde arredondado */
+/* Botão pill verde — igual ao modelo */
 .offer-card-btn {
-  width: 82px;
-  height: 82px;
-  border-radius: 1.25rem;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   background: #16a34a;
   color: white !important;
   text-decoration: none !important;
+  font-weight: 800;
+  padding: 0.75rem 1.375rem;
+  border-radius: 9999px;   /* pill */
   transition: all 0.2s;
-  animation: pulse-green 2s infinite;
   cursor: pointer;
+  white-space: nowrap;
+  animation: pulse-green 2s infinite;
 }
 .offer-card-btn:hover {
   background: #15803d;
@@ -871,14 +869,15 @@ main, section, article, header, footer, nav {
   animation: none;
 }
 .offer-btn-icon {
-  width: 28px;
-  height: 28px;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
   color: white;
 }
 .offer-btn-label {
-  font-size: 0.625rem;
-  font-weight: 900;
-  letter-spacing: 0.05em;
+  font-size: 0.9375rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
   color: white;
 }
 
@@ -900,32 +899,22 @@ main, section, article, header, footer, nav {
   .section-title { font-size: 1.05rem !important; }
 
   /* ── OFFER CARD mobile ── */
-  .offer-card-body {
-    gap: 0.625rem;
-    padding: 0.75rem;
-  }
   .offer-card-logo {
-    width: 64px;
-    height: 60px;
-  }
-  .offer-logo-img {
-    width: 40px;
-    height: 34px;
+    width: 56px;
+    height: 56px;
   }
   .offer-price {
-    font-size: 1.375rem !important; /* 22px no mobile */
+    font-size: 1.25rem !important; /* 20px — cabe até 6 dígitos */
   }
   .offer-card-btn {
-    width: 68px;
-    height: 68px;
-    border-radius: 1rem;
-  }
-  .offer-btn-icon {
-    width: 22px;
-    height: 22px;
+    padding: 0.6rem 1rem;
   }
   .offer-btn-label {
-    font-size: 0.55rem;
+    font-size: 0.8125rem;
+  }
+  .offer-btn-icon {
+    width: 16px;
+    height: 16px;
   }
 }
 

@@ -336,34 +336,33 @@ pages.get('/produto/:slug', async (c) => {
 
     // Logo da loja
     const storeLogo = o.store_logo
-      ? `<img src="${o.store_logo}" alt="${o.store_name}" class="offer-logo-img object-contain">`
-      : `<span class="text-xs font-bold text-gray-700 leading-tight text-center">${o.store_name}</span>`
+      ? `<img src="${o.store_logo}" alt="${o.store_name}" style="width:44px;height:44px;object-fit:contain;">`
+      : `<span style="font-size:0.75rem;font-weight:700;color:#374151;">${o.store_name}</span>`
 
     return `
-    <div class="offer-card-wrap rounded-2xl border-2 transition-all ${
+    <div class="rounded-2xl border-2 transition-all ${
       isBest
         ? 'border-green-400 bg-gradient-to-br from-green-50 to-emerald-50 shadow-md shadow-green-100'
         : 'border-gray-100 bg-white hover:border-blue-200 hover:shadow-sm'
     }">
 
       ${isBest ? `
-      <!-- Badge MELHOR PREÇO -->
       <div class="px-4 pt-3 pb-0">
         <span class="inline-flex items-center gap-1.5 text-xs font-black text-green-700 bg-green-100 border border-green-200 px-3 py-1 rounded-full">
           🏆 MELHOR PREÇO
         </span>
       </div>` : ''}
 
-      <!-- Corpo: [logo] [preço+frete] [botão] — tudo numa linha -->
-      <div class="offer-card-body flex items-center gap-3 px-4 py-4">
+      <!-- [logo] [preço+frete] [botão] — mesma linha -->
+      <div class="flex items-center gap-3 px-4 py-4">
 
-        <!-- Logo com fundo branco, borda e sombra suave -->
-        <div class="offer-card-logo flex-shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col items-center justify-center gap-0.5 p-2">
+        <!-- Logo box: tamanho fixo, não cresce -->
+        <div class="offer-card-logo flex-shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col items-center justify-center p-2 gap-0.5">
           ${storeLogo}
-          <span class="offer-logo-name text-gray-500 font-semibold leading-none">${o.store_name}</span>
+          <span style="font-size:0.6rem;color:#6b7280;font-weight:600;margin-top:2px;">${o.store_name}</span>
         </div>
 
-        <!-- Preço + frete — cresce para ocupar o espaço do meio -->
+        <!-- Preço: cresce, mas min-width:0 para não vazar -->
         <div class="flex-1 min-w-0">
           ${ o.original_price && o.original_price > o.price
             ? `<div class="text-xs text-gray-400 line-through leading-none mb-0.5">${formatCurrency(o.original_price)}</div>`
@@ -374,13 +373,11 @@ pages.get('/produto/:slug', async (c) => {
           <div class="flex items-center gap-1 mt-1.5">
             ${ o.free_shipping
               ? `<span class="inline-flex items-center gap-1 text-xs font-semibold text-green-600">
-                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
-                  Frete grátis
-                </span>`
+                  <svg class="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+                  Frete grátis</span>`
               : `<span class="inline-flex items-center gap-1 text-xs text-gray-400">
-                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
-                  Frete a consultar
-                </span>` }
+                  <svg class="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+                  Frete a consultar</span>` }
             ${ discount > 0
               ? `<span class="text-xs font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded-md">-${discount}%</span>`
               : '' }
@@ -390,20 +387,18 @@ pages.get('/produto/:slug', async (c) => {
             : '' }
         </div>
 
-        <!-- Botão verde arredondado com ícone de carrinho -->
+        <!-- Botão: pill verde, flex-shrink-0 para não encolher -->
         <a href="${trackUrl}" target="_blank" rel="noopener sponsored"
            onclick="return requireLoginToBuy(event,'${trackUrl}',${o.id},${product!.id},${o.store_id})"
-           class="offer-card-btn flex-shrink-0 inline-flex flex-col items-center justify-center gap-1 ${
-             isBest
-               ? 'bg-green-600 hover:bg-green-700 shadow-lg shadow-green-200'
-               : 'bg-green-500 hover:bg-green-600'
+           class="offer-card-btn flex-shrink-0 inline-flex items-center gap-2 ${
+             isBest ? 'shadow-lg shadow-green-200' : ''
            }">
-          <svg class="offer-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <span class="offer-btn-label">COMPRAR</span>
+          <svg class="offer-btn-icon flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/>
             <line x1="3" y1="6" x2="21" y2="6"/>
             <path d="M16 10a4 4 0 01-8 0"/>
           </svg>
-          <span class="offer-btn-label">COMPRAR</span>
         </a>
 
       </div>
