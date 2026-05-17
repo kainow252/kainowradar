@@ -915,9 +915,9 @@ main, section, article, header, footer, nav {
   gap: 0.35rem;
 }
 
-/* Preço principal — grande, dominante, bold */
+/* Preço principal */
 .offer-price {
-  font-size: clamp(1.375rem, 3.5vw, 2.25rem);
+  font-size: 1.25rem;
   font-weight: 900;
   line-height: 1;
   color: #03122f;
@@ -931,7 +931,7 @@ main, section, article, header, footer, nav {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   font-weight: 600;
   color: #6b7280;
   white-space: nowrap;
