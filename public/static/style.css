@@ -854,17 +854,18 @@ main, section, article, header, footer, nav {
   line-height: 1;
 }
 
-/* Botão pill verde */
+/* Botão pill verde: "Comprar →" */
 .offer-card-btn {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
+  justify-content: center;
   background: #16a34a;
   color: white !important;
   text-decoration: none !important;
-  font-weight: 800;
-  padding: 0.75rem 1.25rem;
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 0.75rem 1.625rem;
   border-radius: 9999px;
   transition: all 0.2s;
   cursor: pointer;
@@ -876,17 +877,6 @@ main, section, article, header, footer, nav {
   transform: translateY(-1px);
   box-shadow: 0 6px 20px rgba(22,163,74,0.4);
   animation: none;
-}
-.offer-btn-icon {
-  width: 18px;
-  height: 18px;
-  color: white;
-}
-.offer-btn-label {
-  font-size: 0.9375rem;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  color: white;
 }
 
 /* ── RESPONSIVE ───────────────────────────────────────────── */
@@ -924,15 +914,8 @@ main, section, article, header, footer, nav {
     text-overflow: ellipsis;
   }
   .offer-card-btn {
-    padding: 0.55rem 0.875rem;
-  }
-  .offer-btn-label {
-    font-size: 0.75rem;
-    letter-spacing: 0.03em;
-  }
-  .offer-btn-icon {
-    width: 14px;
-    height: 14px;
+    font-size: 0.875rem;
+    padding: 0.6rem 1.125rem;
   }
 }
 

@@ -387,16 +387,11 @@ pages.get('/produto/:slug', async (c) => {
             : '' }
         </div>
 
-        <!-- Botão pill: flex-shrink-0 + tamanho fixo -->
+        <!-- Botão pill verde: "Comprar →" -->
         <a href="${trackUrl}" target="_blank" rel="noopener sponsored"
            onclick="return requireLoginToBuy(event,'${trackUrl}',${o.id},${product!.id},${o.store_id})"
            class="offer-card-btn flex-shrink-0">
-          <span class="offer-btn-label">COMPRAR</span>
-          <svg class="offer-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0;">
-            <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/>
-            <line x1="3" y1="6" x2="21" y2="6"/>
-            <path d="M16 10a4 4 0 01-8 0"/>
-          </svg>
+          Comprar →
         </a>
 
       </div>
