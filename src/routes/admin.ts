@@ -3090,7 +3090,7 @@ admin.get('/shopee-script/:storeId', async (c) => {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KainowRadar — Script Shopee: ${storeName}</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="/static/tailwind.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css">
   <style>
     body { background:#0f172a; color:#f1f5f9; font-family:system-ui,sans-serif; }
@@ -9784,21 +9784,9 @@ function renderAdminSPA(): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Admin — KainowRadar</title>
-  <script src="https://cdn.tailwindcss.com"><\/script>
+  <link href="/static/tailwind.min.css" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"><\/script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: { sans: ['Inter', 'sans-serif'] },
-          colors: {
-            brand: { 50:'#eff6ff', 100:'#dbeafe', 500:'#3b82f6', 600:'#2563eb', 700:'#1d4ed8', 900:'#1e3a8a' }
-          }
-        }
-      }
-    }
-  <\/script>
   <style>
     body { font-family: 'Inter', sans-serif; }
     .sidebar-link { @apply flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-semibold text-slate-100 hover:bg-white/15 hover:text-white transition-all cursor-pointer; }

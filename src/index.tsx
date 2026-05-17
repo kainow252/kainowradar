@@ -78,7 +78,7 @@ app.get('/api/ml-callback', async (c) => {
   if (!codeVerifier) {
     return c.html(`
       <!DOCTYPE html><html><head><meta charset="UTF-8">
-      <script src="https://cdn.tailwindcss.com"></script></head>
+      <link href="/static/tailwind.min.css" rel="stylesheet"></head>
       <body class="bg-red-50 flex items-center justify-center min-h-screen">
         <div class="bg-white rounded-2xl p-8 shadow-xl text-center max-w-md">
           <div class="text-5xl mb-4">⚠️</div>
@@ -120,7 +120,7 @@ app.get('/api/ml-callback', async (c) => {
 
     return c.html(`
       <!DOCTYPE html><html><head><meta charset="UTF-8">
-      <script src="https://cdn.tailwindcss.com"></script></head>
+      <link href="/static/tailwind.min.css" rel="stylesheet"></head>
       <body class="bg-green-50 flex items-center justify-center min-h-screen">
         <div class="bg-white rounded-2xl p-8 shadow-xl text-center max-w-md">
           <div class="text-6xl mb-4">✅</div>
@@ -1312,7 +1312,7 @@ function renderApiDocs(): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KainowRadar API — Documentação</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="/static/tailwind.min.css" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     body { font-family: 'Inter', sans-serif; }

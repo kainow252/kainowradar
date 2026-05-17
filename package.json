@@ -4,7 +4,7 @@
   "scripts": {
     "dev": "vite",
     "dev:sandbox": "wrangler pages dev dist --d1=shopping-compare-production --local --ip 0.0.0.0 --port 3000",
-    "build": "vite build && node -e \"const fs=require('fs');fs.cpSync('public/static','dist/static',{recursive:true,force:true});fs.writeFileSync('dist/_routes.json',JSON.stringify({version:1,include:['/*'],exclude:['/static/*','/favicon.ico','/favicon.svg','/manifest.json']}))\"",
+    "build": "npm run build:tw && vite build && node -e \"const fs=require('fs');fs.cpSync('public/static','dist/static',{recursive:true,force:true});fs.writeFileSync('dist/_routes.json',JSON.stringify({version:1,include:['/*'],exclude:['/static/*','/favicon.ico','/favicon.svg','/manifest.json']}))\"",
     "preview": "wrangler pages dev dist",
     "deploy": "npm run build && wrangler pages deploy dist --project-name shopping-compare",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
@@ -15,7 +15,8 @@
     "db:reset": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate:local",
     "db:console": "wrangler d1 execute shopping-compare-production --local",
     "kv:create": "wrangler kv:namespace create CACHE",
-    "kv:create:preview": "wrangler kv:namespace create CACHE --preview"
+    "kv:create:preview": "wrangler kv:namespace create CACHE --preview",
+    "build:tw": "tailwindcss -i ./src/tailwind.css -o ./public/static/tailwind.min.css --minify --content \"./src/**/*.{ts,tsx,js}\""
   },
   "dependencies": {
     "hono": "^4.12.12"
@@ -24,6 +25,9 @@
     "@cloudflare/workers-types": "^4.20250705.0",
     "@hono/vite-build": "^1.2.0",
     "@hono/vite-dev-server": "^0.18.2",
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.14",
+    "tailwindcss": "^3.4.19",
     "vite": "^6.3.5",
     "wrangler": "^4.4.0"
   }

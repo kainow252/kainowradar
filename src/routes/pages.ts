@@ -1095,22 +1095,10 @@ export function renderLayout(title: string, content: string, opts: { hideHeader?
   <meta name="theme-color" content="#2563eb">
   <link rel="apple-touch-icon" href="/static/icon-192.svg">
   ${opts.jsonLd ? `<script type="application/ld+json">${opts.jsonLd}</script>` : ''}
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="/static/tailwind.min.css" rel="stylesheet">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link href="/static/style.css" rel="stylesheet">
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: { sans: ['Inter', 'sans-serif'] },
-          colors: {
-            primary: { 50:'#eff6ff', 100:'#dbeafe', 500:'#3b82f6', 600:'#2563eb', 700:'#1d4ed8' }
-          }
-        }
-      }
-    }
-  </script>
 </head>
 <body class="bg-gray-50 font-sans antialiased">
 

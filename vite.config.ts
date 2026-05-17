@@ -10,5 +10,8 @@ export default defineConfig({
       adapter,
       entry: 'src/index.tsx'
     })
-  ]
+  ],
+  css: {
+    postcss: './postcss.config.js',
+  },
 })
