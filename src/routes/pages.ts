@@ -334,13 +334,13 @@ pages.get('/produto/:slug', async (c) => {
     const isBest   = i === 0 && o.price > 0.01
     const discount = o.discount_percent > 0 ? Math.round(o.discount_percent) : 0
 
-    // Logo da loja — tamanho generoso para ser reconhecível
+    // Logo da loja
     const storeLogo = o.store_logo
-      ? `<img src="${o.store_logo}" alt="${o.store_name}" class="h-8 w-auto max-w-[110px] object-contain">`
-      : `<span class="text-sm font-bold text-gray-700 leading-tight">${o.store_name}</span>`
+      ? `<img src="${o.store_logo}" alt="${o.store_name}" class="offer-logo-img object-contain">`
+      : `<span class="text-xs font-bold text-gray-700 leading-tight text-center">${o.store_name}</span>`
 
     return `
-    <div class="rounded-2xl border-2 transition-all ${
+    <div class="offer-card-wrap rounded-2xl border-2 transition-all ${
       isBest
         ? 'border-green-400 bg-gradient-to-br from-green-50 to-emerald-50 shadow-md shadow-green-100'
         : 'border-gray-100 bg-white hover:border-blue-200 hover:shadow-sm'
@@ -349,48 +349,61 @@ pages.get('/produto/:slug', async (c) => {
       ${isBest ? `
       <!-- Badge MELHOR PREÇO -->
       <div class="px-4 pt-3 pb-0">
-        <span class="inline-flex items-center gap-1 text-xs font-black text-green-700 bg-green-100 border border-green-200 px-2.5 py-1 rounded-full">
+        <span class="inline-flex items-center gap-1.5 text-xs font-black text-green-700 bg-green-100 border border-green-200 px-3 py-1 rounded-full">
           🏆 MELHOR PREÇO
         </span>
       </div>` : ''}
 
-      <!-- Corpo do card: flex-wrap para quebrar no mobile -->
-      <div class="offer-card-body flex flex-wrap items-center gap-3 px-4 py-3">
+      <!-- Corpo: [logo] [preço+frete] [botão] — tudo numa linha -->
+      <div class="offer-card-body flex items-center gap-3 px-4 py-4">
 
-        <!-- Logo da loja — largura adaptável no mobile -->
-        <div class="offer-card-logo flex-shrink-0 bg-white rounded-xl border border-gray-100 shadow-sm flex items-center justify-center px-3">
+        <!-- Logo com fundo branco, borda e sombra suave -->
+        <div class="offer-card-logo flex-shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col items-center justify-center gap-0.5 p-2">
           ${storeLogo}
+          <span class="offer-logo-name text-gray-500 font-semibold leading-none">${o.store_name}</span>
         </div>
 
-        <!-- Preço + frete — bloco central que cresce -->
+        <!-- Preço + frete — cresce para ocupar o espaço do meio -->
         <div class="flex-1 min-w-0">
           ${ o.original_price && o.original_price > o.price
             ? `<div class="text-xs text-gray-400 line-through leading-none mb-0.5">${formatCurrency(o.original_price)}</div>`
             : '' }
           ${ (o.price <= 0.01)
-            ? `<div class="text-base font-semibold text-gray-400 leading-none">Ver preço na loja</div>`
-            : `<div class="offer-price text-3xl font-black text-gray-900 leading-none">${formatCurrency(o.price)}</div>` }
-          <div class="flex flex-wrap items-center gap-2 mt-1.5">
+            ? `<div class="text-sm font-semibold text-gray-400">Ver preço na loja</div>`
+            : `<div class="offer-price font-black text-gray-900 leading-none">${formatCurrency(o.price)}</div>` }
+          <div class="flex items-center gap-1 mt-1.5">
             ${ o.free_shipping
-              ? '<span class="inline-flex items-center gap-1 text-xs font-semibold text-green-600"><svg class=\'w-3 h-3\' fill=\'currentColor\' viewBox=\'0 0 20 20\'><path fill-rule=\'evenodd\' d=\'M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z\' clip-rule=\'evenodd\'/></svg>Frete grátis</span>'
-              : '<span class="text-xs text-gray-400">Frete a consultar</span>' }
+              ? `<span class="inline-flex items-center gap-1 text-xs font-semibold text-green-600">
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+                  Frete grátis
+                </span>`
+              : `<span class="inline-flex items-center gap-1 text-xs text-gray-400">
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+                  Frete a consultar
+                </span>` }
             ${ discount > 0
               ? `<span class="text-xs font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded-md">-${discount}%</span>`
               : '' }
-            ${ o.installments_count
-              ? `<span class="text-xs text-gray-500">${o.installments_count}x ${formatCurrency(o.installments_value || o.price / o.installments_count)}</span>`
-              : '' }
           </div>
-          ${ o.seller_name
-            ? `<div class="text-xs text-gray-400 mt-1">Vendido por: ${o.seller_name}</div>`
+          ${ o.installments_count
+            ? `<div class="text-xs text-gray-400 mt-0.5">${o.installments_count}x ${formatCurrency(o.installments_value || o.price / o.installments_count)}</div>`
             : '' }
         </div>
 
-        <!-- Botão Comprar: flex-shrink-0 no desktop, full-width no mobile -->
+        <!-- Botão verde arredondado com ícone de carrinho -->
         <a href="${trackUrl}" target="_blank" rel="noopener sponsored"
            onclick="return requireLoginToBuy(event,'${trackUrl}',${o.id},${product!.id},${o.store_id})"
-           class="btn-buy offer-card-btn ${ isBest ? 'bg-green-600 hover:bg-green-700 shadow-green-200 shadow-md' : '' }">
-          Comprar →
+           class="offer-card-btn flex-shrink-0 inline-flex flex-col items-center justify-center gap-1 ${
+             isBest
+               ? 'bg-green-600 hover:bg-green-700 shadow-lg shadow-green-200'
+               : 'bg-green-500 hover:bg-green-600'
+           }">
+          <svg class="offer-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/>
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <path d="M16 10a4 4 0 01-8 0"/>
+          </svg>
+          <span class="offer-btn-label">COMPRAR</span>
         </a>
 
       </div>
