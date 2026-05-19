@@ -1,28 +1,9 @@
 -- ============================================================
--- MIGRATION 0006: Fix Remote Schema
--- Adapta tabela users existente + cria tabelas admin
+-- MIGRATION 0006: Fix Remote Schema (idempotente)
+-- Colunas de users já existem — só cria tabelas/índices
 -- ============================================================
 
--- Adiciona colunas que faltam na tabela users (idempotente via tabela temporária)
--- SQLite não suporta IF NOT EXISTS em ALTER TABLE
--- Usamos um trigger de verificação via SELECT
-
--- avatar_url
-CREATE TABLE IF NOT EXISTS _col_check_dummy (x);
-DROP TABLE IF EXISTS _col_check_dummy;
-
--- Tenta adicionar colunas — ignora erro se já existirem (executadas individualmente)
-ALTER TABLE users ADD COLUMN full_name TEXT; 
-ALTER TABLE users ADD COLUMN avatar_url TEXT;
-ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'customer';
-ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active';
-ALTER TABLE users ADD COLUMN wishlist TEXT DEFAULT '[]';
-ALTER TABLE users ADD COLUMN price_alerts_json TEXT DEFAULT '[]';
-ALTER TABLE users ADD COLUMN last_login_at DATETIME;
-ALTER TABLE users ADD COLUMN login_count INTEGER DEFAULT 0;
-
--- Copia name → full_name para usuários existentes
-UPDATE users SET full_name = name WHERE full_name IS NULL;
+-- Copia name → full_name já não é necessário (coluna name não existe neste schema)
 
 -- ── Tabela api_configs ────────────────────────────────────
 CREATE TABLE IF NOT EXISTS api_configs (
