@@ -2848,13 +2848,32 @@ admin.get('/api/resolve-url', async (c) => {
       let azPrice: number | null = null
 
       if (html) {
-        // Nome: og:title → limpa sufixo " | Amazon.com.br"
+        // Nome: og:title → twitter:title → <title> tag (Amazon raramente serve og: para CF datacenter)
         const rawTitle = extractMetaAz(html, 'og:title') || extractMetaAz(html, 'twitter:title')
-        if (rawTitle) azName = cleanNameAz(rawTitle)
+        if (rawTitle) {
+          azName = cleanNameAz(rawTitle)
+        } else {
+          // Fallback: extrai do <title> "Nome do Produto : Amazon.com.br : ..."
+          const titleM = html.match(/<title[^>]*>([^<]+)<\/title>/i)
+          if (titleM) {
+            let t = titleM[1].trim()
+            t = t.replace(/\s*:\s*Amazon\.com\.br.*/i, '')
+                 .replace(/\s*\|\s*Amazon\.com\.br.*/i, '')
+                 .replace(/&amp;/g, '&').replace(/&#\d+;/g, '').replace(/&[a-z]+;/g, '').trim()
+            if (t && t.length > 3 && !/^Amazon/i.test(t)) azName = t
+          }
+        }
 
-        // Imagem: og:image
+        // Imagem: og:image → twitter:image → data-old-hires → hiRes JSON
         const rawImg = extractMetaAz(html, 'og:image') || extractMetaAz(html, 'twitter:image')
-        if (rawImg && rawImg.startsWith('http')) azImage = rawImg
+        if (rawImg && rawImg.startsWith('http')) {
+          azImage = rawImg
+        } else {
+          const liM = html.match(/data-old-hires=["'](https:\/\/[^"']+)["']/i)
+                   || html.match(/"hiRes"\s*:\s*"(https:\/\/[^"]+)"/i)
+                   || html.match(/data-a-hires=["'](https:\/\/[^"']+)["']/i)
+          if (liM) azImage = liM[1]
+        }
 
         // Preço
         azPrice = extractPriceAz(html)
@@ -2865,7 +2884,7 @@ admin.get('/api/resolve-url', async (c) => {
       const affiliateUrlAz = /amzn\.to/i.test(url) ? url : null
 
       return c.json({
-        ok:           !!azName,
+        ok:           !!(azName || asin),  // ok=true se temos ASIN (frontend resolve nome via proxy)
         finalUrl:     productPageUrl,
         affiliateUrl: affiliateUrlAz,
         asin:         asin || null,
