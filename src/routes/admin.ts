@@ -2728,6 +2728,160 @@ admin.get('/api/resolve-url', async (c) => {
      .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
      .trim()
 
+  // ════════════════════════════════════════════════════════════════
+  // RAMO AMAZON: amzn.to (short link) e amazon.com.br
+  //   1. Segue redirect amzn.to → amazon.com.br/dp/ASIN
+  //   2. Extrai ASIN da URL final
+  //   3. Busca HTML da página do produto com UA mobile
+  //   4. Extrai: og:title → nome, og:image → imagem, JSON-LD / priceAmount → preço
+  //   affiliate_url = link curto original (amzn.to) — preservado para rastreio
+  // ════════════════════════════════════════════════════════════════
+  const isAmazonLink = /amzn\.to|amazon\.com\.br/i.test(url)
+  if (isAmazonLink) {
+    try {
+      // Helper: extrai meta tag de HTML
+      const extractMetaAz = (html: string, prop: string): string => {
+        const m = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)["']`, 'i'))
+               || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${prop}["']`, 'i'))
+        return m ? m[1].trim() : ''
+      }
+
+      // Helper: limpa nome do produto Amazon
+      const cleanNameAz = (n: string): string =>
+        n.replace(/\s*[:\-–|]\s*(Amazon\.com\.br.*|Americanas.*|Kabum.*)$/i, '')
+         .replace(/&amp;/g, '&').replace(/&#\d+;/g, '').replace(/&[a-z]+;/g, '')
+         .trim()
+
+      // Helper: extrai ASIN de URL amazon.com.br
+      const extractAsin = (u: string): string | null => {
+        const m = u.match(/\/(?:dp|gp\/product|exec\/obidos\/ASIN)\/([A-Z0-9]{10})(?:[/?]|$)/i)
+        return m ? m[1].toUpperCase() : null
+      }
+
+      // Helper: extrai preço de HTML da Amazon
+      // Tenta: JSON-LD priceSpecification, priceAmount, span.a-price-whole
+      const extractPriceAz = (html: string): number | null => {
+        // 1) JSON-LD: "price":"1299.99" ou "price":1299.99
+        const jsonLd = html.match(/"price"\s*:\s*"?([\d]+(?:[.,][\d]{1,2})?)"?/g) || []
+        for (const m of jsonLd) {
+          const v = m.match(/"price"\s*:\s*"?([\d]+(?:[.,][\d]{1,2})?)"?/)
+          if (v) {
+            const val = parseFloat(v[1].replace(',', '.'))
+            if (!isNaN(val) && val > 0 && val < 9_000_000) return val
+          }
+        }
+        // 2) priceAmount: "priceAmount":1299.99 — presente no window._navbarData
+        const paM = html.match(/"priceAmount"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/)
+        if (paM) {
+          const val = parseFloat(paM[1])
+          if (!isNaN(val) && val > 0 && val < 9_000_000) return val
+        }
+        // 3) a-price-whole + a-price-fraction: span class
+        const whole = html.match(/class="a-price-whole[^"]*"[^>]*>([^<]+)</i)
+        const frac  = html.match(/class="a-price-fraction[^"]*"[^>]*>([^<]+)</i)
+        if (whole) {
+          const w = whole[1].replace(/[^\d]/g, '')
+          const f = frac ? frac[1].replace(/[^\d]/g, '').substring(0, 2) : '00'
+          const val = parseFloat(`${w}.${f}`)
+          if (!isNaN(val) && val > 0 && val < 9_000_000) return val
+        }
+        // 4) priceBlockBuyingPriceString / corePriceBlockViewModel
+        const bpM = html.match(/R\$\s*([\d]+(?:[.,][\d]{1,2})?)/g)
+        if (bpM && bpM.length > 0) {
+          for (const m of bpM) {
+            const v = m.replace('R$', '').trim().replace('.', '').replace(',', '.')
+            const val = parseFloat(v)
+            if (!isNaN(val) && val > 1 && val < 9_000_000) return val
+          }
+        }
+        return null
+      }
+
+      // UA mobile: Amazon serve conteúdo acessível para mobile sem JS-only blocks
+      const amazonUA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+
+      // Passo 1: segue redirect amzn.to → amazon.com.br (ou URL direta)
+      const firstRes = await fetch(url, {
+        redirect: 'follow',
+        headers: {
+          'User-Agent':      amazonUA,
+          'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'pt-BR,pt;q=0.9',
+          'Accept-Encoding': 'identity',
+        },
+        signal: AbortSignal.timeout(12000),
+      })
+
+      const canonicalUrl = firstRes.url || url
+      const asin = extractAsin(canonicalUrl) || extractAsin(url)
+
+      // URL do produto: prefere /dp/ASIN limpo para fetch estável
+      const productPageUrl = asin
+        ? `https://www.amazon.com.br/dp/${asin}`
+        : canonicalUrl
+
+      // Passo 2: busca página do produto (pode ser a mesma requisição)
+      let html = ''
+      if (firstRes.ok) {
+        html = await firstRes.text()
+      }
+
+      // Se o primeiro fetch não deu ok ou a URL mudou muito, tenta direto
+      if (!html || html.length < 1000) {
+        try {
+          const prodRes = await fetch(productPageUrl, {
+            redirect: 'follow',
+            headers: {
+              'User-Agent':      amazonUA,
+              'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'pt-BR,pt;q=0.9',
+              'Accept-Encoding': 'identity',
+            },
+            signal: AbortSignal.timeout(12000),
+          })
+          if (prodRes.ok) html = await prodRes.text()
+        } catch { /* usa o que temos */ }
+      }
+
+      let azName  = ''
+      let azImage = ''
+      let azPrice: number | null = null
+
+      if (html) {
+        // Nome: og:title → limpa sufixo " | Amazon.com.br"
+        const rawTitle = extractMetaAz(html, 'og:title') || extractMetaAz(html, 'twitter:title')
+        if (rawTitle) azName = cleanNameAz(rawTitle)
+
+        // Imagem: og:image
+        const rawImg = extractMetaAz(html, 'og:image') || extractMetaAz(html, 'twitter:image')
+        if (rawImg && rawImg.startsWith('http')) azImage = rawImg
+
+        // Preço
+        azPrice = extractPriceAz(html)
+      }
+
+      // affiliate_url = link original amzn.to (curto, rastreável)
+      // finalUrl = URL canônica amazon.com.br/dp/ASIN (para dedup)
+      const affiliateUrlAz = /amzn\.to/i.test(url) ? url : null
+
+      return c.json({
+        ok:           !!azName,
+        finalUrl:     productPageUrl,
+        affiliateUrl: affiliateUrlAz,
+        asin:         asin || null,
+        mlbId:        null,
+        name:         azName  || null,
+        image:        azImage || null,
+        price:        azPrice,
+        hasSocial:    false,
+        hasFragment:  false,
+        provider:     'amazon',
+      })
+    } catch (err: any) {
+      return c.json({ ok: false, error: err?.message || 'Falha ao resolver URL Amazon' })
+    }
+  }
+
   try {
     const isMlLink     = /mercadolivre\.com\.br|mercadolibre\.com|meli\.la|produto\.mercadolivre/i.test(url)
     const isSocialLink = /\/social\/[a-z0-9]+/i.test(url)
@@ -4006,6 +4160,82 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
               if (!item.price && shopeeData.price) item.price     = shopeeData.price
               if (!item.image_url && shopeeData.image) item.image_url = shopeeData.image
             }
+          } catch { /* ignora — continua com dados parciais */ }
+        }
+
+        // ── RESOLUÇÃO AUTOMÁTICA de links Amazon (amzn.to e amazon.com.br) ──
+        // amzn.to/HASH → segue redirect → amazon.com.br/dp/ASIN → nome, preço, imagem
+        const isAmazonLink = /amzn\.to|amazon\.com\.br/i.test(item.url)
+        if (isAmazonLink && (!item.name || !item.price || !item.image_url)) {
+          try {
+            const amazonUA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+
+            const extractMetaIL = (html: string, prop: string): string => {
+              const m = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)["']`, 'i'))
+                     || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${prop}["']`, 'i'))
+              return m ? m[1].trim() : ''
+            }
+
+            const extractPriceIL = (html: string): number | null => {
+              // JSON-LD "price"
+              const jsonLd = html.match(/"price"\s*:\s*"?([\d]+(?:[.,][\d]{1,2})?)"?/g) || []
+              for (const m of jsonLd) {
+                const v = m.match(/"price"\s*:\s*"?([\d]+(?:[.,][\d]{1,2})?)"?/)
+                if (v) { const val = parseFloat(v[1].replace(',', '.')); if (!isNaN(val) && val > 0 && val < 9_000_000) return val }
+              }
+              // priceAmount
+              const paM = html.match(/"priceAmount"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/)
+              if (paM) { const val = parseFloat(paM[1]); if (!isNaN(val) && val > 0 && val < 9_000_000) return val }
+              // R$ pattern
+              const bpM = html.match(/R\$\s*([\d]+(?:[.,][\d]{1,2})?)/g)
+              if (bpM) { for (const m of bpM) { const val = parseFloat(m.replace('R$','').trim().replace(/\./g,'').replace(',','.')); if (!isNaN(val) && val > 1 && val < 9_000_000) return val } }
+              return null
+            }
+
+            // Segue redirect amzn.to → amazon.com.br
+            const azRes = await fetch(item.url, {
+              redirect: 'follow',
+              headers: { 'User-Agent': amazonUA, 'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8', 'Accept-Language': 'pt-BR,pt;q=0.9', 'Accept-Encoding': 'identity' },
+              signal: AbortSignal.timeout(12000),
+            })
+
+            // Extrai ASIN da URL final
+            const finalAzUrl = azRes.url || item.url
+            const asinM = finalAzUrl.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})(?:[/?]|$)/i)
+            const asin = asinM ? asinM[1].toUpperCase() : null
+
+            let azHtml = azRes.ok ? await azRes.text() : ''
+
+            // Se redirecionou para /dp/ASIN, a página já está no azRes
+            // Caso contrário, tenta buscar /dp/ASIN direto
+            if (asin && (!azHtml || azHtml.length < 1000)) {
+              try {
+                const dpRes = await fetch(`https://www.amazon.com.br/dp/${asin}`, {
+                  redirect: 'follow',
+                  headers: { 'User-Agent': amazonUA, 'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8', 'Accept-Language': 'pt-BR,pt;q=0.9', 'Accept-Encoding': 'identity' },
+                  signal: AbortSignal.timeout(12000),
+                })
+                if (dpRes.ok) azHtml = await dpRes.text()
+              } catch { /* mantém o que tem */ }
+            }
+
+            if (azHtml) {
+              const rawTitle = extractMetaIL(azHtml, 'og:title') || extractMetaIL(azHtml, 'twitter:title')
+              if (rawTitle && !item.name) {
+                item.name = rawTitle.replace(/\s*[:\-–|]\s*(Amazon\.com\.br.*|Kabum.*)$/i, '').replace(/&amp;/g,'&').replace(/&#\d+;/g,'').trim()
+              }
+              if (!item.image_url) {
+                const rawImg = extractMetaIL(azHtml, 'og:image') || extractMetaIL(azHtml, 'twitter:image')
+                if (rawImg && rawImg.startsWith('http')) item.image_url = rawImg
+              }
+              if (!item.price) {
+                const p = extractPriceIL(azHtml)
+                if (p && p > 0) item.price = p
+              }
+            }
+            // item.url permanece como o link original amzn.to — Amazon redireciona corretamente
+            // O ASIN é usado como external_id para dedup (caso não exista resolvedShopeeId)
+            if (asin && !resolvedShopeeId) resolvedShopeeId = `amazon:${asin}`
           } catch { /* ignora — continua com dados parciais */ }
         }
 
@@ -5592,6 +5822,81 @@ admin.post('/api/enrich-offers', async (c) => {
             }
           }
         } catch { /* ignora */ }
+      }
+
+      // ══════════════════════════════════════════════════════════════════
+      // PASSO AMAZON: resolve amzn.to / amazon.com.br → nome, preço, imagem
+      //   Executa quando a affiliate_url é da Amazon e ainda faltam dados
+      // ══════════════════════════════════════════════════════════════════
+      const isAmazonOffer = /amzn\.to|amazon\.com\.br/i.test(url)
+      if (isAmazonOffer && (!price || !image)) {
+        try {
+          const amazonUA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+
+          const extractMetaEO = (html: string, prop: string): string => {
+            const m = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)["']`, 'i'))
+                   || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${prop}["']`, 'i'))
+            return m ? m[1].trim() : ''
+          }
+
+          const extractPriceAzEO = (html: string): number | null => {
+            const jsonLd = html.match(/"price"\s*:\s*"?([\d]+(?:[.,][\d]{1,2})?)"?/g) || []
+            for (const m of jsonLd) {
+              const v = m.match(/"price"\s*:\s*"?([\d]+(?:[.,][\d]{1,2})?)"?/)
+              if (v) { const val = parseFloat(v[1].replace(',', '.')); if (!isNaN(val) && val > 0 && val < 9_000_000) return val }
+            }
+            const paM = html.match(/"priceAmount"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/)
+            if (paM) { const val = parseFloat(paM[1]); if (!isNaN(val) && val > 0 && val < 9_000_000) return val }
+            const bpM = html.match(/R\$\s*([\d]+(?:[.,][\d]{1,2})?)/g)
+            if (bpM) { for (const m of bpM) { const val = parseFloat(m.replace('R$','').trim().replace(/\./g,'').replace(',','.')); if (!isNaN(val) && val > 1 && val < 9_000_000) return val } }
+            return null
+          }
+
+          const azRes = await fetch(url, {
+            redirect: 'follow',
+            headers: {
+              'User-Agent':      amazonUA,
+              'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'pt-BR,pt;q=0.9',
+              'Accept-Encoding': 'identity',
+            },
+            signal: AbortSignal.timeout(12000),
+          })
+
+          const finalAzUrl = azRes.url || url
+          const asinM = finalAzUrl.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})(?:[/?]|$)/i)
+          const asin  = asinM ? asinM[1].toUpperCase() : null
+
+          let azHtml = azRes.ok ? await azRes.text() : ''
+          if (!azHtml || azHtml.length < 1000) {
+            const dpUrl = asin ? `https://www.amazon.com.br/dp/${asin}` : finalAzUrl
+            try {
+              const dpRes = await fetch(dpUrl, {
+                redirect: 'follow',
+                headers: { 'User-Agent': amazonUA, 'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8', 'Accept-Language': 'pt-BR,pt;q=0.9', 'Accept-Encoding': 'identity' },
+                signal: AbortSignal.timeout(12000),
+              })
+              if (dpRes.ok) azHtml = await dpRes.text()
+            } catch { /* mantém */ }
+          }
+
+          if (azHtml) {
+            if (!image) {
+              const rawImg = extractMetaEO(azHtml, 'og:image') || extractMetaEO(azHtml, 'twitter:image')
+              if (rawImg && rawImg.startsWith('http')) image = rawImg
+            }
+            if (!price) {
+              const p = extractPriceAzEO(azHtml)
+              if (p && p > 0) price = p
+            }
+            if (hasInvalidName || !offer.name) {
+              const rawTitle = extractMetaEO(azHtml, 'og:title') || extractMetaEO(azHtml, 'twitter:title')
+              if (rawTitle && rawTitle.length > 5) {
+                newName = rawTitle.replace(/\s*[:\-–|]\s*(Amazon\.com\.br.*|Kabum.*)$/i, '').replace(/&amp;/g,'&').replace(/&#\d+;/g,'').trim()
+              }
+            }
+          }
+        } catch { /* ignora — mantém dados parciais */ }
       }
 
       if (price || image) {
