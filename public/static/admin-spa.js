@@ -4100,20 +4100,20 @@ function renderMlImportResult(data, container) {
 
   // Cards de resumo
   container.innerHTML = `
-    <div class="grid grid-cols-4 gap-2 mb-4">
-      <div class="bg-blue-50 rounded-xl p-2.5 text-center">
+    <div style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap;">
+      <div class="bg-blue-50 rounded-xl p-2.5 text-center" style="flex:1;min-width:80px;">
         <div class="text-xl font-black text-blue-700">${total}</div>
         <div class="text-xs text-blue-500 font-medium">Total</div>
       </div>
-      <div class="bg-green-50 rounded-xl p-2.5 text-center">
+      <div class="bg-green-50 rounded-xl p-2.5 text-center" style="flex:1;min-width:80px;">
         <div class="text-xl font-black text-green-700">${saved}</div>
         <div class="text-xs text-green-500 font-medium">Salvos</div>
       </div>
-      <div class="bg-amber-50 rounded-xl p-2.5 text-center">
+      <div class="bg-amber-50 rounded-xl p-2.5 text-center" style="flex:1;min-width:80px;">
         <div class="text-xl font-black text-amber-700">${matched}</div>
         <div class="text-xs text-amber-500 font-medium">Vinculados</div>
       </div>
-      <div class="bg-red-50 rounded-xl p-2.5 text-center">
+      <div class="bg-red-50 rounded-xl p-2.5 text-center" style="flex:1;min-width:80px;">
         <div class="text-xl font-black text-red-700">${errors}</div>
         <div class="text-xs text-red-500 font-medium">Erros</div>
       </div>
@@ -5861,20 +5861,20 @@ async function renderApiConfigs(area) {
 
       <!-- Cabeçalho + botão Cadastrar -->
       <div class="flex items-end justify-between gap-4">
-        <div class="grid grid-cols-4 gap-4 flex-1">
-          <div class="stat-card text-center border-t-4 border-blue-400">
+        <div style="display:flex;gap:1rem;flex:1;flex-wrap:wrap;">
+          <div class="stat-card text-center border-t-4 border-blue-400" style="flex:1;min-width:110px;">
             <div class="text-3xl font-black text-slate-800">${AFFILIATE_NETWORKS.length + totalCustom}</div>
             <div class="text-sm text-slate-500 mt-1">Redes disponíveis</div>
           </div>
-          <div class="stat-card text-center border-t-4 border-green-400">
+          <div class="stat-card text-center border-t-4 border-green-400" style="flex:1;min-width:110px;">
             <div class="text-3xl font-black text-green-700">${totalActive}</div>
             <div class="text-sm text-slate-500 mt-1">Redes ativas</div>
           </div>
-          <div class="stat-card text-center border-t-4 border-amber-400">
+          <div class="stat-card text-center border-t-4 border-amber-400" style="flex:1;min-width:110px;">
             <div class="text-3xl font-black text-amber-700">${totalConfigured}</div>
             <div class="text-sm text-slate-500 mt-1">Com credenciais</div>
           </div>
-          <div class="stat-card text-center border-t-4 border-indigo-400">
+          <div class="stat-card text-center border-t-4 border-indigo-400" style="flex:1;min-width:110px;">
             <div class="text-3xl font-black text-indigo-700">${totalCustom}</div>
             <div class="text-sm text-slate-500 mt-1">Customizadas</div>
           </div>
@@ -11873,7 +11873,7 @@ Galaxy S24 Ultra 512GB,https://loja.com/go/prod2,6999.00,prod2,,Samsung,smartpho
           <div class="w-full bg-slate-100 rounded-full h-2">
             <div id="fi-progress-bar" class="bg-blue-500 h-2 rounded-full transition-all duration-300" style="width:0%"></div>
           </div>
-          <div id="fi-progress-stats" class="grid grid-cols-4 gap-2 mt-3 text-center"></div>
+          <div id="fi-progress-stats" style="display:flex;gap:.5rem;margin-top:.75rem;flex-wrap:wrap;" class="text-center"></div>
         </div>
       </div>
 
@@ -12116,19 +12116,19 @@ async function feedIngestAndProcess() {
     // Stats visuais
     if (progStats) {
       progStats.innerHTML = `
-        <div class="bg-green-50 rounded p-2">
+        <div class="bg-green-50 rounded p-2" style="flex:1;min-width:70px;">
           <div class="text-green-700 font-bold text-lg">${batchStat.created || 0}</div>
           <div class="text-green-600 text-xs">Criados</div>
         </div>
-        <div class="bg-blue-50 rounded p-2">
+        <div class="bg-blue-50 rounded p-2" style="flex:1;min-width:70px;">
           <div class="text-blue-700 font-bold text-lg">${(batchStat.matched || 0) + (batchStat.updated || 0)}</div>
           <div class="text-blue-600 text-xs">Atualizados</div>
         </div>
-        <div class="bg-slate-50 rounded p-2">
+        <div class="bg-slate-50 rounded p-2" style="flex:1;min-width:70px;">
           <div class="text-slate-700 font-bold text-lg">${batchStat.skipped || 0}</div>
           <div class="text-slate-600 text-xs">Ignorados</div>
         </div>
-        <div class="bg-red-50 rounded p-2">
+        <div class="bg-red-50 rounded p-2" style="flex:1;min-width:70px;">
           <div class="text-red-700 font-bold text-lg">${batchStat.errors || 0}</div>
           <div class="text-red-600 text-xs">Erros</div>
         </div>
