@@ -294,6 +294,56 @@ admin.delete('/api/products/:id', async (c) => {
   return c.json({ ok: true })
 })
 
+// ── POST /admin/api/offers — Criar oferta para produto existente ──
+admin.post('/api/offers', async (c) => {
+  const { DB } = c.env
+  const body = await c.req.json().catch(() => ({})) as any
+
+  const productId = parseInt(body.product_id)
+  const storeId   = parseInt(body.store_id)
+  if (!productId || !storeId) return c.json({ ok: false, error: 'product_id e store_id são obrigatórios' }, 400)
+
+  // Verifica se produto e loja existem
+  const product = await DB.prepare('SELECT id, name, image_url FROM products WHERE id = ?').bind(productId).first<any>()
+  if (!product) return c.json({ ok: false, error: 'Produto não encontrado' }, 404)
+  const store = await DB.prepare('SELECT id FROM stores WHERE id = ?').bind(storeId).first<any>()
+  if (!store) return c.json({ ok: false, error: 'Loja não encontrada' }, 404)
+
+  const price        = body.price ? parseFloat(body.price) : null
+  const affiliateUrl = body.affiliate_url || null
+  const imageUrl     = body.image_url || product.image_url || null
+  const title        = body.title || product.name
+  const externalId   = body.external_id || (affiliateUrl ? null : null)
+  const source       = body.source || 'manual'
+
+  // Cria a oferta
+  const ins = await DB.prepare(`
+    INSERT INTO offers
+      (product_id, store_id, title, price, original_price,
+       affiliate_url, checkout_url, image_url, in_stock, is_active,
+       source, external_id, last_updated)
+    VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 1, 1, ?, ?, CURRENT_TIMESTAMP)
+  `).bind(
+    productId, storeId, title, price ?? 0,
+    affiliateUrl, affiliateUrl, imageUrl,
+    source, externalId
+  ).run()
+
+  const offerId = ins.meta.last_row_id as number
+
+  // Atualiza best_price e best_store_id no produto
+  await DB.prepare(`
+    UPDATE products SET
+      best_price    = (SELECT MIN(price) FROM offers WHERE product_id = ? AND is_active = 1 AND price > 0),
+      best_store_id = (SELECT store_id FROM offers WHERE product_id = ? AND is_active = 1 AND price > 0 ORDER BY price ASC LIMIT 1),
+      image_url     = COALESCE(image_url, ?),
+      updated_at    = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(productId, productId, imageUrl, productId).run()
+
+  return c.json({ ok: true, id: offerId })
+})
+
 // ── DELETE /admin/api/offers/:id — Excluir oferta permanentemente ──
 admin.delete('/api/offers/:id', async (c) => {
   const { DB } = c.env
