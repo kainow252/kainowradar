@@ -6507,11 +6507,15 @@ async function renderAnalytics(area) {
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div class="stat-card">
           <h3 class="font-bold text-slate-800 mb-4">📈 Cliques por dia (7 dias)</h3>
-          <canvas id="analytics-daily" height="200"></canvas>
+          <div style="position:relative;height:220px;">
+            <canvas id="analytics-daily"></canvas>
+          </div>
         </div>
         <div class="stat-card">
           <h3 class="font-bold text-slate-800 mb-4">🏆 Cliques por loja</h3>
-          <canvas id="analytics-stores" height="200"></canvas>
+          <div style="position:relative;height:220px;">
+            <canvas id="analytics-stores"></canvas>
+          </div>
         </div>
         <div class="stat-card col-span-full">
           <h3 class="font-bold text-slate-800 mb-4">🔥 Produtos mais clicados</h3>
@@ -6544,7 +6548,7 @@ async function renderAnalytics(area) {
           borderColor:'#3b82f6', backgroundColor:'rgba(59,130,246,0.1)',
           fill:true, tension:.3, pointRadius:4 }]
       },
-      options: { responsive:true, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
+      options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
     })
   }
 
@@ -6558,7 +6562,7 @@ async function renderAnalytics(area) {
         datasets: [{ data: data.byStore.map(s=>s.clicks),
           backgroundColor: ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#f97316','#84cc16'] }]
       },
-      options: { responsive:true, plugins:{legend:{position:'right'}} }
+      options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'right', labels:{boxWidth:12, font:{size:12}}}} }
     })
   }
 }
