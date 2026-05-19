@@ -334,51 +334,49 @@ pages.get('/produto/:slug', async (c) => {
     const isBest   = i === 0 && o.price > 0.01
     const discount = o.discount_percent > 0 ? Math.round(o.discount_percent) : 0
 
-    // Logo da loja — imagem ou fallback com inicial
+    // Logo da loja — imagem ou fallback com inicial (tamanho compacto)
     const storeLogo = o.store_logo
       ? `<img src="${o.store_logo}" alt="${o.store_name}">`
-      : `<span style="font-size:1.5rem;font-weight:900;color:#374151;">${o.store_name.charAt(0).toUpperCase()}</span>`
+      : `<span style="font-size:1.1rem;font-weight:900;color:#374151;line-height:1;">${o.store_name.charAt(0).toUpperCase()}</span>`
 
-    // SVG caminhão de frete
+    // SVG caminhão compacto
     const truckSVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>`
+
+    // Linha de preço + desconto inline
+    const priceRow = (o.price <= 0.01)
+      ? `<span style="font-size:0.8125rem;font-weight:600;color:#9ca3af;">Ver preço</span>`
+      : `<span class="offer-price">${formatCurrency(o.price)}</span>
+         ${ o.original_price && o.original_price > o.price
+            ? `<span class="offer-price-original">${formatCurrency(o.original_price)}</span>`
+            : '' }
+         ${ discount > 0 ? `<span class="offer-discount-badge">-${discount}%</span>` : '' }`
 
     return `
     <div class="offer-card-outer${isBest ? '' : ' offer-card-outer--plain'}">
-
-      ${isBest
-        ? `<div class="offer-card-badge">🏆 MELHOR PREÇO</div>`
-        : `<div style="height:0.5rem;"></div>`
-      }
-
+      ${isBest ? `<div class="offer-card-badge">🏆 MELHOR PREÇO</div>` : ''}
       <div class="offer-card-body">
 
-        <!-- Logo da loja -->
+        <!-- Logo + nome da loja -->
         <div class="offer-card-logo">
           ${storeLogo}
-          <span style="font-size:0.55rem;color:#9ca3af;font-weight:700;text-align:center;margin-top:2px;max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${o.store_name}</span>
+          <span style="font-size:0.5rem;color:#9ca3af;font-weight:700;text-align:center;line-height:1.1;max-width:40px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;">${o.store_name}</span>
         </div>
 
-        <!-- Preço + frete + extras -->
+        <!-- Preço + frete (inline compacto) -->
         <div class="offer-card-price-area">
-          ${ o.original_price && o.original_price > o.price
-            ? `<div class="offer-price-original">${formatCurrency(o.original_price)}</div>`
-            : '' }
-          ${ (o.price <= 0.01)
-            ? `<div style="font-size:0.9375rem;font-weight:600;color:#9ca3af;">Ver preço na loja</div>`
-            : `<div class="offer-price">${formatCurrency(o.price)}</div>` }
-          ${ discount > 0
-            ? `<div class="offer-discount-badge">-${discount}%</div>`
-            : '' }
+          <div style="display:flex;align-items:center;gap:0.375rem;flex-wrap:wrap;">
+            ${priceRow}
+          </div>
           <div class="offer-shipping ${ o.free_shipping ? 'offer-shipping-free' : '' }">
             ${truckSVG}
             ${ o.free_shipping ? 'Frete grátis' : 'Frete a consultar' }
+            ${ o.installments_count
+              ? `<span style="color:#9ca3af;margin-left:0.4rem;">${o.installments_count}x de ${formatCurrency(o.installments_value || o.price / o.installments_count)}</span>`
+              : '' }
           </div>
-          ${ o.installments_count
-            ? `<div class="offer-installments">${o.installments_count}x de ${formatCurrency(o.installments_value || o.price / o.installments_count)}</div>`
-            : '' }
         </div>
 
-        <!-- Botão COMPRAR -->
+        <!-- Botão COMPRAR compacto -->
         <a href="${trackUrl}" target="_blank" rel="noopener sponsored"
            onclick="return requireLoginToBuy(event,'${trackUrl}',${o.id},${product!.id},${o.store_id})"
            class="offer-card-btn">
@@ -651,8 +649,8 @@ pages.get('/produto/:slug', async (c) => {
 
           <!-- Ofertas por loja -->
           <div>
-            <h2 class="text-base font-black text-gray-800 mb-3">🏪 Compare nas lojas</h2>
-            <div class="space-y-3">${offersHTML || '<div class="text-center py-8 text-gray-400">Sem ofertas disponíveis no momento.</div>'}</div>
+            <h2 class="text-base font-black text-gray-800 mb-2">🏪 Compare nas lojas</h2>
+            <div class="space-y-1.5">${offersHTML || '<div class="text-center py-8 text-gray-400">Sem ofertas disponíveis no momento.</div>'}</div>
           </div>
 
           <!-- Descrição -->

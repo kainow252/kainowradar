@@ -835,73 +835,82 @@ main, section, article, header, footer, nav {
 ══════════════════════════════════════════════════════════════ */
 
 /* Container externo — borda verde, fundo degradê suave */
+/* ═══════════════════════════════════════════════════════════
+   OFFER CARDS — Design compacto para 10-15 lojas
+   Layout: [logo+nome] [preço+frete+desconto] [btn COMPRAR]
+   Altura alvo: ~56px por card (vs ~110px anterior)
+═══════════════════════════════════════════════════════════ */
+
 .offer-card-outer {
-  border-radius: 1.75rem;
+  border-radius: 0.875rem;
   overflow: hidden;
-  border: 3px solid #00b140;
-  background: linear-gradient(180deg, #f6fffa 0%, #eef7f2 100%);
-  box-shadow: 0 12px 32px rgba(0,0,0,0.09);
-  transition: box-shadow 0.2s, transform 0.2s;
+  border: 2px solid #00b140;
+  background: linear-gradient(135deg, #f6fffa 0%, #eef7f2 100%);
+  box-shadow: 0 2px 8px rgba(0,150,60,0.10);
+  transition: box-shadow 0.18s, transform 0.18s, border-color 0.18s;
 }
 .offer-card-outer:hover {
-  box-shadow: 0 20px 48px rgba(0,0,0,0.13);
-  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0,150,60,0.18);
+  transform: translateY(-1px);
 }
 
 /* Variante sem destaque — borda cinza, fundo branco */
 .offer-card-outer--plain {
   border-color: #e5e7eb;
   background: white;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
 .offer-card-outer--plain:hover {
-  border-color: #93c5fd;
+  border-color: #60a5fa;
+  box-shadow: 0 4px 14px rgba(37,99,235,0.12);
 }
 
-/* Badge "MELHOR PREÇO" — fundo verde claro, texto verde escuro */
+/* Badge "MELHOR PREÇO" — linha compacta no topo do card */
 .offer-card-badge {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 0.5rem;
-  background: #dff7e8;
-  color: #00913a;
-  font-size: 0.875rem;
+  gap: 0.3rem;
+  background: #00b140;
+  color: white;
+  font-size: 0.65rem;
   font-weight: 800;
-  letter-spacing: 0.04em;
-  padding: 0.45rem 1.1rem;
-  border-radius: 9999px;
-  border: 1.5px solid #b2eccc;
-  margin: 1rem 1.25rem 0;
-  width: fit-content;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.75rem;
+  width: 100%;
+  border-radius: 0;
 }
 
-/* Corpo: [logo] [preço+frete] [botão] numa linha */
+/* Corpo: [logo] [preço+frete] [botão] — tudo em UMA linha compacta */
 .offer-card-body {
   display: flex;
   align-items: center;
-  gap: 1.25rem;
-  padding: 1rem 1.25rem 1.25rem;
+  gap: 0.625rem;
+  padding: 0.45rem 0.75rem;
   overflow: hidden;
+  min-height: 52px;
 }
 
-/* Logo: caixa branca arredondada, tamanho fixo */
+/* Logo: quadrado pequeno com sombra leve */
 .offer-card-logo {
-  width: 80px;
-  height: 80px;
-  min-width: 80px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
   flex-shrink: 0;
-  padding: 0.625rem;
+  padding: 0.3rem;
   background: white;
-  border-radius: 1.125rem !important;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.09) !important;
+  border-radius: 0.625rem !important;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.10) !important;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.2rem;
+  gap: 1px;
+  border: 1px solid #f3f4f6;
 }
 .offer-card-logo img {
-  width: 48px !important;
-  height: 48px !important;
+  width: 28px !important;
+  height: 28px !important;
   object-fit: contain;
   display: block;
 }
@@ -911,157 +920,156 @@ main, section, article, header, footer, nav {
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.5rem;
 }
 
 /* Preço principal */
 .offer-price {
-  font-size: 1.25rem;
+  font-size: 1.0625rem;
   font-weight: 900;
   line-height: 1;
-  color: #03122f;
+  color: #111827;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-/* Linha de frete — ícone + texto, nunca sobrepõe */
+/* Linha de frete */
 .offer-shipping {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  font-size: 0.75rem;
+  gap: 0.25rem;
+  font-size: 0.6875rem;
   font-weight: 600;
-  color: #6b7280;
+  color: #9ca3af;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex-basis: 100%;
 }
 .offer-shipping-free {
   color: #16a34a;
 }
 .offer-shipping svg {
   flex-shrink: 0;
-  width: 16px;
-  height: 16px;
+  width: 12px;
+  height: 12px;
 }
 
 /* Preço riscado (original) */
 .offer-price-original {
-  font-size: 0.8125rem;
-  color: #9ca3af;
+  font-size: 0.6875rem;
+  color: #d1d5db;
   text-decoration: line-through;
   font-weight: 500;
+  white-space: nowrap;
 }
 
 /* Parcelamento */
 .offer-installments {
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   color: #9ca3af;
   font-weight: 500;
+  flex-basis: 100%;
 }
 
-/* Badge de desconto */
+/* Badge de desconto — pill compacto */
 .offer-discount-badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
   background: #fef2f2;
   color: #dc2626;
-  font-size: 0.75rem;
-  font-weight: 700;
-  padding: 0.15rem 0.5rem;
-  border-radius: 0.375rem;
-  align-self: flex-start;
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.3rem;
+  white-space: nowrap;
 }
 
-/* Botão COMPRAR — grande, verde escuro, arredondado */
+/* Botão COMPRAR — compacto mas visível */
 .offer-card-btn {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.5rem;
+  gap: 0.3rem;
   background: linear-gradient(180deg, #00c64f 0%, #009b3d 100%);
   color: white !important;
   text-decoration: none !important;
-  font-size: 1rem;
+  font-size: 0.75rem;
   font-weight: 800;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  padding: 1rem 1.75rem;
-  border-radius: 1.125rem;
+  padding: 0.5rem 0.875rem;
+  border-radius: 0.625rem;
   border: none;
-  transition: all 0.18s;
+  transition: all 0.16s;
   cursor: pointer;
   white-space: nowrap;
-  box-shadow: 0 8px 24px rgba(0,150,60,0.28);
+  box-shadow: 0 3px 10px rgba(0,150,60,0.30);
 }
 .offer-card-btn:hover {
   background: linear-gradient(180deg, #00d456 0%, #00a844 100%);
-  transform: scale(1.03);
-  box-shadow: 0 12px 32px rgba(0,150,60,0.38);
+  transform: scale(1.04);
+  box-shadow: 0 5px 16px rgba(0,150,60,0.40);
 }
 .offer-card-btn svg {
-  width: 20px;
-  height: 20px;
+  width: 13px;
+  height: 13px;
   flex-shrink: 0;
 }
 
 /* ── OFFER CARD mobile ── */
 @media (max-width: 768px) {
   .offer-card-outer {
-    border-radius: 1.25rem;
+    border-radius: 0.75rem;
     border-width: 2px;
   }
   .offer-card-badge {
-    font-size: 0.75rem;
-    padding: 0.35rem 0.875rem;
-    margin: 0.75rem 0.875rem 0;
+    font-size: 0.6rem;
+    padding: 0.175rem 0.625rem;
   }
   .offer-card-body {
-    gap: 0.75rem;
-    padding: 0.75rem 0.875rem 0.875rem;
+    gap: 0.5rem;
+    padding: 0.4rem 0.625rem;
+    min-height: 48px;
   }
   .offer-card-logo {
-    width: 60px;
-    height: 60px;
-    min-width: 60px;
-    padding: 0.4rem;
-    border-radius: 0.875rem !important;
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    padding: 0.25rem;
+    border-radius: 0.5rem !important;
   }
   .offer-card-logo img {
-    width: 36px !important;
-    height: 36px !important;
+    width: 24px !important;
+    height: 24px !important;
   }
   .offer-price {
-    font-size: 1.25rem !important;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    font-size: 0.9375rem !important;
   }
   .offer-shipping {
-    font-size: 0.75rem;
+    font-size: 0.625rem;
   }
   .offer-card-btn {
-    font-size: 0.8125rem;
-    padding: 0.75rem 1rem;
-    border-radius: 0.875rem;
-    gap: 0.35rem;
+    font-size: 0.6875rem;
+    padding: 0.45rem 0.625rem;
+    border-radius: 0.5rem;
+    gap: 0.25rem;
     letter-spacing: 0.04em;
   }
   .offer-card-btn svg {
-    width: 16px;
-    height: 16px;
+    width: 12px;
+    height: 12px;
   }
 }
 
 @media (max-width: 400px) {
   .offer-price {
-    font-size: 1.125rem !important;
+    font-size: 0.875rem !important;
   }
   .offer-card-btn {
-    font-size: 0.75rem;
-    padding: 0.625rem 0.75rem;
+    font-size: 0.625rem;
+    padding: 0.4rem 0.5rem;
   }
 }
 
@@ -1082,37 +1090,6 @@ main, section, article, header, footer, nav {
   /* Títulos de seção menores em telas < 768 */
   .section-title { font-size: 1.05rem !important; }
 
-  /* ── OFFER CARD mobile ── */
-  .offer-card-body {
-    gap: 0.625rem;
-    padding: 0.875rem;
-  }
-  .offer-card-logo {
-    width: 56px;
-    height: 56px;
-    min-width: 56px;
-    padding: 0.4rem;
-  }
-  .offer-card-logo img {
-    width: 32px !important;
-    height: 32px !important;
-  }
-  .offer-price {
-    font-size: 1.125rem !important;  /* 18px — cabe R$ 9.999,99 sem cortar */
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .offer-card-btn {
-    font-size: 0.75rem;
-    padding: 0.625rem 0.875rem;
-    gap: 0.35rem;
-    letter-spacing: 0.04em;
-  }
-  .offer-card-btn svg {
-    width: 14px;
-    height: 14px;
-  }
 }
 
 /* Telas muito pequenas (< 400px) — ajustes finos */
