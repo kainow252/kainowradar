@@ -2797,22 +2797,33 @@ admin.get('/api/resolve-url', async (c) => {
         return null
       }
 
-      // UA mobile: Amazon serve conteúdo acessível para mobile sem JS-only blocks
-      const amazonUA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+      // UAs: mobile (principal) e Googlebot (fallback — Amazon serve SSR para bots em alguns casos)
+      const amazonMobileUA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+      const amazonBotUA    = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
 
-      // Passo 1: segue redirect amzn.to → amazon.com.br (ou URL direta)
-      const firstRes = await fetch(url, {
-        redirect: 'follow',
-        headers: {
-          'User-Agent':      amazonUA,
-          'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'pt-BR,pt;q=0.9',
-          'Accept-Encoding': 'identity',
-        },
-        signal: AbortSignal.timeout(12000),
-      })
+      // Helper: faz fetch da Amazon com UA configurável
+      const fetchAmazon = async (fetchUrl: string, ua: string): Promise<{ res: Response, html: string } | null> => {
+        try {
+          const res = await fetch(fetchUrl, {
+            redirect: 'follow',
+            headers: {
+              'User-Agent':      ua,
+              'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'pt-BR,pt;q=0.9',
+              'Accept-Encoding': 'identity',
+              'Cache-Control':   'no-cache',
+            },
+            signal: AbortSignal.timeout(12000),
+          })
+          if (!res.ok) return null
+          const html = await res.text()
+          return { res, html }
+        } catch { return null }
+      }
 
-      const canonicalUrl = firstRes.url || url
+      // Passo 1: segue redirect amzn.to → amazon.com.br (UA mobile)
+      const firstResult = await fetchAmazon(url, amazonMobileUA)
+      const canonicalUrl = firstResult?.res.url || url
       const asin = extractAsin(canonicalUrl) || extractAsin(url)
 
       // URL do produto: prefere /dp/ASIN limpo para fetch estável
@@ -2820,47 +2831,63 @@ admin.get('/api/resolve-url', async (c) => {
         ? `https://www.amazon.com.br/dp/${asin}`
         : canonicalUrl
 
-      // Passo 2: busca página do produto (pode ser a mesma requisição)
-      let html = ''
-      if (firstRes.ok) {
-        html = await firstRes.text()
+      // Passo 2: usa HTML do primeiro fetch (se ok) ou faz fetch direto do /dp/ASIN
+      let html = firstResult?.html || ''
+
+      // Fallback 2a: /dp/ASIN com mobile UA
+      if ((!html || html.length < 1000) && asin) {
+        const r2 = await fetchAmazon(productPageUrl, amazonMobileUA)
+        if (r2) html = r2.html
       }
 
-      // Se o primeiro fetch não deu ok ou a URL mudou muito, tenta direto
-      if (!html || html.length < 1000) {
-        try {
-          const prodRes = await fetch(productPageUrl, {
-            redirect: 'follow',
-            headers: {
-              'User-Agent':      amazonUA,
-              'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-              'Accept-Language': 'pt-BR,pt;q=0.9',
-              'Accept-Encoding': 'identity',
-            },
-            signal: AbortSignal.timeout(12000),
-          })
-          if (prodRes.ok) html = await prodRes.text()
-        } catch { /* usa o que temos */ }
+      // Fallback 2b: /dp/ASIN com Googlebot UA (Amazon às vezes serve SSR para bots)
+      if ((!html || html.length < 1000 || !html.includes('<title')) && asin) {
+        const r3 = await fetchAmazon(productPageUrl, amazonBotUA)
+        if (r3 && r3.html.length > (html?.length || 0)) html = r3.html
       }
 
       let azName  = ''
       let azImage = ''
       let azPrice: number | null = null
 
+      // ── Extrai nome do slug da URL (funciona mesmo sem HTML completo) ──
+      // URL: amazon.com.br/Notebook-ASUS-VivoBook-i5-1235U/dp/B0C5H8WX4L
+      // O slug já contém o nome do produto — confiável e sem bloqueio
+      const extractNameFromSlug = (u: string): string => {
+        try {
+          const path = new URL(u).pathname
+          const m = path.match(/^\/([^/]{8,}?)\/(?:dp|gp\/product)\//i)
+          if (m) {
+            let s = m[1].replace(/-/g, ' ').trim()
+            // Converte primeira letra de cada palavra para maiúscula
+            s = s.replace(/\b\w/g, (c: string) => c.toUpperCase())
+            if (s.length > 5 && !/^[A-Z0-9]{10}$/.test(s)) return s
+          }
+        } catch { /* ignora */ }
+        return ''
+      }
+
+      // Tenta extrair nome do slug da URL canônica ou original
+      if (!azName) {
+        azName = extractNameFromSlug(productPageUrl) || extractNameFromSlug(canonicalUrl) || extractNameFromSlug(url)
+      }
+
       if (html) {
         // Nome: og:title → twitter:title → <title> tag (Amazon raramente serve og: para CF datacenter)
-        const rawTitle = extractMetaAz(html, 'og:title') || extractMetaAz(html, 'twitter:title')
-        if (rawTitle) {
-          azName = cleanNameAz(rawTitle)
-        } else {
-          // Fallback: extrai do <title> "Nome do Produto : Amazon.com.br : ..."
-          const titleM = html.match(/<title[^>]*>([^<]+)<\/title>/i)
-          if (titleM) {
-            let t = titleM[1].trim()
-            t = t.replace(/\s*:\s*Amazon\.com\.br.*/i, '')
-                 .replace(/\s*\|\s*Amazon\.com\.br.*/i, '')
-                 .replace(/&amp;/g, '&').replace(/&#\d+;/g, '').replace(/&[a-z]+;/g, '').trim()
-            if (t && t.length > 3 && !/^Amazon/i.test(t)) azName = t
+        if (!azName) {
+          const rawTitle = extractMetaAz(html, 'og:title') || extractMetaAz(html, 'twitter:title')
+          if (rawTitle) {
+            azName = cleanNameAz(rawTitle)
+          } else {
+            // Fallback: extrai do <title> "Nome do Produto : Amazon.com.br : ..."
+            const titleM = html.match(/<title[^>]*>([^<]+)<\/title>/i)
+            if (titleM) {
+              let t = titleM[1].trim()
+              t = t.replace(/\s*:\s*Amazon\.com\.br.*/i, '')
+                   .replace(/\s*\|\s*Amazon\.com\.br.*/i, '')
+                   .replace(/&amp;/g, '&').replace(/&#\d+;/g, '').replace(/&[a-z]+;/g, '').trim()
+              if (t && t.length > 3 && !/^Amazon/i.test(t)) azName = t
+            }
           }
         }
 
@@ -4255,6 +4282,22 @@ admin.post('/api/stores/:storeId/import-links', async (c) => {
             // item.url permanece como o link original amzn.to — Amazon redireciona corretamente
             // O ASIN é usado como external_id para dedup (caso não exista resolvedShopeeId)
             if (asin && !resolvedShopeeId) resolvedShopeeId = `amazon:${asin}`
+
+            // Se ainda sem nome: extrai do slug da URL (confiável — slug = nome do produto)
+            // URL: amazon.com.br/Notebook-ASUS-VivoBook-i5-1235U/dp/B0C5H8WX4L → "Notebook Asus Vivobook..."
+            if (!item.name) {
+              const tryUrls = [finalAzUrl, item.url]
+              for (const u of tryUrls) {
+                try {
+                  const path = new URL(u).pathname
+                  const slugM = path.match(/^\/([^/]{8,}?)\/(?:dp|gp\/product)\//i)
+                  if (slugM) {
+                    const s = slugM[1].replace(/-/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()).trim()
+                    if (s.length > 5 && !/^[A-Z0-9]{10}$/.test(s)) { item.name = s; break }
+                  }
+                } catch { /* ignora */ }
+              }
+            }
           } catch { /* ignora — continua com dados parciais */ }
         }
 

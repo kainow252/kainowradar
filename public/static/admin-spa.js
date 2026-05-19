@@ -3763,89 +3763,116 @@ async function siFetchMetaClientSide(originalUrl, affiliateUrl) {
   // Retorna se temos ao menos nome — inclui mlbId para deduplicação correta no backend
   if (name) return { name, price, image, affiliateUrl: builtAffUrl, mlbId }
 
-  // ── CAMADA 2b: Amazon — proxy allorigins.win + extração HTML ──────
-  // A Amazon bloqueia fetch() direto do browser (CORS) e scraping do servidor CF.
-  // Solução: allorigins.win como proxy CORS público → lemos o HTML no browser.
-  // O backend já extraiu o ASIN via redirect (mesmo bloqueado para og:tags).
+  // ── CAMADA 2b: Amazon — extrai nome do slug + busca via proxies CORS ──
+  // A Amazon bloqueia CORS do browser e scraping do servidor CF.
+  // Estratégia:
+  //   1) Nome direto do slug da URL (confiável — slug = nome do produto)
+  //   2) Proxy corsproxy.io → HTML para imagem e preço
+  //   3) Preço do backend (r.price) como fallback garantido
   const isAmazonUrl = /amzn\.to|amazon\.com\.br/i.test(originalUrl)
   if (isAmazonUrl && (!name || !price || !image)) {
-    try {
-      // Usa ASIN do backend para URL canônica → mais estável que URL longa com parâmetros
-      const asin = r?.asin || null
-      const azCanonical = asin
-        ? 'https://www.amazon.com.br/dp/' + asin
-        : originalUrl.replace(/[?#].*$/, '') // remove query params da URL longa
+    // Usa ASIN do backend e URL final (já seguiu redirect)
+    const asin = r?.asin || null
+    const azFinalUrl = r?.finalUrl || originalUrl
 
-      // allorigins.win: proxy CORS gratuito, retorna HTML em d.contents
-      const proxyUrl = 'https://api.allorigins.win/get?url=' + encodeURIComponent(azCanonical)
-      const proxyResp = await fetch(proxyUrl, { signal: AbortSignal.timeout(12000) })
-      if (proxyResp.ok) {
-        const d = await proxyResp.json()
-        const azHtml = d.contents || ''
-        if (azHtml && azHtml.length > 500) {
-          // Nome: og:title (alguns contextos da Amazon servem) → fallback <title>
-          if (!name) {
-            const ogT = azHtml.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
-                     || azHtml.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
-            if (ogT) {
-              name = ogT[1].replace(/\s*[:\|]\s*Amazon\.com\.br.*/i,'').replace(/&amp;/g,'&').replace(/&#\d+;/g,'').trim()
-            }
+    // ── Estratégia 1: extrai nome do slug da URL da Amazon ────────────
+    // URL: amazon.com.br/Notebook-ASUS-VivoBook-i5-1235U/dp/B0C5H8WX4L
+    // Slug: "Notebook-ASUS-VivoBook-i5-1235U" → nome legível
+    if (!name && azFinalUrl.includes('amazon.com.br')) {
+      try {
+        const urlPath = new URL(azFinalUrl).pathname  // ex: /Notebook-ASUS-VivoBook.../dp/B0C5H8WX4L
+        // Slug é o primeiro segmento do path (antes de /dp/)
+        const slugMatch = urlPath.match(/^\/([^/]{8,}?)\/(?:dp|gp\/product)\//i)
+        if (slugMatch) {
+          let slugName = slugMatch[1]
+            .replace(/-/g, ' ')
+            .replace(/\b\w/g, c => c.toUpperCase())
+            .trim()
+          if (slugName && slugName.length > 5 && !/^[A-Z0-9]{10}$/.test(slugName)) {
+            name = slugName
           }
-          if (!name) {
-            const titleM = azHtml.match(/<title[^>]*>([^<]+)<\/title>/i)
-            if (titleM) {
-              let t = titleM[1].trim()
-              t = t.replace(/\s*:\s*Amazon\.com\.br.*/i,'')
-                   .replace(/\s*\|\s*Amazon\.com\.br.*/i,'')
-                   .replace(/&amp;/g,'&').replace(/&#\d+;/g,'').trim()
-              if (t && t.length > 3 && !/^Amazon/i.test(t)) name = t
-            }
+        }
+        // Fallback: slug da URL original (antes do redirect)
+        if (!name && originalUrl.includes('amazon.com.br')) {
+          const origPath = new URL(originalUrl).pathname
+          const origSlug = origPath.match(/^\/([^/]{8,}?)\/(?:dp|gp\/product)\//i)
+          if (origSlug) {
+            let slugName = origSlug[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).trim()
+            if (slugName && slugName.length > 5) name = slugName
           }
-          // Imagem: og:image → data-old-hires → hiRes JSON
-          if (!image) {
-            const ogI = azHtml.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
-                     || azHtml.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
-            if (ogI && ogI[1].startsWith('http')) image = ogI[1]
-          }
-          if (!image) {
-            const liM = azHtml.match(/data-old-hires=["'](https:\/\/[^"']+)["']/i)
-                     || azHtml.match(/"hiRes"\s*:\s*"(https:\/\/[^"]+)"/i)
-                     || azHtml.match(/data-a-hires=["'](https:\/\/[^"']+)["']/i)
-            if (liM) image = liM[1]
-          }
-          // Preço: JSON-LD → priceAmount → R$ regex
-          if (!price) {
-            const jsonPrices = azHtml.match(/"price"\s*:\s*"?([\d]+(?:[.,][\d]{1,2})?)"?/g) || []
-            for (const m of jsonPrices) {
-              const v = m.match(/"price"\s*:\s*"?([\d]+(?:[.,][\d]{1,2})?)"?/)
-              if (v) { const val = parseFloat(v[1].replace(',','.')); if (!isNaN(val) && val > 1 && val < 9000000) { price = val; break } }
-            }
-          }
-          if (!price) {
-            const paM = azHtml.match(/"priceAmount"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/)
-            if (paM) { const val = parseFloat(paM[1]); if (!isNaN(val) && val > 1 && val < 9000000) price = val }
-          }
-          if (!price) {
-            const bpM = azHtml.match(/R\$\s*([\d]+(?:[.,][\d]{1,2})?)/g)
-            if (bpM) {
-              for (const m of bpM) {
-                const val = parseFloat(m.replace('R$','').trim().replace(/\./g,'').replace(',','.'))
-                if (!isNaN(val) && val > 1 && val < 9000000) { price = val; break }
+        }
+      } catch { /* ignora */ }
+    }
+
+    // ── Estratégia 2: proxy corsproxy.io → HTML para imagem e preço ──
+    // corsproxy.io é mais confiável para Amazon que allorigins.win
+    if (asin && (!image || !price)) {
+      try {
+        const azCanonical = 'https://www.amazon.com.br/dp/' + asin
+        // Tenta corsproxy.io (mais confiável para Amazon)
+        const proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(azCanonical)
+        const proxyResp = await fetch(proxyUrl, {
+          signal: AbortSignal.timeout(10000),
+          headers: { 'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8', 'Accept-Language': 'pt-BR,pt;q=0.9' }
+        })
+        if (proxyResp.ok) {
+          const azHtml = await proxyResp.text()
+          if (azHtml && azHtml.length > 500) {
+            // Nome mais preciso via og:title ou <title>
+            if (!name || name.length < 10) {
+              const ogT = azHtml.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']{5,})["']/i)
+                       || azHtml.match(/<meta[^>]+content=["']([^"']{5,})["'][^>]+property=["']og:title["']/i)
+              if (ogT) {
+                const t = ogT[1].replace(/\s*[:\|]\s*Amazon\.com\.br.*/i,'').replace(/&amp;/g,'&').trim()
+                if (t.length > 5) name = t
               }
+              if (!name || name.length < 10) {
+                const titleM = azHtml.match(/<title[^>]*>([^<]{10,})<\/title>/i)
+                if (titleM) {
+                  const t = titleM[1].replace(/\s*:\s*Amazon\.com\.br.*/i,'').replace(/&amp;/g,'&').replace(/&#\d+;/g,'').trim()
+                  if (t && t.length > 5 && !/^Amazon/i.test(t)) name = t
+                }
+              }
+            }
+            // Imagem: og:image → data-old-hires → hiRes JSON
+            if (!image) {
+              const ogI = azHtml.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+                       || azHtml.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
+              if (ogI && ogI[1].startsWith('http')) image = ogI[1]
+            }
+            if (!image) {
+              const liM = azHtml.match(/data-old-hires=["'](https:\/\/[^"']+)["']/i)
+                       || azHtml.match(/"hiRes"\s*:\s*"(https:\/\/[^"]+)"/i)
+                       || azHtml.match(/data-a-hires=["'](https:\/\/[^"']+)["']/i)
+                       || azHtml.match(/landingImage[^>]*src=["'](https:\/\/[^"']+)["']/i)
+              if (liM) image = liM[1]
+            }
+            // Preço: JSON-LD → priceAmount → R$
+            if (!price) {
+              const jsonPrices = azHtml.match(/"price"\s*:\s*"?([\d]+(?:[.,][\d]{1,2})?)"?/g) || []
+              for (const m of jsonPrices) {
+                const v = m.match(/"price"\s*:\s*"?([\d]+(?:[.,][\d]{1,2})?)"?/)
+                if (v) { const val = parseFloat(v[1].replace(',','.')); if (!isNaN(val) && val > 1 && val < 9000000) { price = val; break } }
+              }
+            }
+            if (!price) {
+              const paM = azHtml.match(/"priceAmount"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/)
+              if (paM) { const val = parseFloat(paM[1]); if (!isNaN(val) && val > 1 && val < 9000000) price = val }
             }
           }
         }
+      } catch(e) {
+        console.warn('[corsproxy-Amazon] falhou:', e?.message)
       }
-    } catch(e) {
-      console.warn('[allorigins-Amazon] falhou:', e?.message)
     }
-    // Sempre usa preço do backend se não obtivemos via proxy
+
+    // ── Sempre usa preço do backend como fallback garantido ───────────
     if (!price && r?.price) price = r.price
   }
 
   // Retorna Amazon com nome (e preço/imagem opcionais)
   if (isAmazonUrl && name) {
-    // affiliateUrl: para amzn.to usa o link curto original; para amazon.com.br longa, preserva URL
+    // affiliateUrl: para amzn.to usa o link curto original; para amazon.com.br preserva URL original
     const affUrl = r?.affiliateUrl || (/amzn\.to/i.test(originalUrl) ? originalUrl : null)
     return { name, price: price || r?.price || null, image: image || null, affiliateUrl: affUrl, mlbId: null }
   }
