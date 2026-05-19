@@ -3763,8 +3763,101 @@ async function siFetchMetaClientSide(originalUrl, affiliateUrl) {
   // Retorna se temos ao menos nome — inclui mlbId para deduplicação correta no backend
   if (name) return { name, price, image, affiliateUrl: builtAffUrl, mlbId }
 
+  // ── CAMADA 2b: browser fetch Amazon (links amzn.to / amazon.com.br) ──
+  // O browser do usuário não é bloqueado pela Amazon (IP residencial/comercial).
+  // O backend (datacenter CF) é bloqueado → sem og:title/og:image do servidor.
+  // Aqui fazemos fetch direto do browser → extraímos título, preço e imagem.
+  const isAmazonUrl = /amzn\.to|amazon\.com\.br/i.test(originalUrl)
+  if (isAmazonUrl && (!name || !price || !image)) {
+    try {
+      // ASIN do backend (via r?.asin) ou da URL final
+      const asin = r?.asin || null
+      const azFetchUrl = asin
+        ? 'https://www.amazon.com.br/dp/' + asin
+        : originalUrl
+
+      const azResp = await fetch(azFetchUrl, {
+        headers: {
+          'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'pt-BR,pt;q=0.9',
+        },
+        signal: AbortSignal.timeout(14000),
+      })
+      if (azResp.ok) {
+        const azHtml = await azResp.text()
+        if (azHtml && azHtml.length > 2000) {
+          // Nome: <title> da Amazon → "Nome do Produto : Amazon.com.br: ..."
+          if (!name) {
+            const titleM = azHtml.match(/<title[^>]*>([^<]+)<\/title>/i)
+            if (titleM) {
+              let t = titleM[1].trim()
+              // Remove sufixo ": Amazon.com.br: ..." e variantes
+              t = t.replace(/\s*:\s*Amazon\.com\.br.*$/i, '')
+                   .replace(/\s*\|\s*Amazon\.com\.br.*$/i, '')
+                   .replace(/&amp;/g,'&').replace(/&#\d+;/g,'').trim()
+              if (t && t.length > 3) name = t
+            }
+          }
+          // Nome fallback: og:title (Amazon às vezes serve)
+          if (!name) {
+            const ogT = azHtml.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+                     || azHtml.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+            if (ogT) name = ogT[1].replace(/\s*:\s*Amazon\.com\.br.*$/i,'').replace(/&amp;/g,'&').trim()
+          }
+          // Imagem: og:image ou landingImage
+          if (!image) {
+            const ogI = azHtml.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+                     || azHtml.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
+            if (ogI && ogI[1].startsWith('http')) image = ogI[1]
+            if (!image) {
+              // landingImage data-a-dynamic-image ou data-old-hires
+              const liM = azHtml.match(/data-old-hires=["'](https:\/\/[^"']+)["']/i)
+                       || azHtml.match(/"hiRes"\s*:\s*"(https:\/\/[^"]+)"/i)
+                       || azHtml.match(/data-a-hires=["'](https:\/\/[^"']+)["']/i)
+              if (liM) image = liM[1]
+            }
+          }
+          // Preço: JSON-LD ou priceAmount
+          if (!price) {
+            const jsonPrices = azHtml.match(/"price"\s*:\s*"?([\d]+(?:[.,][\d]{1,2})?)"?/g) || []
+            for (const m of jsonPrices) {
+              const v = m.match(/"price"\s*:\s*"?([\d]+(?:[.,][\d]{1,2})?)"?/)
+              if (v) { const val = parseFloat(v[1].replace(',','.')); if (!isNaN(val) && val > 1 && val < 9000000) { price = val; break } }
+            }
+          }
+          if (!price) {
+            const paM = azHtml.match(/"priceAmount"\s*:\s*([\d]+(?:\.[\d]{1,2})?)/)
+            if (paM) { const val = parseFloat(paM[1]); if (!isNaN(val) && val > 1 && val < 9000000) price = val }
+          }
+          if (!price) {
+            // R$ pattern — pega o primeiro valor razoável
+            const bpM = azHtml.match(/R\$\s*([\d]+(?:[.,][\d]{1,2})?)/g)
+            if (bpM) {
+              for (const m of bpM) {
+                const val = parseFloat(m.replace('R$','').trim().replace(/\./g,'').replace(',','.'))
+                if (!isNaN(val) && val > 1 && val < 9000000) { price = val; break }
+              }
+            }
+          }
+          // Se ainda não temos preço mas backend retornou, usa o do backend
+          if (!price && r?.price) price = r.price
+        }
+      }
+    } catch(e) {
+      console.warn('[browser-fetch-Amazon] falhou:', e?.message)
+      // Usa o preço do backend mesmo sem nome
+      if (!price && r?.price) price = r.price
+    }
+  }
+
+  // Retorna Amazon com nome (e preço/imagem opcionais)
+  if (isAmazonUrl && name) {
+    const affUrl = r?.affiliateUrl || (/amzn\.to/i.test(originalUrl) ? originalUrl : null)
+    return { name, price: price || r?.price || null, image: image || null, affiliateUrl: affUrl, mlbId: null }
+  }
+
   // ── CAMADA 4: fallback allorigins.win (links não-ML) ────────────
-  if (!isML) {
+  if (!isML && !isAmazonUrl) {
     try { return await siFetchOgMeta(originalUrl) } catch(e) { /* ignora */ }
   }
 
