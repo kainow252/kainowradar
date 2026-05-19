@@ -143,7 +143,8 @@ pages.get('/produto/:slug', async (c) => {
       const { results } = await DB
         .prepare(`SELECT o.*, s.name as store_name, s.slug as store_slug, s.logo_url as store_logo
                   FROM offers o JOIN stores s ON s.id = o.store_id
-                  WHERE o.product_id = ? AND o.is_active = 1 ORDER BY
+                  WHERE o.product_id = ? AND o.is_active = 1 AND s.is_active = 1
+                  ORDER BY
                     CASE WHEN o.price > 0.01 THEN 0 ELSE 1 END ASC,
                     o.price ASC`)
         .bind(product.id).all<Offer>()

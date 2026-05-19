@@ -105,7 +105,7 @@ api.get('/products/:slug', async (c) => {
              s.affiliate_network, s.affiliate_id
       FROM offers o
       JOIN stores s ON s.id = o.store_id
-      WHERE o.product_id = ? AND o.is_active = 1 AND o.in_stock = 1
+      WHERE o.product_id = ? AND o.is_active = 1 AND o.in_stock = 1 AND s.is_active = 1
       ORDER BY o.price ASC
     `)
     .bind((product as any).id)
@@ -154,7 +154,7 @@ api.get('/offers/:productId', async (c) => {
       SELECT o.*, s.name as store_name, s.slug as store_slug, s.logo_url as store_logo
       FROM offers o
       JOIN stores s ON s.id = o.store_id
-      WHERE o.product_id = ? AND o.is_active = 1
+      WHERE o.product_id = ? AND o.is_active = 1 AND s.is_active = 1
       ORDER BY o.price ASC
     `)
     .bind(productId)
@@ -358,7 +358,7 @@ api.get('/deals', async (c) => {
       FROM products p
       LEFT JOIN stores s ON s.id = p.best_store_id
       JOIN offers o ON o.product_id = p.id AND o.store_id = p.best_store_id
-      WHERE p.is_active = 1 AND o.discount_percent > 5 AND o.is_active = 1
+      WHERE p.is_active = 1 AND o.discount_percent > 5 AND o.is_active = 1 AND s.is_active = 1
       ORDER BY o.discount_percent DESC
       LIMIT 12
     `)
