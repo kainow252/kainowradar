@@ -4238,25 +4238,25 @@ async function renderStores(area) {
 
   area.innerHTML = `
     <div class="section">
-      <!-- Cards de resumo: 5 métricas -->
-      <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-        <div class="stat-card text-center border-t-4 border-blue-400">
+      <!-- Cards de resumo: 5 métricas em linha -->
+      <div style="display:flex;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+        <div class="stat-card text-center border-t-4 border-blue-400" style="flex:1;min-width:120px;">
           <div class="text-3xl font-black text-slate-800">${total}</div>
           <div class="text-sm text-slate-500 mt-1">Lojas cadastradas</div>
         </div>
-        <div class="stat-card text-center border-t-4 border-green-400">
+        <div class="stat-card text-center border-t-4 border-green-400" style="flex:1;min-width:120px;">
           <div class="text-3xl font-black text-green-700">${active}</div>
           <div class="text-sm text-slate-500 mt-1">Lojas ativas</div>
         </div>
-        <div class="stat-card text-center border-t-4 border-amber-400">
+        <div class="stat-card text-center border-t-4 border-amber-400" style="flex:1;min-width:120px;">
           <div class="text-3xl font-black text-amber-700">${withProducts}</div>
           <div class="text-sm text-slate-500 mt-1">Com produtos</div>
         </div>
-        <div class="stat-card text-center border-t-4 border-violet-400">
+        <div class="stat-card text-center border-t-4 border-violet-400" style="flex:1;min-width:120px;">
           <div class="text-3xl font-black text-violet-700">${totalProds}</div>
           <div class="text-sm text-slate-500 mt-1">Produtos no banco</div>
         </div>
-        <div class="stat-card text-center border-t-4 border-sky-400">
+        <div class="stat-card text-center border-t-4 border-sky-400" style="flex:1;min-width:120px;">
           <div class="text-3xl font-black text-sky-700">${totalOffers}</div>
           <div class="text-sm text-slate-500 mt-1">Ofertas ativas</div>
         </div>
